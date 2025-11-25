@@ -1,0 +1,103 @@
+"""Handlers for wishlist flow."""
+import logging
+from typing import Optional
+
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
+
+from database.crud import FinanceDatabase
+from keyboards.main import main_menu_keyboard, wishlist_categories_keyboard, wishlist_reply_keyboard
+from states.wishlist_states import WishlistState
+
+LOGGER = logging.getLogger(__name__)
+
+router = Router()
+
+
+@router.message(F.text == "📋 Вишлист")
+async def open_wishlist(message: Message, state: FSMContext) -> None:
+    """Open wishlist menu."""
+
+    await state.clear()
+    await message.answer("Раздел вишлиста.", reply_markup=wishlist_reply_keyboard())
+    await message.answer("Выбери категорию для просмотра или добавь новое желание.", reply_markup=wishlist_categories_keyboard())
+    LOGGER.info("User %s opened wishlist", message.from_user.id if message.from_user else "unknown")
+
+
+@router.message(F.text == "➕")
+async def add_wish_start(message: Message, state: FSMContext) -> None:
+    """Start adding wish."""
+
+    await state.set_state(WishlistState.waiting_for_name)
+    await message.answer("Введи название желания.")
+
+
+@router.message(WishlistState.waiting_for_name)
+async def add_wish_name(message: Message, state: FSMContext) -> None:
+    """Save wish name and request price."""
+
+    await state.update_data(name=message.text)
+    await state.set_state(WishlistState.waiting_for_price)
+    await message.answer("Введи цену (только цифры).")
+
+
+@router.message(WishlistState.waiting_for_price)
+async def add_wish_price(message: Message, state: FSMContext) -> None:
+    """Validate and save price."""
+
+    try:
+        price = float(message.text.replace(",", "."))
+    except (TypeError, ValueError):
+        await message.answer("Нужно ввести число. Попробуй снова.")
+        return
+
+    if price <= 0:
+        await message.answer("Цена должна быть больше нуля. Попробуй снова.")
+        return
+
+    await state.update_data(price=price)
+    await state.set_state(WishlistState.waiting_for_url)
+    await message.answer("Вставь ссылку на товар или отправь '-' чтобы пропустить.")
+
+
+@router.message(WishlistState.waiting_for_url)
+async def add_wish_url(message: Message, state: FSMContext) -> None:
+    """Save URL and request category selection."""
+
+    url: Optional[str] = None if message.text.strip() == "-" else message.text.strip()
+    await state.update_data(url=url)
+    await state.set_state(WishlistState.waiting_for_category)
+    await message.answer("Выбери категорию желания.", reply_markup=wishlist_categories_keyboard())
+
+
+@router.message(F.text == "Купленное")
+async def show_purchases(message: Message) -> None:
+    """Show purchased items."""
+
+    db = FinanceDatabase()
+    purchases = db.get_purchases_by_user(message.from_user.id)
+    if not purchases:
+        await message.answer("Список покупок пуст.")
+        return
+
+    lines = []
+    for purchase in purchases:
+        lines.append(
+            f"{purchase['wish_name']} — {purchase['price']:.2f} ({purchase['category']}) куплено {purchase['purchased_at']}"
+        )
+    await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+
+
+@router.message(WishlistState.waiting_for_price)
+async def invalid_price(message: Message) -> None:
+    """Handle invalid price input."""
+
+    await message.answer("Нужно ввести число. Попробуй снова.")
+
+
+@router.message(WishlistState.waiting_for_category)
+async def waiting_category_text(message: Message) -> None:
+    """Prompt to use inline keyboard for category."""
+
+    await message.answer("Выбери категорию через кнопки ниже.", reply_markup=wishlist_categories_keyboard())

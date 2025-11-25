@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 
 
-BOT_TOKEN: str = "<YOUR_BOT_TOKEN_HERE>"
+BOT_TOKEN: str = "<8440100118:AAFm5TCYx0vaXAaJD9jaDKkDAxfTcb9BWoY>"
 ADMIN_ID: int = 123456789
 
 

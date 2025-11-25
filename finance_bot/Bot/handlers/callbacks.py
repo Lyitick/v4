@@ -97,17 +97,47 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
         await callback.answer("Желание не найдено.", show_alert=True)
         return
 
-    savings = db.get_user_savings(callback.from_user.id)
-    category = wish.get("category")
-    category_savings = savings.get(category, {}).get("current", 0)
+    wishlist_category = wish.get("category")
+    savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
 
-    if category_savings < wish.get("price", 0):
-        await callback.answer("Недостаточно средств в накоплениях для этой категории.", show_alert=True)
+    if not savings_category:
+        LOGGER.error(
+            "No savings mapping for wishlist category %s (wish_id=%s, user_id=%s)",
+            wishlist_category,
+            wish_id,
+            callback.from_user.id,
+        )
+        await callback.answer(
+            "Эта категория не привязана к накоплениям, настрой её позже.",
+            show_alert=True,
+        )
         return
 
-    db.update_saving(callback.from_user.id, category, -wish["price"])
-    db.mark_wish_purchased(wish_id)
-    db.add_purchase(callback.from_user.id, wish["name"], wish["price"], category)
+    savings_map = db.get_user_savings_map(callback.from_user.id)
+    category_savings = savings_map.get(savings_category, 0.0)
+    price = float(wish.get("price", 0) or 0.0)
 
-    await callback.message.edit_text(f"Поздравляю, ты купил {wish['name']} за {wish['price']:.2f}!")
-    LOGGER.info("User %s purchased wish %s", callback.from_user.id, wish_id)
+    if category_savings < price:
+        await callback.answer(
+            (
+                "Недостаточно средств в накоплениях для этой категории.\n"
+                f"Нужно: {price:.2f}, доступно: {category_savings:.2f}."
+            ),
+            show_alert=True,
+        )
+        return
+
+    db.update_saving(callback.from_user.id, savings_category, -price)
+    db.mark_wish_purchased(wish_id)
+    db.add_purchase(callback.from_user.id, wish["name"], price, wishlist_category)
+
+    await callback.message.edit_text(f"🎉 Поздравляю, ты купил {wish['name']} за {price:.2f}!")
+    LOGGER.info(
+        "User %s purchased wish %s (wishlist_category=%s, savings_category=%s, price=%.2f, savings_before=%.2f)",
+        callback.from_user.id,
+        wish_id,
+        wishlist_category,
+        savings_category,
+        price,
+        category_savings,
+    )

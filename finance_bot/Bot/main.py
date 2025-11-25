@@ -1,12 +1,16 @@
 """Entry point for finance bot."""
 import asyncio
 import logging
+import sys
+from pathlib import Path
+
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
 
 from config.settings import get_settings
-
 from database.crud import FinanceDatabase
 from handlers import callbacks, common, finances, start, wishlist
 from utils.logging import init_logging

@@ -91,7 +91,10 @@ class FinanceDatabase:
 
         try:
             cursor = self.connection.cursor()
-            cursor.execute("SELECT category, current, goal, purpose FROM savings WHERE user_id = ?", (user_id,))
+            cursor.execute(
+                "SELECT category, current, goal, purpose FROM savings WHERE user_id = ?",
+                (user_id,),
+            )
             rows = cursor.fetchall()
             savings = {
                 row["category"]: {
@@ -105,6 +108,30 @@ class FinanceDatabase:
             return savings
         except sqlite3.Error as error:
             LOGGER.error("Failed to fetch savings for user %s: %s", user_id, error)
+            return {}
+
+    def get_user_savings_map(self, user_id: int) -> Dict[str, float]:
+        """Return a simple mapping of category to current savings.
+
+        Args:
+            user_id (int): Telegram user id.
+
+        Returns:
+            dict[str, float]: Mapping of category names to current amount.
+        """
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT category, current FROM savings WHERE user_id = ?",
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            mapping = {row["category"]: row["current"] for row in rows}
+            LOGGER.info("Fetched savings map for user %s", user_id)
+            return mapping
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to fetch savings map for user %s: %s", user_id, error)
             return {}
 
     def update_saving(self, user_id: int, category: str, amount_delta: float) -> None:
@@ -135,9 +162,19 @@ class FinanceDatabase:
                     (user_id, category, amount_delta),
                 )
             self.connection.commit()
-            LOGGER.info("Updated saving for user %s category %s by %s", user_id, category, amount_delta)
+            LOGGER.info(
+                "Updated saving for user %s category %s by %s",
+                user_id,
+                category,
+                amount_delta,
+            )
         except sqlite3.Error as error:
-            LOGGER.error("Failed to update saving for user %s category %s: %s", user_id, category, error)
+            LOGGER.error(
+                "Failed to update saving for user %s category %s: %s",
+                user_id,
+                category,
+                error,
+            )
 
     def set_goal(self, user_id: int, category: str, goal: float, purpose: str) -> None:
         """Set goal and purpose for saving category."""

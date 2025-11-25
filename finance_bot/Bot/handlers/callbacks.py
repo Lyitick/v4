@@ -20,6 +20,12 @@ CATEGORY_MAP: Dict[str, str] = {
     "wishlist_cat_magic": "Разное",
 }
 
+WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY: Dict[str, str] = {
+    "Инструменты": "сбережения",
+    "Финансы": "инвестиции",
+    "Разное": "спонтанные траты",
+}
+
 
 @router.callback_query(F.data.in_(CATEGORY_MAP.keys()))
 async def handle_category_selection(callback: CallbackQuery, state: FSMContext) -> None:
@@ -60,26 +66,17 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
 
     db = FinanceDatabase()
     wishes = db.get_wishes_by_user(callback.from_user.id)
+    savings_map = db.get_user_savings_map(callback.from_user.id)
     filtered = [wish for wish in wishes if wish.get("category") == category and not wish.get("is_purchased")]
 
     if not filtered:
-        # Если текст уже такой же, не пытаемся ещё раз редактировать сообщение,
-        # иначе Telegram вернёт ошибку "message is not modified"
-        empty_text = "Желаний в этой категории пока нет."
-
-        if callback.message.text == empty_text:
-            await callback.answer("Тут всё ещё пусто 🙂")
-            return
-
-        await callback.message.edit_text(
-            empty_text,
-            reply_markup=wishlist_categories_keyboard(),
-        )
+        await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
         return
 
-
     for wish in filtered:
-        text = f"{wish['name']} — {wish['price']:.2f}. Накоплено: {wish.get('saved_amount', 0):.2f}"
+        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wish.get("category", ""), "")
+        saved_amount = savings_map.get(savings_category, 0)
+        text = f"{wish['name']} — {wish['price']:.2f}. Накоплено: {saved_amount:.2f}"
         if wish.get("url"):
             text += f"\nСсылка: {wish['url']}"
         inline_kb = InlineKeyboardMarkup(

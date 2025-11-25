@@ -753,3 +753,17 @@ aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: messa
 [2025-11-25 16:52:15,200] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
 [2025-11-25 16:52:15,200] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
 [2025-11-25 16:52:26,359] [INFO] [aiogram.dispatcher] Connection established (tryings = 1, bot id = 8440100118)
+[2025-11-25 17:13:12,505] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-11-25 17:13:12,507] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 17:13:12,507] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 17:13:12,768] [INFO] [__main__] Bot shutdown complete
+[2025-11-25 17:13:12,769] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 17:25:52,747] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-11-25 17:25:52,748] [INFO] [__main__] Starting bot polling
+[2025-11-25 17:25:52,748] [INFO] [aiogram.dispatcher] Start polling
+[2025-11-25 17:25:52,929] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 17:34:36,059] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-11-25 17:34:36,060] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 17:34:36,060] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 17:34:36,314] [INFO] [__main__] Bot shutdown complete
+[2025-11-25 17:34:36,315] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'

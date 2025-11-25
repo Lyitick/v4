@@ -6,9 +6,9 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from Bot.database.crud import FinanceDatabase
-from Bot.keyboards.main import wishlist_categories_keyboard
-from Bot.states.wishlist_states import WishlistState
+from database.crud import FinanceDatabase
+from keyboards.main import wishlist_categories_keyboard
+from states.wishlist_states import WishlistState
 
 LOGGER = logging.getLogger(__name__)
 
@@ -97,17 +97,17 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
         await callback.answer("Желание не найдено.", show_alert=True)
         return
 
-    savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wish.get("category", ""), "")
-    savings_map = db.get_user_savings_map(callback.from_user.id)
-    category_savings = savings_map.get(savings_category, 0)
+    savings = db.get_user_savings(callback.from_user.id)
+    category = wish.get("category")
+    category_savings = savings.get(category, {}).get("current", 0)
 
     if category_savings < wish.get("price", 0):
         await callback.answer("Недостаточно средств в накоплениях для этой категории.", show_alert=True)
         return
 
-    db.update_saving(callback.from_user.id, savings_category, -wish["price"])
+    db.update_saving(callback.from_user.id, category, -wish["price"])
     db.mark_wish_purchased(wish_id)
-    db.add_purchase(callback.from_user.id, wish["name"], wish["price"], wish.get("category", ""))
+    db.add_purchase(callback.from_user.id, wish["name"], wish["price"], category)
 
     await callback.message.edit_text(f"Поздравляю, ты купил {wish['name']} за {wish['price']:.2f}!")
     LOGGER.info("User %s purchased wish %s", callback.from_user.id, wish_id)

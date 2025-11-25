@@ -10,10 +10,10 @@ if str(project_root) not in sys.path:
 
 from aiogram import Bot, Dispatcher
 
-from Bot.config.settings import get_settings
-from Bot.database.crud import FinanceDatabase
-from Bot.handlers import callbacks, common, finances, start, wishlist
-from Bot.utils.logging import init_logging
+from config.settings import get_settings
+from database.crud import FinanceDatabase
+from handlers import callbacks, common, finances, start, wishlist
+from utils.logging import init_logging
 
 
 def register_routers(dispatcher: Dispatcher) -> None:
@@ -33,7 +33,10 @@ async def main() -> None:
     settings = get_settings()
     logger = logging.getLogger(__name__)
 
-    bot = Bot(token=settings.bot_token, parse_mode="HTML")
+    bot = Bot(
+        token=settings.bot_token,
+        default=DefaultBotProperties(parse_mode="HTML"),
+    )
     dp = Dispatcher()
 
     FinanceDatabase()

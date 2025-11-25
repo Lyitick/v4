@@ -6,7 +6,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from Bot.keyboards.main import back_to_main_keyboard, main_menu_keyboard
+from keyboards.main import back_to_main_keyboard, main_menu_keyboard
 
 LOGGER = logging.getLogger(__name__)
 

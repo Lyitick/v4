@@ -6,9 +6,9 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from Bot.database.crud import FinanceDatabase
-from Bot.keyboards.main import wishlist_categories_keyboard
-from Bot.states.wishlist_states import WishlistState
+from database.crud import FinanceDatabase
+from keyboards.main import wishlist_categories_keyboard
+from states.wishlist_states import WishlistState
 
 LOGGER = logging.getLogger(__name__)
 
@@ -63,8 +63,20 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
     filtered = [wish for wish in wishes if wish.get("category") == category and not wish.get("is_purchased")]
 
     if not filtered:
-        await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+        # Если текст уже такой же, не пытаемся ещё раз редактировать сообщение,
+        # иначе Telegram вернёт ошибку "message is not modified"
+        empty_text = "Желаний в этой категории пока нет."
+
+        if callback.message.text == empty_text:
+            await callback.answer("Тут всё ещё пусто 🙂")
+            return
+
+        await callback.message.edit_text(
+            empty_text,
+            reply_markup=wishlist_categories_keyboard(),
+        )
         return
+
 
     for wish in filtered:
         text = f"{wish['name']} — {wish['price']:.2f}. Накоплено: {wish.get('saved_amount', 0):.2f}"

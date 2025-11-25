@@ -6,9 +6,9 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from Bot.database.crud import FinanceDatabase
-from Bot.keyboards.main import main_menu_keyboard, wishlist_categories_keyboard, wishlist_reply_keyboard
-from Bot.states.wishlist_states import WishlistState
+from database.crud import FinanceDatabase
+from keyboards.main import main_menu_keyboard, wishlist_categories_keyboard, wishlist_reply_keyboard
+from states.wishlist_states import WishlistState
 
 LOGGER = logging.getLogger(__name__)
 

@@ -14,6 +14,29 @@ LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
+WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY = {
+    "Инструменты": "сбережения",
+    "Финансы": "инвестиции",
+    "Разное": "спонтанные траты",
+    "инвестиции в работу": "сбережения",
+    "вклад в себя": "инвестиции",
+    "кайфы": "спонтанные траты",
+}
+
+
+def humanize_wishlist_category(category: str) -> str:
+    """Return user-facing category name supporting legacy values."""
+
+    mapping = {
+        "Инструменты": "инвестиции в работу",
+        "Финансы": "вклад в себя",
+        "Разное": "кайфы",
+        "инвестиции в работу": "инвестиции в работу",
+        "вклад в себя": "вклад в себя",
+        "кайфы": "кайфы",
+    }
+    return mapping.get(category, category)
+
 
 @router.message(F.text == "📋 Вишлист")
 async def open_wishlist(message: Message, state: FSMContext) -> None:
@@ -83,8 +106,9 @@ async def show_purchases(message: Message) -> None:
 
     lines = []
     for purchase in purchases:
+        category = humanize_wishlist_category(purchase.get("category", ""))
         lines.append(
-            f"{purchase['wish_name']} — {purchase['price']:.2f} ({purchase['category']}) куплено {purchase['purchased_at']}"
+            f"{purchase['wish_name']} — {purchase['price']:.2f} ({category}) куплено {purchase['purchased_at']}"
         )
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
 

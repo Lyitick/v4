@@ -162,17 +162,28 @@ async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> 
     await suggest_available_wish(message)
 
 
+def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Build inline keyboard with purchase buttons for affordable wishes."""
+
+    buttons = [
+        [InlineKeyboardButton(text=f"Купил: {wish['name']}", callback_data=f"wish_buy_{wish['id']}")]
+        for wish in wishes
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 async def suggest_available_wish(message: Message) -> None:
-    """Suggest one affordable wish if savings allow."""
+    """Suggest all affordable wishes if savings allow."""
 
     db = FinanceDatabase()
     savings_map = db.get_user_savings_map(message.from_user.id)
     wishes = db.get_wishes_by_user(message.from_user.id)
 
-    candidates: List[Dict[str, Any]] = []
+    affordable: List[Dict[str, Any]] = []
     for wish in wishes:
         if wish.get("is_purchased"):
             continue
+
         wishlist_category = humanize_wishlist_category(wish.get("category", ""))
         savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
         if not savings_category:
@@ -185,28 +196,21 @@ async def suggest_available_wish(message: Message) -> None:
 
         wish_copy: Dict[str, Any] = dict(wish)
         wish_copy["price"] = price
-        wish_copy["available"] = available
-        wish_copy["savings_category"] = savings_category
-        candidates.append(wish_copy)
+        wish_copy["wishlist_category"] = wishlist_category
+        affordable.append(wish_copy)
 
-    if not candidates:
+    if not affordable:
         return
 
-    main_candidate = max(candidates, key=lambda item: item["price"])
-    url: Optional[str] = main_candidate.get("url")
-    message_lines = [
-        "Есть деньги на желание из вишлиста!", 
-        f"Главный кандидат: {main_candidate['name']} — {main_candidate['price']:.2f} ({humanize_wishlist_category(main_candidate.get('category', ''))}).",
-        f"Доступно в накоплениях ({main_candidate['savings_category']}): {main_candidate['available']:.2f}.",
-    ]
-    if url:
-        message_lines.append(f"Ссылка: {url}")
-    message_lines.append("Покупаем?")
+    lines = ["Ты уже можешь купить:"]
+    for wish in affordable:
+        lines.append(
+            f"• {wish['name']} — {wish['price']:.2f} ₽ (категория: {wish['wishlist_category']})"
+        )
+    lines.append("Нажми на кнопку под нужным товаром, если купил.")
 
-    inline_kb = InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text="Купил", callback_data=f"wish_buy_{main_candidate['id']}")]]
-    )
-    await message.answer("\n".join(message_lines), reply_markup=inline_kb)
+    keyboard = _build_affordable_wishes_keyboard(affordable)
+    await message.answer("\n".join(lines), reply_markup=keyboard)
 
 
 @router.message(MoneyState.waiting_for_purchase_confirmation, F.text.in_({"✅ Купил", "🔄 Продолжить копить"}))

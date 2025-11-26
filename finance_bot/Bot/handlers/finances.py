@@ -4,11 +4,12 @@ from typing import Any, Dict, List
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from database.crud import FinanceDatabase
 from keyboards.main import back_to_main_keyboard, main_menu_keyboard, purchase_confirmation_keyboard, yes_no_keyboard
 from states.money_states import MoneyState
+from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
 LOGGER = logging.getLogger(__name__)
 
@@ -21,6 +22,15 @@ distribution_scheme = [
     {"label": "Сбережения", "category": "сбережения", "percent": 20},
     {"label": "Ну и на хуйню?", "category": "спонтанные траты", "percent": 10},
 ]
+
+
+def _to_float(value: Any) -> float:
+    """Safely convert value to float."""
+
+    try:
+        return float(value) if value is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
@@ -147,6 +157,80 @@ async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> 
         )
         await state.update_data(category=category, goal=goal)
         await state.set_state(MoneyState.waiting_for_purchase_confirmation)
+        return
+
+    await show_affordable_wishes(message=message, user_id=message.from_user.id, db=db)
+
+
+def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Build inline keyboard with purchase buttons for affordable wishes."""
+
+    buttons = [
+        [InlineKeyboardButton(text=f"Купил: {wish['name']}", callback_data=f"wish_buy_{wish['id']}")]
+        for wish in wishes
+    ]
+    buttons.append([InlineKeyboardButton(text="Потом", callback_data="affordable_wishes_later")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def show_affordable_wishes(
+    message: Message,
+    user_id: int | None = None,
+    db: FinanceDatabase | None = None,
+) -> None:
+    """Show all wishes that are affordable with current savings."""
+
+    if message is None:
+        return
+
+    if user_id is None:
+        user_id = message.from_user.id if message.from_user else None
+
+    if user_id is None:
+        return
+
+    db = db or FinanceDatabase()
+    savings_map = db.get_user_savings_map(user_id)
+    wishes = db.get_wishes_by_user(user_id)
+
+    affordable: List[Dict[str, Any]] = []
+    for wish in wishes:
+        if wish.get("is_purchased"):
+            continue
+
+        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
+        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
+        if not savings_category:
+            continue
+
+        price = _to_float(wish.get("price"))
+        available = _to_float(savings_map.get(savings_category))
+        if price <= 0 or available < price:
+            continue
+
+        wish_copy: Dict[str, Any] = dict(wish)
+        wish_copy["price"] = price
+        wish_copy["wishlist_category"] = wishlist_category
+        affordable.append(wish_copy)
+
+    if not affordable:
+        return
+
+    lines = ["Ты уже можешь купить:"]
+    for wish in affordable:
+        lines.append(
+            f"• {wish['name']} — {wish['price']:.2f} ₽ (категория: {wish['wishlist_category']})"
+        )
+    lines.append("Нажми на кнопку под нужным товаром, если купил.")
+
+    keyboard = _build_affordable_wishes_keyboard(affordable)
+    await message.answer("\n".join(lines), reply_markup=keyboard)
+
+
+async def suggest_available_wish(message: Message) -> None:
+    """Backward-compatible wrapper to show affordable wishes."""
+
+    await show_affordable_wishes(message=message, user_id=message.from_user.id if message.from_user else None)
 
 
 @router.message(MoneyState.waiting_for_purchase_confirmation, F.text.in_({"✅ Купил", "🔄 Продолжить копить"}))
@@ -165,6 +249,9 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
             f"Поздравляю с покупкой по категории {category}! Сумма {goal_amount:.2f} списана.",
             reply_markup=main_menu_keyboard(),
         )
+        savings = db.get_user_savings(message.from_user.id)
+        summary = _format_savings_summary(savings)
+        await message.answer(f"Обновлённые накопления:\n{summary}")
     else:
         await message.answer("Продолжаем копить!", reply_markup=main_menu_keyboard())
 

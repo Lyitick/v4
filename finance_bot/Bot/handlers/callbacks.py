@@ -176,6 +176,7 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
     summary = _format_savings_summary(savings)
     await callback.message.answer(f"Обновлённые накопления:\n{summary}")
     await suggest_available_wish(callback.message)
+    await callback.answer()
     LOGGER.info(
         "User %s purchased wish %s (wishlist_category=%s, savings_category=%s, price=%.2f, savings_before=%.2f)",
         callback.from_user.id,

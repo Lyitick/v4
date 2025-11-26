@@ -9,6 +9,7 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from database.crud import FinanceDatabase
 from keyboards.main import wishlist_categories_keyboard
 from states.wishlist_states import WishlistState
+from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,12 +19,6 @@ CATEGORY_MAP: Dict[str, str] = {
     "wishlist_cat_tools": "Инструменты",
     "wishlist_cat_currency": "Финансы",
     "wishlist_cat_magic": "Разное",
-}
-
-WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY: Dict[str, str] = {
-    "Инструменты": "сбережения",
-    "Финансы": "инвестиции",
-    "Разное": "спонтанные траты",
 }
 
 

@@ -14,6 +14,12 @@ LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
+WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY = {
+    "Инструменты": "сбережения",
+    "Финансы": "инвестиции",
+    "Разное": "спонтанные траты",
+}
+
 
 @router.message(F.text == "📋 Вишлист")
 async def open_wishlist(message: Message, state: FSMContext) -> None:

@@ -48,8 +48,23 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
     """Open wishlist menu."""
 
     await state.clear()
+    db = FinanceDatabase()
+    wishes = db.get_wishes_by_user(message.from_user.id)
+    has_active_wishes = any(not wish.get("is_purchased") for wish in wishes)
+
+    if not has_active_wishes:
+        await message.answer(
+            "В твоём вишлисте пока пусто.\nДавай добавим что-то новое в наши категории ✨",
+            reply_markup=wishlist_reply_keyboard(),
+        )
+        LOGGER.info("User %s opened empty wishlist", message.from_user.id if message.from_user else "unknown")
+        return
+
     await message.answer("Раздел вишлиста.", reply_markup=wishlist_reply_keyboard())
-    await message.answer("Выбери категорию для просмотра или добавь новое желание.", reply_markup=wishlist_categories_keyboard())
+    await message.answer(
+        "Выбери категорию для просмотра или добавь новое желание.",
+        reply_markup=wishlist_categories_keyboard(),
+    )
     LOGGER.info("User %s opened wishlist", message.from_user.id if message.from_user else "unknown")
 
 

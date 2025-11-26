@@ -9,16 +9,16 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from database.crud import FinanceDatabase
 from keyboards.main import wishlist_categories_keyboard
 from states.wishlist_states import WishlistState
-from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY
+from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
 CATEGORY_MAP: Dict[str, str] = {
-    "wishlist_cat_tools": "Инструменты",
-    "wishlist_cat_currency": "Финансы",
-    "wishlist_cat_magic": "Разное",
+    "wishlist_cat_tools": "инвестиции в работу",
+    "wishlist_cat_currency": "вклад в себя",
+    "wishlist_cat_magic": "кайфы",
 }
 
 
@@ -26,7 +26,7 @@ CATEGORY_MAP: Dict[str, str] = {
 async def handle_category_selection(callback: CallbackQuery, state: FSMContext) -> None:
     """Handle category selection for viewing or adding wishes."""
 
-    category = CATEGORY_MAP.get(callback.data, "")
+    category = humanize_wishlist_category(CATEGORY_MAP.get(callback.data, ""))
     data = await state.get_data()
     current_state = await state.get_state()
 
@@ -62,16 +62,25 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
     db = FinanceDatabase()
     wishes = db.get_wishes_by_user(callback.from_user.id)
     savings_map = db.get_user_savings_map(callback.from_user.id)
-    filtered = [wish for wish in wishes if wish.get("category") == category and not wish.get("is_purchased")]
+    filtered = [
+        wish
+        for wish in wishes
+        if humanize_wishlist_category(wish.get("category", "")) == humanize_wishlist_category(category)
+        and not wish.get("is_purchased")
+    ]
 
     if not filtered:
         await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
         return
 
     for wish in filtered:
-        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wish.get("category", ""), "")
+        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
+        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category, "")
         saved_amount = savings_map.get(savings_category, 0)
-        text = f"{wish['name']} — {wish['price']:.2f}. Накоплено: {saved_amount:.2f}"
+        text = (
+            f"{wish['name']} — {wish['price']:.2f} ({wishlist_category}). "
+            f"Накоплено: {saved_amount:.2f}"
+        )
         if wish.get("url"):
             text += f"\nСсылка: {wish['url']}"
         inline_kb = InlineKeyboardMarkup(
@@ -92,7 +101,7 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
         await callback.answer("Желание не найдено.", show_alert=True)
         return
 
-    wishlist_category = wish.get("category")
+    wishlist_category = humanize_wishlist_category(wish.get("category"))
     savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
 
     if not savings_category:

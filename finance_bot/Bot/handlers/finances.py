@@ -9,7 +9,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from database.crud import FinanceDatabase
 from keyboards.main import back_to_main_keyboard, main_menu_keyboard, purchase_confirmation_keyboard, yes_no_keyboard
 from states.money_states import MoneyState
-from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY
+from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
 LOGGER = logging.getLogger(__name__)
 
@@ -173,8 +173,8 @@ async def suggest_available_wish(message: Message) -> None:
     for wish in wishes:
         if wish.get("is_purchased"):
             continue
-        wishlist_category = wish.get("category")
-        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(str(wishlist_category))
+        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
+        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
         if not savings_category:
             continue
 
@@ -196,7 +196,7 @@ async def suggest_available_wish(message: Message) -> None:
     url: Optional[str] = main_candidate.get("url")
     message_lines = [
         "Есть деньги на желание из вишлиста!", 
-        f"Главный кандидат: {main_candidate['name']} — {main_candidate['price']:.2f} ({main_candidate.get('category', '')}).",
+        f"Главный кандидат: {main_candidate['name']} — {main_candidate['price']:.2f} ({humanize_wishlist_category(main_candidate.get('category', ''))}).",
         f"Доступно в накоплениях ({main_candidate['savings_category']}): {main_candidate['available']:.2f}.",
     ]
     if url:

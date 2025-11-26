@@ -35,6 +35,15 @@ class FinanceDatabase:
         self.init_db()
         LOGGER.info("Database initialized at %s", DB_PATH)
 
+    @staticmethod
+    def _to_float(value: Any) -> float:
+        """Safely convert a value to float, returning 0.0 on failure."""
+
+        try:
+            return float(value) if value is not None else 0.0
+        except (TypeError, ValueError):
+            return 0.0
+
     def init_db(self) -> None:
         """Create required tables if they do not exist."""
 
@@ -96,14 +105,15 @@ class FinanceDatabase:
                 (user_id,),
             )
             rows = cursor.fetchall()
-            savings = {
-                row["category"]: {
-                    "current": row["current"],
-                    "goal": row["goal"],
+            savings = {}
+            for row in rows:
+                current = self._to_float(row["current"])
+                goal = self._to_float(row["goal"])
+                savings[row["category"]] = {
+                    "current": current,
+                    "goal": goal,
                     "purpose": row["purpose"],
                 }
-                for row in rows
-            }
             LOGGER.info("Fetched savings for user %s", user_id)
             return savings
         except sqlite3.Error as error:
@@ -127,7 +137,9 @@ class FinanceDatabase:
                 (user_id,),
             )
             rows = cursor.fetchall()
-            mapping = {row["category"]: row["current"] for row in rows}
+            mapping = {}
+            for row in rows:
+                mapping[row["category"]] = self._to_float(row["current"])
             LOGGER.info("Fetched savings map for user %s", user_id)
             return mapping
         except sqlite3.Error as error:
@@ -150,8 +162,10 @@ class FinanceDatabase:
                 (user_id, category),
             )
             row = cursor.fetchone()
+            delta = self._to_float(amount_delta)
             if row:
-                new_value = row["current"] + amount_delta
+                current = self._to_float(row["current"])
+                new_value = current + delta
                 cursor.execute(
                     "UPDATE savings SET current = ? WHERE id = ?",
                     (new_value, row["id"]),
@@ -159,7 +173,7 @@ class FinanceDatabase:
             else:
                 cursor.execute(
                     "INSERT INTO savings (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
-                    (user_id, category, amount_delta),
+                    (user_id, category, delta),
                 )
             self.connection.commit()
             LOGGER.info(

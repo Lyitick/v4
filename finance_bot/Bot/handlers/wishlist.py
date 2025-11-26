@@ -7,12 +7,40 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from database.crud import FinanceDatabase
-from keyboards.main import main_menu_keyboard, wishlist_categories_keyboard, wishlist_reply_keyboard
+from keyboards.main import (
+    main_menu_keyboard,
+    wishlist_categories_keyboard,
+    wishlist_reply_keyboard,
+    wishlist_url_keyboard,
+)
 from states.wishlist_states import WishlistState
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+
+WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY = {
+    "Инструменты": "инвестиции",
+    "Финансы": "сбережения",
+    "Разное": "спонтанные траты",
+    "инвестиции в работу": "инвестиции",
+    "вклад в себя": "сбережения",
+    "кайфы": "спонтанные траты",
+}
+
+
+def humanize_wishlist_category(category: str) -> str:
+    """Return user-facing category name supporting legacy values."""
+
+    mapping = {
+        "Инструменты": "инвестиции в работу",
+        "Финансы": "вклад в себя",
+        "Разное": "кайфы",
+        "инвестиции в работу": "инвестиции в работу",
+        "вклад в себя": "вклад в себя",
+        "кайфы": "кайфы",
+    }
+    return mapping.get(category, category)
 
 
 @router.message(F.text == "📋 Вишлист")
@@ -58,14 +86,15 @@ async def add_wish_price(message: Message, state: FSMContext) -> None:
 
     await state.update_data(price=price)
     await state.set_state(WishlistState.waiting_for_url)
-    await message.answer("Вставь ссылку на товар или отправь '-' чтобы пропустить.")
+    await message.answer("Дай ссылку", reply_markup=wishlist_url_keyboard())
 
 
 @router.message(WishlistState.waiting_for_url)
 async def add_wish_url(message: Message, state: FSMContext) -> None:
     """Save URL and request category selection."""
 
-    url: Optional[str] = None if message.text.strip() == "-" else message.text.strip()
+    text = message.text.strip() if message.text else ""
+    url: Optional[str] = None if text in {"-", ""} else text
     await state.update_data(url=url)
     await state.set_state(WishlistState.waiting_for_category)
     await message.answer("Выбери категорию желания.", reply_markup=wishlist_categories_keyboard())
@@ -83,8 +112,9 @@ async def show_purchases(message: Message) -> None:
 
     lines = []
     for purchase in purchases:
+        category = humanize_wishlist_category(purchase.get("category", ""))
         lines.append(
-            f"{purchase['wish_name']} — {purchase['price']:.2f} ({purchase['category']}) куплено {purchase['purchased_at']}"
+            f"{purchase['wish_name']} — {purchase['price']:.2f} ({category}) куплено {purchase['purchased_at']}"
         )
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
 

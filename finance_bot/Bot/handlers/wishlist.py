@@ -7,7 +7,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from database.crud import FinanceDatabase
-from keyboards.main import main_menu_keyboard, wishlist_categories_keyboard, wishlist_reply_keyboard
+from keyboards.main import (
+    main_menu_keyboard,
+    wishlist_categories_keyboard,
+    wishlist_reply_keyboard,
+    wishlist_url_keyboard,
+)
 from states.wishlist_states import WishlistState
 
 LOGGER = logging.getLogger(__name__)
@@ -81,14 +86,15 @@ async def add_wish_price(message: Message, state: FSMContext) -> None:
 
     await state.update_data(price=price)
     await state.set_state(WishlistState.waiting_for_url)
-    await message.answer("Вставь ссылку на товар или отправь '-' чтобы пропустить.")
+    await message.answer("Дай ссылку", reply_markup=wishlist_url_keyboard())
 
 
 @router.message(WishlistState.waiting_for_url)
 async def add_wish_url(message: Message, state: FSMContext) -> None:
     """Save URL and request category selection."""
 
-    url: Optional[str] = None if message.text.strip() == "-" else message.text.strip()
+    text = message.text.strip() if message.text else ""
+    url: Optional[str] = None if text in {"-", ""} else text
     await state.update_data(url=url)
     await state.set_state(WishlistState.waiting_for_category)
     await message.answer("Выбери категорию желания.", reply_markup=wishlist_categories_keyboard())

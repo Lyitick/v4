@@ -37,6 +37,24 @@ async def handle_category_selection(callback: CallbackQuery, state: FSMContext) 
     await _send_wishes_list(callback, category)
 
 
+@router.callback_query(F.data == "wishlist_skip_url")
+async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
+    """Skip wishlist URL step via inline button."""
+
+    current_state = await state.get_state()
+    if current_state != WishlistState.waiting_for_url.state:
+        await callback.answer()
+        return
+
+    await state.update_data(url=None)
+    await state.set_state(WishlistState.waiting_for_category)
+    await callback.message.edit_text(
+        "Ок, ссылку пропустим. Теперь выбери категорию желания.",
+        reply_markup=wishlist_categories_keyboard(),
+    )
+    await callback.answer()
+
+
 async def _finalize_wish(callback: CallbackQuery, state: FSMContext, category: str) -> None:
     """Finalize wish creation after category selection."""
 
@@ -65,7 +83,10 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
     filtered = [
         wish
         for wish in wishes
-        if humanize_wishlist_category(wish.get("category", "")) == humanize_wishlist_category(category)
+        if (
+            humanize_wishlist_category(wish.get("category", ""))
+            == humanize_wishlist_category(category)
+        )
         and not wish.get("is_purchased")
     ]
 
@@ -76,13 +97,27 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
     for wish in filtered:
         wishlist_category = humanize_wishlist_category(wish.get("category", ""))
         savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category, "")
-        saved_amount = savings_map.get(savings_category, 0)
-        text = (
-            f"{wish['name']} — {wish['price']:.2f} ({wishlist_category}). "
-            f"Накоплено: {saved_amount:.2f}"
-        )
+        saved_amount = float(savings_map.get(savings_category, 0.0) or 0.0)
+        price = float(wish.get("price", 0) or 0.0)
+
+        if price > 0:
+            progress = min(saved_amount / price, 1.0)
+        else:
+            progress = 0.0
+        total_blocks = 10
+        filled_blocks = int(progress * total_blocks)
+        bar = "■" * filled_blocks + "□" * (total_blocks - filled_blocks)
+        remaining = max(price - saved_amount, 0.0)
+        progress_percent = round(progress * 100)
+
+        lines = [
+            f"{wish['name']} — {price:.2f} ({wishlist_category})",
+            f"Прогресс: {bar} {progress_percent}%",
+            f"Накоплено: {saved_amount:.2f}, осталось: {remaining:.2f}",
+        ]
         if wish.get("url"):
-            text += f"\nСсылка: {wish['url']}"
+            lines.append(f"Ссылка: {wish['url']}")
+        text = "\n".join(lines)
         inline_kb = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Купил", callback_data=f"wish_buy_{wish['id']}")]]
         )

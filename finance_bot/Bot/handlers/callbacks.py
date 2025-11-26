@@ -7,23 +7,22 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.crud import FinanceDatabase
-from keyboards.main import wishlist_categories_keyboard
+from handlers.finances import (
+    _format_savings_summary,
+    show_affordable_wishes,
+)
+from keyboards.main import main_menu_keyboard, wishlist_categories_keyboard
 from states.wishlist_states import WishlistState
+from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
 CATEGORY_MAP: Dict[str, str] = {
-    "wishlist_cat_tools": "Инструменты",
-    "wishlist_cat_currency": "Финансы",
-    "wishlist_cat_magic": "Разное",
-}
-
-WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY: Dict[str, str] = {
-    "Инструменты": "сбережения",
-    "Финансы": "инвестиции",
-    "Разное": "спонтанные траты",
+    "wishlist_cat_tools": "инвестиции в работу",
+    "wishlist_cat_currency": "вклад в себя",
+    "wishlist_cat_magic": "кайфы",
 }
 
 
@@ -31,7 +30,7 @@ WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY: Dict[str, str] = {
 async def handle_category_selection(callback: CallbackQuery, state: FSMContext) -> None:
     """Handle category selection for viewing or adding wishes."""
 
-    category = CATEGORY_MAP.get(callback.data, "")
+    category = humanize_wishlist_category(CATEGORY_MAP.get(callback.data, ""))
     data = await state.get_data()
     current_state = await state.get_state()
 
@@ -40,6 +39,24 @@ async def handle_category_selection(callback: CallbackQuery, state: FSMContext) 
         return
 
     await _send_wishes_list(callback, category)
+
+
+@router.callback_query(F.data == "wishlist_skip_url")
+async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
+    """Skip wishlist URL step via inline button."""
+
+    current_state = await state.get_state()
+    if current_state != WishlistState.waiting_for_url.state:
+        await callback.answer()
+        return
+
+    await state.update_data(url=None)
+    await state.set_state(WishlistState.waiting_for_category)
+    await callback.message.edit_text(
+        "Ок, ссылку пропустим. Теперь выбери категорию желания.",
+        reply_markup=wishlist_categories_keyboard(),
+    )
+    await callback.answer()
 
 
 async def _finalize_wish(callback: CallbackQuery, state: FSMContext, category: str) -> None:
@@ -67,18 +84,44 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
     db = FinanceDatabase()
     wishes = db.get_wishes_by_user(callback.from_user.id)
     savings_map = db.get_user_savings_map(callback.from_user.id)
-    filtered = [wish for wish in wishes if wish.get("category") == category and not wish.get("is_purchased")]
+    filtered = [
+        wish
+        for wish in wishes
+        if (
+            humanize_wishlist_category(wish.get("category", ""))
+            == humanize_wishlist_category(category)
+        )
+        and not wish.get("is_purchased")
+    ]
 
     if not filtered:
         await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
         return
 
     for wish in filtered:
-        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wish.get("category", ""), "")
-        saved_amount = savings_map.get(savings_category, 0)
-        text = f"{wish['name']} — {wish['price']:.2f}. Накоплено: {saved_amount:.2f}"
+        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
+        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category, "")
+        saved_amount = float(savings_map.get(savings_category, 0.0) or 0.0)
+        price = float(wish.get("price", 0) or 0.0)
+
+        if price > 0:
+            progress = min(saved_amount / price, 1.0)
+        else:
+            progress = 0.0
+        total_blocks = 10
+        filled_blocks = int(progress * total_blocks)
+        bar = "■" * filled_blocks + "□" * (total_blocks - filled_blocks)
+        remaining = max(price - saved_amount, 0.0)
+        progress_percent = round(progress * 100)
+
+        lines = [
+            f"{wish['name']} — {price:.2f} ({wishlist_category})",
+            f"Прогресс: {bar} {progress_percent}%",
+            f"Накоплено: {saved_amount:.2f}, осталось: {remaining:.2f}",
+        ]
         if wish.get("url"):
-            text += f"\nСсылка: {wish['url']}"
+            lines.append(f"Ссылка: {wish['url']}")
+        text = "\n".join(lines)
         inline_kb = InlineKeyboardMarkup(
             inline_keyboard=[[InlineKeyboardButton(text="Купил", callback_data=f"wish_buy_{wish['id']}")]]
         )
@@ -97,7 +140,7 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
         await callback.answer("Желание не найдено.", show_alert=True)
         return
 
-    wishlist_category = wish.get("category")
+    wishlist_category = humanize_wishlist_category(wish.get("category"))
     savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
 
     if not savings_category:
@@ -132,6 +175,11 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
     db.add_purchase(callback.from_user.id, wish["name"], price, wishlist_category)
 
     await callback.message.edit_text(f"🎉 Поздравляю, ты купил {wish['name']} за {price:.2f}!")
+    savings = db.get_user_savings(callback.from_user.id)
+    summary = _format_savings_summary(savings)
+    await callback.message.answer(f"Обновлённые накопления:\n{summary}")
+    await show_affordable_wishes(message=callback.message, user_id=callback.from_user.id, db=db)
+    await callback.answer()
     LOGGER.info(
         "User %s purchased wish %s (wishlist_category=%s, savings_category=%s, price=%.2f, savings_before=%.2f)",
         callback.from_user.id,
@@ -141,3 +189,17 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
         price,
         category_savings,
     )
+
+
+@router.callback_query(F.data == "affordable_wishes_later")
+async def handle_affordable_wishes_later(callback: CallbackQuery, state: FSMContext) -> None:
+    """Close affordable wish suggestions and return to main menu."""
+
+    await state.clear()
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            LOGGER.debug("Failed to clear inline keyboard for affordable wishes", exc_info=True)
+        await callback.message.answer("Хорошо, вернёмся к покупкам позже. Главное меню.", reply_markup=main_menu_keyboard())
+    await callback.answer()

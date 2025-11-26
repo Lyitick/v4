@@ -34,10 +34,17 @@ def wishlist_categories_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for wishlist categories."""
 
     buttons = [
-        [InlineKeyboardButton(text="🛠 Инструменты", callback_data="wishlist_cat_tools")],
-        [InlineKeyboardButton(text="💸 Финансы", callback_data="wishlist_cat_currency")],
-        [InlineKeyboardButton(text="✨ Разное", callback_data="wishlist_cat_magic")],
+        [InlineKeyboardButton(text="🛠 инвестиции в работу", callback_data="wishlist_cat_tools")],
+        [InlineKeyboardButton(text="💸 вклад в себя", callback_data="wishlist_cat_currency")],
+        [InlineKeyboardButton(text="✨ кайфы", callback_data="wishlist_cat_magic")],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def wishlist_url_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for skipping wishlist URL input."""
+
+    buttons = [[InlineKeyboardButton(text="Скип", callback_data="wishlist_skip_url")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

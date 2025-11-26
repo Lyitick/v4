@@ -225,6 +225,9 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
             f"Поздравляю с покупкой по категории {category}! Сумма {goal_amount:.2f} списана.",
             reply_markup=main_menu_keyboard(),
         )
+        savings = db.get_user_savings(message.from_user.id)
+        summary = _format_savings_summary(savings)
+        await message.answer(f"Обновлённые накопления:\n{summary}")
     else:
         await message.answer("Продолжаем копить!", reply_markup=main_menu_keyboard())
 

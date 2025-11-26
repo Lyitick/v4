@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.crud import FinanceDatabase
+from handlers.finances import _format_savings_summary
 from keyboards.main import wishlist_categories_keyboard
 from states.wishlist_states import WishlistState
 from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
@@ -171,6 +172,9 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
     db.add_purchase(callback.from_user.id, wish["name"], price, wishlist_category)
 
     await callback.message.edit_text(f"🎉 Поздравляю, ты купил {wish['name']} за {price:.2f}!")
+    savings = db.get_user_savings(callback.from_user.id)
+    summary = _format_savings_summary(savings)
+    await callback.message.answer(f"Обновлённые накопления:\n{summary}")
     LOGGER.info(
         "User %s purchased wish %s (wishlist_category=%s, savings_category=%s, price=%.2f, savings_before=%.2f)",
         callback.from_user.id,

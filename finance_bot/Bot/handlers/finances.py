@@ -1,6 +1,6 @@
 """Handlers for income calculation and savings."""
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext

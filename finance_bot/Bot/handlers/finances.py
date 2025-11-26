@@ -159,7 +159,7 @@ async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> 
         await state.set_state(MoneyState.waiting_for_purchase_confirmation)
         return
 
-    await suggest_available_wish(message)
+    await show_affordable_wishes(message=message, user_id=message.from_user.id, db=db)
 
 
 def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
@@ -169,15 +169,29 @@ def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKey
         [InlineKeyboardButton(text=f"Купил: {wish['name']}", callback_data=f"wish_buy_{wish['id']}")]
         for wish in wishes
     ]
+    buttons.append([InlineKeyboardButton(text="Потом", callback_data="affordable_wishes_later")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-async def suggest_available_wish(message: Message) -> None:
-    """Suggest all affordable wishes if savings allow."""
+async def show_affordable_wishes(
+    message: Message,
+    user_id: int | None = None,
+    db: FinanceDatabase | None = None,
+) -> None:
+    """Show all wishes that are affordable with current savings."""
 
-    db = FinanceDatabase()
-    savings_map = db.get_user_savings_map(message.from_user.id)
-    wishes = db.get_wishes_by_user(message.from_user.id)
+    if message is None:
+        return
+
+    if user_id is None:
+        user_id = message.from_user.id if message.from_user else None
+
+    if user_id is None:
+        return
+
+    db = db or FinanceDatabase()
+    savings_map = db.get_user_savings_map(user_id)
+    wishes = db.get_wishes_by_user(user_id)
 
     affordable: List[Dict[str, Any]] = []
     for wish in wishes:
@@ -211,6 +225,12 @@ async def suggest_available_wish(message: Message) -> None:
 
     keyboard = _build_affordable_wishes_keyboard(affordable)
     await message.answer("\n".join(lines), reply_markup=keyboard)
+
+
+async def suggest_available_wish(message: Message) -> None:
+    """Backward-compatible wrapper to show affordable wishes."""
+
+    await show_affordable_wishes(message=message, user_id=message.from_user.id if message.from_user else None)
 
 
 @router.message(MoneyState.waiting_for_purchase_confirmation, F.text.in_({"✅ Купил", "🔄 Продолжить копить"}))

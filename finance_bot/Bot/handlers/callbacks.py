@@ -7,8 +7,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from database.crud import FinanceDatabase
-from handlers.finances import _format_savings_summary, suggest_available_wish
-from keyboards.main import wishlist_categories_keyboard
+from handlers.finances import (
+    _format_savings_summary,
+    show_affordable_wishes,
+)
+from keyboards.main import main_menu_keyboard, wishlist_categories_keyboard
 from states.wishlist_states import WishlistState
 from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
@@ -175,7 +178,7 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
     savings = db.get_user_savings(callback.from_user.id)
     summary = _format_savings_summary(savings)
     await callback.message.answer(f"Обновлённые накопления:\n{summary}")
-    await suggest_available_wish(callback.message)
+    await show_affordable_wishes(message=callback.message, user_id=callback.from_user.id, db=db)
     await callback.answer()
     LOGGER.info(
         "User %s purchased wish %s (wishlist_category=%s, savings_category=%s, price=%.2f, savings_before=%.2f)",
@@ -186,3 +189,17 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
         price,
         category_savings,
     )
+
+
+@router.callback_query(F.data == "affordable_wishes_later")
+async def handle_affordable_wishes_later(callback: CallbackQuery, state: FSMContext) -> None:
+    """Close affordable wish suggestions and return to main menu."""
+
+    await state.clear()
+    if callback.message:
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            LOGGER.debug("Failed to clear inline keyboard for affordable wishes", exc_info=True)
+        await callback.message.answer("Хорошо, вернёмся к покупкам позже. Главное меню.", reply_markup=main_menu_keyboard())
+    await callback.answer()

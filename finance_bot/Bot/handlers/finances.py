@@ -1,5 +1,6 @@
 """Handlers for income calculation and savings."""
 import logging
+from contextlib import suppress
 from typing import Any, Dict, List, Optional
 
 from aiogram import F, Router
@@ -75,27 +76,26 @@ def _find_reached_goal(savings: Dict[str, Dict[str, Any]]) -> tuple[str, Dict[st
     return None, None
 
 
-async def _ask_allocation_confirmation(
-    message: Message,
-    allocation: Dict[str, Any],
-    *,
-    remove_reply_keyboard: bool = False,
-) -> None:
+async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, Any]) -> None:
     """Ask user to confirm allocation for a specific category.
 
     Args:
         message: Aiogram message object used for sending prompts.
         allocation: Allocation details with label and amount.
-        remove_reply_keyboard: Flag to hide any reply keyboards before asking.
     """
-
-    if remove_reply_keyboard:
-        await message.answer("Скрываю клавиатуру, выбери вариант ниже.", reply_markup=ReplyKeyboardRemove())
 
     await message.answer(
         f"На категорию {allocation['label']} можно направить {allocation['amount']:.2f}. Перевести?",
         reply_markup=yes_no_inline_keyboard(),
     )
+
+
+async def _remove_reply_keyboard_silently(message: Message) -> None:
+    """Hide reply keyboard without leaving an extra message visible."""
+
+    removal_message = await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
+    with suppress(Exception):
+        await removal_message.delete()
 
 
 @router.message(F.text == "Рассчитать доход")
@@ -130,15 +130,9 @@ async def process_income_amount(message: Message, state: FSMContext) -> None:
     await state.update_data(allocations=allocations, index=0)
     await state.set_state(MoneyState.confirm_category)
     current = allocations[0]
-    await _ask_allocation_confirmation(
-        message=message,
-        allocation=current,
-        remove_reply_keyboard=True,
-    )
+    await _remove_reply_keyboard_silently(message)
+    await _ask_allocation_confirmation(message=message, allocation=current)
 
-@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
-async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
-    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

@@ -1,5 +1,6 @@
 """Handlers for income calculation and savings."""
 import logging
+from contextlib import suppress
 from typing import Any, Dict, List, Optional
 
 from aiogram import F, Router
@@ -245,6 +246,9 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         amount=amount,
     )
 
+@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
+async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

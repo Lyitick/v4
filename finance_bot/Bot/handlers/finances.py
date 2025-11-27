@@ -116,8 +116,6 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
         ]
     )
 
-    sum_message = await message.answer("Сумма:", reply_markup=confirm_markup)
-
     income_keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
@@ -129,9 +127,11 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
         one_time_keyboard=False,
     )
 
+    sum_message = await message.answer("Сумма:", reply_markup=income_keyboard)
+
     await message.answer(
         "Когда будет нужная сумма, нажми кнопку ниже:",
-        reply_markup=income_keyboard,
+        reply_markup=confirm_markup,
     )
 
     await state.update_data(income_str="", sum_message_id=sum_message.message_id)
@@ -229,11 +229,9 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         amount=amount,
     )
 
-    await _process_income_amount_value(
-        message=query.message,
-        state=state,
-        amount=amount,
-    )
+@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
+async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

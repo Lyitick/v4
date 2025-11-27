@@ -104,20 +104,24 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
-    await state.update_data(income_amount_str="")
+
+    sum_message = await message.answer("Сумма:")
 
     income_keyboard = ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
             [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
             [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
-            [KeyboardButton(text="Очистить")],
+            [KeyboardButton(text="0"), KeyboardButton(text="Очистить")],
         ],
         resize_keyboard=True,
         one_time_keyboard=False,
     )
 
-    sum_message = await message.answer("Сумма:", reply_markup=income_keyboard)
+    await message.answer(
+        "Когда будет нужная сумма, нажми кнопку ниже:",
+        reply_markup=income_keyboard,
+    )
 
     confirm_markup = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -131,11 +135,11 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     )
 
     await message.answer(
-        "Когда будет нужная сумма, нажми кнопку ниже:",
+        "Нажми кнопку, когда сумма будет готова:",
         reply_markup=confirm_markup,
     )
 
-    await state.update_data(sum_message_id=sum_message.message_id)
+    await state.update_data(income_str="", sum_message_id=sum_message.message_id)
     LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
 
 
@@ -163,47 +167,31 @@ async def _process_income_amount_value(
 
 @router.message(
     MoneyState.waiting_for_amount,
-    F.text.in_("1 2 3 4 5 6 7 8 9".split()),
+    F.text.in_("0 1 2 3 4 5 6 7 8 9 Очистить".split()),
 )
 async def handle_income_digit(message: Message, state: FSMContext) -> None:
-    """Handle digit input for income calculator."""
+    """Handle digit and clear input for income calculator."""
 
     data = await state.get_data()
-    current_str = data.get("income_amount_str", "")
-    new_str = current_str + message.text
-
-    await state.update_data(income_amount_str=new_str)
-
+    current_str = data.get("income_str", "")
     sum_message_id = data.get("sum_message_id")
-    if sum_message_id:
+
+    if message.text == "Очистить":
+        new_str = ""
+    else:
+        new_str = current_str + message.text
+
+    await state.update_data(income_str=new_str)
+
+    if sum_message_id is not None:
+        new_text = "Сумма:" if not new_str else f"Сумма: {new_str}"
         await message.bot.edit_message_text(
             chat_id=message.chat.id,
             message_id=sum_message_id,
-            text=f"Сумма: {new_str}",
+            text=new_text,
         )
     else:
-        await message.answer(f"Сумма: {new_str}")
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-
-@router.message(MoneyState.waiting_for_amount, F.text == "Очистить")
-async def handle_income_clear(message: Message, state: FSMContext) -> None:
-    """Clear income amount string and reset display."""
-
-    await state.update_data(income_amount_str="")
-
-    data = await state.get_data()
-    sum_message_id = data.get("sum_message_id")
-    if sum_message_id:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=sum_message_id,
-            text="Сумма:",
-        )
+        await message.answer("Сумма:" if not new_str else f"Сумма: {new_str}")
 
     try:
         await message.delete()
@@ -218,7 +206,7 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
     await query.answer()
 
     data = await state.get_data()
-    amount_str = data.get("income_amount_str", "").strip()
+    amount_str = data.get("income_str", "").strip()
 
     if not amount_str:
         await query.answer("Сначала набери сумму с помощью кнопок.", show_alert=True)
@@ -238,6 +226,12 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
     await query.message.answer(
         "Принял сумму, считаю и распределяю по категориям...",
         reply_markup=ReplyKeyboardRemove(),
+    )
+
+    await _process_income_amount_value(
+        message=query.message,
+        state=state,
+        amount=amount,
     )
 
     await _process_income_amount_value(

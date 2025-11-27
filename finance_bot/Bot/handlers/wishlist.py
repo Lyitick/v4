@@ -189,7 +189,7 @@ async def show_purchases(message: Message) -> None:
 
             # URL может отсутствовать в таблице purchases — в этом случае считаем, что ссылки нет.
             url = purchase.get("url") or ""
-            url_part = url if url else "без ссылки"
+            url_part = url if url else "---"
 
             date_str = format_date(purchase.get("purchased_at", ""))
 

@@ -9,7 +9,10 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    KeyboardButton,
     Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 
 from database.crud import FinanceDatabase
@@ -97,23 +100,51 @@ async def _remove_reply_keyboard_silently(message: Message) -> None:
 
 @router.message(F.text == "Рассчитать доход")
 async def start_income_flow(message: Message, state: FSMContext) -> None:
-    """Start income calculation workflow."""
+    """Start income calculation workflow with calculator keyboard."""
 
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
-    await message.answer("Введи сумму дохода числом, без пробелов и символов.", reply_markup=back_to_main_keyboard())
+    await state.update_data(income_amount_str="")
+
+    income_keyboard = ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
+            [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
+            [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
+            [KeyboardButton(text="Очистить")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+    sum_message = await message.answer("Сумма:", reply_markup=income_keyboard)
+
+    confirm_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Получено",
+                    callback_data="income_received",
+                )
+            ]
+        ]
+    )
+
+    await message.answer(
+        "Когда будет нужная сумма, нажми кнопку ниже:",
+        reply_markup=confirm_markup,
+    )
+
+    await state.update_data(sum_message_id=sum_message.message_id)
     LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
 
 
-@router.message(MoneyState.waiting_for_amount)
-async def process_income_amount(message: Message, state: FSMContext) -> None:
-    """Validate and process entered income amount."""
-
-    try:
-        amount = float(message.text.replace(",", "."))
-    except (TypeError, ValueError):
-        await message.answer("Нужно ввести число. Попробуй ещё раз.")
-        return
+async def _process_income_amount_value(
+    message: Message,
+    state: FSMContext,
+    amount: float,
+) -> None:
+    """Validate amount and process income allocation."""
 
     if amount <= 0 or amount > 10_000_000:
         await message.answer("Сумма должна быть положительной и не больше 10 000 000. Попробуй снова.")
@@ -124,12 +155,100 @@ async def process_income_amount(message: Message, state: FSMContext) -> None:
         allocated = amount * item["percent"] / 100
         allocations.append({"label": item["label"], "category": item["category"], "amount": allocated})
 
-    await state.update_data(allocations=allocations, index=0)
+    await state.update_data(income_amount=amount, allocations=allocations, index=0)
     await state.set_state(MoneyState.confirm_category)
     current = allocations[0]
-    await _remove_reply_keyboard_silently(message)
     await _ask_allocation_confirmation(message=message, allocation=current)
 
+
+@router.message(
+    MoneyState.waiting_for_amount,
+    F.text.in_("1 2 3 4 5 6 7 8 9".split()),
+)
+async def handle_income_digit(message: Message, state: FSMContext) -> None:
+    """Handle digit input for income calculator."""
+
+    data = await state.get_data()
+    current_str = data.get("income_amount_str", "")
+    new_str = current_str + message.text
+
+    await state.update_data(income_amount_str=new_str)
+
+    sum_message_id = data.get("sum_message_id")
+    if sum_message_id:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=sum_message_id,
+            text=f"Сумма: {new_str}",
+        )
+    else:
+        await message.answer(f"Сумма: {new_str}")
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.message(MoneyState.waiting_for_amount, F.text == "Очистить")
+async def handle_income_clear(message: Message, state: FSMContext) -> None:
+    """Clear income amount string and reset display."""
+
+    await state.update_data(income_amount_str="")
+
+    data = await state.get_data()
+    sum_message_id = data.get("sum_message_id")
+    if sum_message_id:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=sum_message_id,
+            text="Сумма:",
+        )
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.callback_query(MoneyState.waiting_for_amount, F.data == "income_received")
+async def handle_income_received(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of entered income amount."""
+
+    await query.answer()
+
+    data = await state.get_data()
+    amount_str = data.get("income_amount_str", "").strip()
+
+    if not amount_str:
+        await query.answer("Сначала набери сумму с помощью кнопок.", show_alert=True)
+        return
+
+    normalized = amount_str.replace(",", ".")
+    try:
+        amount = float(normalized)
+    except ValueError:
+        await query.answer("Некорректная сумма. Попробуй ещё раз.", show_alert=True)
+        return
+
+    if amount <= 0:
+        await query.answer("Сумма должна быть больше нуля.", show_alert=True)
+        return
+
+    await query.message.answer(
+        "Принял сумму, считаю и распределяю по категориям...",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+
+    await _process_income_amount_value(
+        message=query.message,
+        state=state,
+        amount=amount,
+    )
+
+@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
+async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

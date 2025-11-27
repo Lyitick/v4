@@ -10,7 +10,6 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    ReplyKeyboardRemove,
 )
 
 from database.crud import FinanceDatabase
@@ -91,11 +90,9 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
 
 
 async def _remove_reply_keyboard_silently(message: Message) -> None:
-    """Hide reply keyboard without leaving an extra message visible."""
+    """Временная заглушка: больше не отправляет сообщения и не скрывает клавиатуру."""
 
-    removal_message = await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
-    with suppress(Exception):
-        await removal_message.delete()
+    return None
 
 
 @router.message(F.text == "Рассчитать доход")

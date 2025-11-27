@@ -91,12 +91,9 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
 
 
 async def _remove_reply_keyboard_silently(message: Message) -> None:
-    """Скрыть обычную клавиатуру, не оставляя лишнего сообщения."""
+    """Hide reply keyboard without leaving an extra message visible."""
 
-    # Отправляем минимальное сообщение с текстом, чтобы Telegram не ругался
-    removal_message = await message.answer(".", reply_markup=ReplyKeyboardRemove())
-
-    # Стараемся тихо удалить это сообщение
+    removal_message = await message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
     with suppress(Exception):
         await removal_message.delete()
 

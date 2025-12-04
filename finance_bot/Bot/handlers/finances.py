@@ -176,18 +176,19 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
 
     income_sum = "0"
     prompt = _build_income_prompt(income_sum)
-    income_message = await message.answer(
-        prompt,
-        reply_markup=income_calculator_keyboard(),
-    )
+    income_message = await message.answer(prompt)
     await state.update_data(
         income_sum=income_sum,
         income_message_id=income_message.message_id,
     )
 
-    # Второе сообщение: три стрелки вниз + ИНЛАЙН-кнопка "✅ Получено"
     await message.answer(
         "⬇️⬇️⬇️",
+        reply_markup=income_calculator_keyboard(),
+    )
+
+    await message.answer(
+        "Когда введёшь всю сумму, нажми «✅ Получено».",
         reply_markup=income_confirm_keyboard(),
     )
 

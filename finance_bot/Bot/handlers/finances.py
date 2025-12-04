@@ -14,15 +14,15 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
-from database.crud import FinanceDatabase
-from keyboards.main import (
+from Bot.database.crud import FinanceDatabase
+from Bot.keyboards.main import (
     back_to_main_keyboard,
     main_menu_keyboard,
     purchase_confirmation_keyboard,
     yes_no_inline_keyboard,
 )
-from states.money_states import MoneyState
-from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
+from Bot.states.money_states import MoneyState
+from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
 LOGGER = logging.getLogger(__name__)
 

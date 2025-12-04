@@ -1,5 +1,6 @@
 """Handlers for income calculation and savings."""
 import logging
+from contextlib import suppress
 from typing import Any, Dict, List, Optional
 
 from aiogram import F, Router

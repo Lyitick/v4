@@ -34,10 +34,17 @@ def wishlist_categories_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for wishlist categories."""
 
     buttons = [
-        [InlineKeyboardButton(text="🛠 Инструменты", callback_data="wishlist_cat_tools")],
-        [InlineKeyboardButton(text="💸 Финансы", callback_data="wishlist_cat_currency")],
-        [InlineKeyboardButton(text="✨ Разное", callback_data="wishlist_cat_magic")],
+        [InlineKeyboardButton(text="🛠 инвестиции в работу", callback_data="wishlist_cat_tools")],
+        [InlineKeyboardButton(text="💸 вклад в себя", callback_data="wishlist_cat_currency")],
+        [InlineKeyboardButton(text="✨ кайфы", callback_data="wishlist_cat_magic")],
     ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def wishlist_url_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for skipping wishlist URL input."""
+
+    buttons = [[InlineKeyboardButton(text="Скип", callback_data="wishlist_skip_url")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -46,3 +53,22 @@ def purchase_confirmation_keyboard() -> ReplyKeyboardMarkup:
 
     buttons = [[KeyboardButton(text="✅ Купил"), KeyboardButton(text="🔄 Продолжить копить")]]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+
+
+def income_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with confirm income button."""
+
+    buttons = [[InlineKeyboardButton(text="✅ Получено", callback_data="income_confirm")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def income_calculator_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for income calculator input."""
+
+    buttons = [
+        [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
+        [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
+        [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
+        [KeyboardButton(text="0"), KeyboardButton(text="Очистить")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)

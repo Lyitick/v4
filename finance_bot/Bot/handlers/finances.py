@@ -1,18 +1,33 @@
 """Handlers for income calculation and savings."""
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardRemove,
+)
 
 from database.crud import FinanceDatabase
-from keyboards.main import back_to_main_keyboard, main_menu_keyboard, purchase_confirmation_keyboard, yes_no_keyboard
+from keyboards.main import (
+    income_calculator_keyboard,
+    income_confirm_keyboard,
+    main_menu_keyboard,
+    purchase_confirmation_keyboard,
+    yes_no_keyboard,
+)
 from states.money_states import MoneyState
+from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+
+INCOME_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
@@ -21,6 +36,15 @@ distribution_scheme = [
     {"label": "Сбережения", "category": "сбережения", "percent": 20},
     {"label": "Ну и на хуйню?", "category": "спонтанные траты", "percent": 10},
 ]
+
+
+def _to_float(value: Any) -> float:
+    """Safely convert value to float."""
+
+    try:
+        return float(value) if value is not None else 0.0
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
@@ -54,29 +78,36 @@ def _find_reached_goal(savings: Dict[str, Dict[str, Any]]) -> tuple[str, Dict[st
     return None, None
 
 
-@router.message(F.text == "Рассчитать доход")
-async def start_income_flow(message: Message, state: FSMContext) -> None:
-    """Start income calculation workflow."""
+def _build_income_prompt(amount_text: str) -> str:
+    """Build prompt text for income input."""
 
-    await state.clear()
-    await state.set_state(MoneyState.waiting_for_amount)
-    await message.answer("Введи сумму дохода числом, без пробелов и символов.", reply_markup=back_to_main_keyboard())
-    LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
+    return f"Вводим сумму дохода 💰\n\nСумма: {amount_text}"
 
 
-@router.message(MoneyState.waiting_for_amount)
-async def process_income_amount(message: Message, state: FSMContext) -> None:
-    """Validate and process entered income amount."""
+async def _refresh_income_message(
+    message: Message, income_message_id: Optional[int], income_sum: str
+) -> int:
+    """Update or create income prompt message with current sum."""
 
+    text = _build_income_prompt(income_sum)
     try:
-        amount = float(message.text.replace(",", "."))
-    except (TypeError, ValueError):
-        await message.answer("Нужно ввести число. Попробуй ещё раз.")
-        return
+        if income_message_id:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=income_message_id,
+                text=text,
+                reply_markup=income_confirm_keyboard(),
+            )
+            return income_message_id
+    except Exception:
+        LOGGER.debug("Failed to edit income message, sending new", exc_info=True)
 
-    if amount <= 0 or amount > 10_000_000:
-        await message.answer("Сумма должна быть положительной и не больше 10 000 000. Попробуй снова.")
-        return
+    new_message = await message.answer(text, reply_markup=income_confirm_keyboard())
+    return new_message.message_id
+
+
+async def _start_allocation_flow(message: Message, state: FSMContext, amount: float) -> None:
+    """Begin allocation confirmations for the provided income amount."""
 
     allocations: List[Dict[str, Any]] = []
     for item in distribution_scheme:
@@ -90,6 +121,109 @@ async def process_income_amount(message: Message, state: FSMContext) -> None:
         f"На категорию {current['label']} можно направить {current['amount']:.2f}. Перевести?",
         reply_markup=yes_no_keyboard(),
     )
+
+
+@router.message(F.text == "Рассчитать доход")
+async def start_income_flow(message: Message, state: FSMContext) -> None:
+    """Start income calculation workflow."""
+
+    await state.clear()
+    await state.set_state(MoneyState.waiting_for_amount)
+    income_sum = "0"
+    prompt = _build_income_prompt(income_sum)
+    income_message = await message.answer(prompt, reply_markup=income_confirm_keyboard())
+    await state.update_data(income_sum=income_sum, income_message_id=income_message.message_id)
+    await message.answer("\u200b", reply_markup=income_calculator_keyboard())
+    LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
+
+
+@router.message(MoneyState.waiting_for_amount, F.text.in_(INCOME_DIGITS))
+async def handle_income_digit(message: Message, state: FSMContext) -> None:
+    """Handle digit input for income calculator."""
+
+    data = await state.get_data()
+    income_sum = str(data.get("income_sum", "0") or "0")
+    income_message_id = data.get("income_message_id")
+
+    if income_sum == "0":
+        income_sum = message.text
+    else:
+        income_sum = f"{income_sum}{message.text}"
+
+    income_message_id = await _refresh_income_message(
+        message=message, income_message_id=income_message_id, income_sum=income_sum
+    )
+    await state.update_data(income_sum=income_sum, income_message_id=income_message_id)
+
+
+@router.message(MoneyState.waiting_for_amount, F.text == "Очистить")
+async def handle_income_clear(message: Message, state: FSMContext) -> None:
+    """Reset income sum to zero."""
+
+    data = await state.get_data()
+    income_message_id = data.get("income_message_id")
+    income_sum = "0"
+    income_message_id = await _refresh_income_message(
+        message=message, income_message_id=income_message_id, income_sum=income_sum
+    )
+    await state.update_data(income_sum=income_sum, income_message_id=income_message_id)
+
+
+@router.message(MoneyState.waiting_for_amount)
+async def process_income_amount(message: Message, state: FSMContext) -> None:
+    """Store typed income amount without sending extra messages."""
+
+    text = message.text.replace(" ", "") if message.text else ""
+    if not text:
+        await message.answer("Нужно ввести число. Попробуй ещё раз.")
+        return
+
+    try:
+        amount = float(text.replace(",", "."))
+    except (TypeError, ValueError):
+        await message.answer("Нужно ввести число. Попробуй ещё раз.")
+        return
+
+    if amount <= 0 or amount > 10_000_000:
+        await message.answer("Сумма должна быть положительной и не больше 10 000 000. Попробуй снова.")
+        return
+
+    income_sum = text.replace(",", ".")
+    data = await state.get_data()
+    income_message_id = data.get("income_message_id")
+    income_message_id = await _refresh_income_message(
+        message=message, income_message_id=income_message_id, income_sum=income_sum
+    )
+    await state.update_data(income_sum=income_sum, income_message_id=income_message_id)
+
+
+@router.callback_query(F.data == "income_confirm")
+async def handle_income_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    """Confirm entered income and start allocation flow."""
+
+    current_state = await state.get_state()
+    if current_state != MoneyState.waiting_for_amount.state:
+        await callback.answer()
+        return
+
+    data = await state.get_data()
+    raw_income_sum = str(data.get("income_sum", "0") or "0")
+    try:
+        amount = float(raw_income_sum.replace(",", "."))
+    except (TypeError, ValueError):
+        await callback.answer("Нужно ввести число. Попробуй ещё раз.", show_alert=True)
+        return
+
+    if amount <= 0 or amount > 10_000_000:
+        await callback.answer(
+            "Сумма должна быть положительной и не больше 10 000 000. Попробуй снова.",
+            show_alert=True,
+        )
+        return
+
+    await callback.answer()
+    await callback.message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
+    await _start_allocation_flow(message=callback.message, state=state, amount=amount)
 
 
 @router.message(MoneyState.confirm_category, F.text.in_({"Да", "Нет"}))
@@ -147,6 +281,80 @@ async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> 
         )
         await state.update_data(category=category, goal=goal)
         await state.set_state(MoneyState.waiting_for_purchase_confirmation)
+        return
+
+    await show_affordable_wishes(message=message, user_id=message.from_user.id, db=db)
+
+
+def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKeyboardMarkup:
+    """Build inline keyboard with purchase buttons for affordable wishes."""
+
+    buttons = [
+        [InlineKeyboardButton(text=f"Купил: {wish['name']}", callback_data=f"wish_buy_{wish['id']}")]
+        for wish in wishes
+    ]
+    buttons.append([InlineKeyboardButton(text="Потом", callback_data="affordable_wishes_later")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+async def show_affordable_wishes(
+    message: Message,
+    user_id: int | None = None,
+    db: FinanceDatabase | None = None,
+) -> None:
+    """Show all wishes that are affordable with current savings."""
+
+    if message is None:
+        return
+
+    if user_id is None:
+        user_id = message.from_user.id if message.from_user else None
+
+    if user_id is None:
+        return
+
+    db = db or FinanceDatabase()
+    savings_map = db.get_user_savings_map(user_id)
+    wishes = db.get_wishes_by_user(user_id)
+
+    affordable: List[Dict[str, Any]] = []
+    for wish in wishes:
+        if wish.get("is_purchased"):
+            continue
+
+        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
+        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
+        if not savings_category:
+            continue
+
+        price = _to_float(wish.get("price"))
+        available = _to_float(savings_map.get(savings_category))
+        if price <= 0 or available < price:
+            continue
+
+        wish_copy: Dict[str, Any] = dict(wish)
+        wish_copy["price"] = price
+        wish_copy["wishlist_category"] = wishlist_category
+        affordable.append(wish_copy)
+
+    if not affordable:
+        return
+
+    lines = ["Ты уже можешь купить:"]
+    for wish in affordable:
+        lines.append(
+            f"• {wish['name']} — {wish['price']:.2f} ₽ (категория: {wish['wishlist_category']})"
+        )
+    lines.append("Нажми на кнопку под нужным товаром, если купил.")
+
+    keyboard = _build_affordable_wishes_keyboard(affordable)
+    await message.answer("\n".join(lines), reply_markup=keyboard)
+
+
+async def suggest_available_wish(message: Message) -> None:
+    """Backward-compatible wrapper to show affordable wishes."""
+
+    await show_affordable_wishes(message=message, user_id=message.from_user.id if message.from_user else None)
 
 
 @router.message(MoneyState.waiting_for_purchase_confirmation, F.text.in_({"✅ Купил", "🔄 Продолжить копить"}))
@@ -165,6 +373,9 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
             f"Поздравляю с покупкой по категории {category}! Сумма {goal_amount:.2f} списана.",
             reply_markup=main_menu_keyboard(),
         )
+        savings = db.get_user_savings(message.from_user.id)
+        summary = _format_savings_summary(savings)
+        await message.answer(f"Обновлённые накопления:\n{summary}")
     else:
         await message.answer("Продолжаем копить!", reply_markup=main_menu_keyboard())
 

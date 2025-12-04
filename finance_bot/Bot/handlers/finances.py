@@ -39,6 +39,37 @@ distribution_scheme = [
 ]
 
 
+def _build_income_prompt(income_sum: str) -> str:
+    """Build income input prompt."""
+
+    return f"Вводим сумму дохода 💰\n\nСумма: {income_sum}"
+
+
+def income_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard to confirm entered income amount."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Получено", callback_data="income_received")]
+        ]
+    )
+
+
+def income_calculator_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with digit buttons for income input."""
+
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
+            [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
+            [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
+            [KeyboardButton(text="0"), KeyboardButton(text="Очистить")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
 def _to_float(value: Any) -> float:
     """Safely convert value to float."""
 
@@ -106,40 +137,25 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
 
-    confirm_markup = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="✅ Получено",
-                    callback_data="income_received",
-                )
-            ]
-        ]
+    income_sum = "0"
+    prompt = _build_income_prompt(income_sum)
+    income_message = await message.answer(
+        prompt,
+        reply_markup=income_confirm_keyboard(),
+    )
+    await state.update_data(
+        income_sum=income_sum,
+        income_message_id=income_message.message_id,
     )
 
-    income_keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
-            [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
-            [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
-            [KeyboardButton(text="0"), KeyboardButton(text="Очистить")],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
+    # Второе сообщение только для вывода клавиатуры-калькулятора
+    # Текст должен быть непустым, чтобы не ловить TelegramBadRequest
+    await message.answer("⬇️", reply_markup=income_calculator_keyboard())
 
-    sum_message = await message.answer(
-        "Вводим сумму дохода 💰\n\nСумма: 0",
-        reply_markup=income_keyboard,
+    LOGGER.info(
+        "User %s started income calculation",
+        message.from_user.id if message.from_user else "unknown",
     )
-
-    await message.answer(
-        "Когда будет нужная сумма, нажми кнопку ниже:",
-        reply_markup=confirm_markup,
-    )
-
-    await state.update_data(income_sum="0", income_message_id=sum_message.message_id)
-    LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
 
 
 async def _process_income_amount_value(
@@ -236,8 +252,6 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         "Принял сумму, считаю и распределяю по категориям...",
         reply_markup=ReplyKeyboardRemove(),
     )
-    await state.update_data(income_sum=income_sum, income_message_id=income_message_id)
-
 
     await _process_income_amount_value(
         message=query.message,

@@ -127,14 +127,17 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
         one_time_keyboard=False,
     )
 
-    sum_message = await message.answer("Сумма:", reply_markup=income_keyboard)
+    sum_message = await message.answer(
+        "Вводим сумму дохода 💰\n\nСумма: 0",
+        reply_markup=income_keyboard,
+    )
 
     await message.answer(
         "Когда будет нужная сумма, нажми кнопку ниже:",
         reply_markup=confirm_markup,
     )
 
-    await state.update_data(income_str="", sum_message_id=sum_message.message_id)
+    await state.update_data(income_sum="0", income_message_id=sum_message.message_id)
     LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
 
 
@@ -168,25 +171,35 @@ async def handle_income_digit(message: Message, state: FSMContext) -> None:
     """Handle digit and clear input for income calculator."""
 
     data = await state.get_data()
-    current_str = data.get("income_str", "")
-    sum_message_id = data.get("sum_message_id")
+    current_sum = data.get("income_sum", "0")
+    sum_message_id = data.get("income_message_id")
 
     if message.text == "Очистить":
-        new_str = ""
+        new_sum = "0"
     else:
-        new_str = current_str + message.text
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
 
-    await state.update_data(income_str=new_str)
+    await state.update_data(income_sum=new_sum)
+
+    new_text = f"Вводим сумму дохода 💰\n\nСумма: {new_sum}"
 
     if sum_message_id is not None:
-        new_text = "Сумма:" if not new_str else f"Сумма: {new_str}"
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=sum_message_id,
-            text=new_text,
-        )
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=sum_message_id,
+                text=new_text,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("Failed to edit income message %s: %s", sum_message_id, exc)
+            replacement = await message.answer(new_text)
+            await state.update_data(income_message_id=replacement.message_id)
     else:
-        await message.answer("Сумма:" if not new_str else f"Сумма: {new_str}")
+        replacement = await message.answer(new_text)
+        await state.update_data(income_message_id=replacement.message_id)
 
     try:
         await message.delete()
@@ -201,7 +214,7 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
     await query.answer()
 
     data = await state.get_data()
-    amount_str = data.get("income_str", "").strip()
+    amount_str = data.get("income_sum", "0").strip()
 
     if not amount_str:
         await query.answer("Сначала набери сумму с помощью кнопок.", show_alert=True)
@@ -229,9 +242,6 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         amount=amount,
     )
 
-@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
-async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
-    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

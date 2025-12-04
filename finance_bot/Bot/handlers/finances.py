@@ -141,16 +141,18 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     prompt = _build_income_prompt(income_sum)
     income_message = await message.answer(
         prompt,
-        reply_markup=income_confirm_keyboard(),
+        reply_markup=income_calculator_keyboard(),
     )
     await state.update_data(
         income_sum=income_sum,
         income_message_id=income_message.message_id,
     )
 
-    # Второе сообщение только для вывода клавиатуры-калькулятора
-    # Текст должен быть непустым, чтобы не ловить TelegramBadRequest
-    await message.answer("⬇️", reply_markup=income_calculator_keyboard())
+    # Второе сообщение: три стрелки вниз + ИНЛАЙН-кнопка "✅ Получено"
+    await message.answer(
+        "⬇️⬇️⬇️",
+        reply_markup=income_confirm_keyboard(),
+    )
 
     LOGGER.info(
         "User %s started income calculation",

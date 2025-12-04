@@ -125,7 +125,7 @@ async def _start_allocation_flow(message: Message, state: FSMContext, amount: fl
 
 @router.message(F.text == "Рассчитать доход")
 async def start_income_flow(message: Message, state: FSMContext) -> None:
-    """Start income calculation workflow."""
+    """Start income calculation workflow with calculator keyboard."""
 
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
@@ -136,6 +136,16 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     await message.answer("\u200b", reply_markup=income_calculator_keyboard())
     LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
 
+    confirm_markup = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Получено",
+                    callback_data="income_received",
+                )
+            ]
+        ]
+    )
 
 @router.message(MoneyState.waiting_for_amount, F.text.in_(INCOME_DIGITS))
 async def handle_income_digit(message: Message, state: FSMContext) -> None:
@@ -226,39 +236,41 @@ async def handle_income_confirm(callback: CallbackQuery, state: FSMContext) -> N
     await _start_allocation_flow(message=callback.message, state=state, amount=amount)
 
 
-@router.message(MoneyState.confirm_category, F.text.in_({"Да", "Нет"}))
-async def handle_category_confirmation(message: Message, state: FSMContext) -> None:
-    """Handle user confirmation for category allocation."""
+@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
+async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle user confirmation for category allocation via inline buttons."""
+
+    await query.answer()
 
     data = await state.get_data()
     allocations: List[Dict[str, Any]] = data.get("allocations", [])
     index: int = data.get("index", 0)
 
     if not allocations or index >= len(allocations):
-        await message.answer("Нет категорий для обработки.", reply_markup=main_menu_keyboard())
+        await query.message.answer("Нет категорий для обработки.", reply_markup=main_menu_keyboard())
         await state.clear()
         return
 
     current = allocations[index]
-    if message.text == "Да":
-        FinanceDatabase().update_saving(user_id=message.from_user.id, category=current["category"], amount_delta=current["amount"])
-        await message.answer(
-            f"Добавлено {current['amount']:.2f} в категорию {current['category']}.",
-            reply_markup=yes_no_keyboard(),
+    await query.message.edit_reply_markup(reply_markup=None)
+
+    if query.data == "confirm_yes":
+        FinanceDatabase().update_saving(
+            user_id=query.from_user.id if query.from_user else None,
+            category=current["category"],
+            amount_delta=current["amount"],
         )
+        await query.message.answer(f"Добавлено {current['amount']:.2f} в категорию {current['category']}.")
     else:
-        await message.answer("Пропускаем категорию.", reply_markup=yes_no_keyboard())
+        await query.message.answer("Пропускаем категорию.")
 
     index += 1
     if index < len(allocations):
         next_item = allocations[index]
         await state.update_data(index=index)
-        await message.answer(
-            f"На категорию {next_item['label']} можно направить {next_item['amount']:.2f}. Перевести?",
-            reply_markup=yes_no_keyboard(),
-        )
+        await _ask_allocation_confirmation(message=query.message, allocation=next_item)
     else:
-        await _send_summary_and_goal_prompt(message, state)
+        await _send_summary_and_goal_prompt(query.message, state)
 
 
 async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> None:

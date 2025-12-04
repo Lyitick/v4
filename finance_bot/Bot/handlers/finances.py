@@ -1,6 +1,5 @@
 """Handlers for income calculation and savings."""
 import logging
-from contextlib import suppress
 from typing import Any, Dict, List, Optional
 
 from aiogram import F, Router
@@ -9,18 +8,17 @@ from aiogram.types import (
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    KeyboardButton,
     Message,
-    ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
 )
 
 from database.crud import FinanceDatabase
 from keyboards.main import (
-    back_to_main_keyboard,
+    income_calculator_keyboard,
+    income_confirm_keyboard,
     main_menu_keyboard,
     purchase_confirmation_keyboard,
-    yes_no_inline_keyboard,
+    yes_no_keyboard,
 )
 from states.money_states import MoneyState
 from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
@@ -28,6 +26,8 @@ from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wi
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+
+INCOME_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
 
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
@@ -78,24 +78,49 @@ def _find_reached_goal(savings: Dict[str, Dict[str, Any]]) -> tuple[str, Dict[st
     return None, None
 
 
-async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, Any]) -> None:
-    """Ask user to confirm allocation for a specific category.
+def _build_income_prompt(amount_text: str) -> str:
+    """Build prompt text for income input."""
 
-    Args:
-        message: Aiogram message object used for sending prompts.
-        allocation: Allocation details with label and amount.
-    """
+    return f"Вводим сумму дохода 💰\n\nСумма: {amount_text}"
 
+
+async def _refresh_income_message(
+    message: Message, income_message_id: Optional[int], income_sum: str
+) -> int:
+    """Update or create income prompt message with current sum."""
+
+    text = _build_income_prompt(income_sum)
+    try:
+        if income_message_id:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=income_message_id,
+                text=text,
+                reply_markup=income_confirm_keyboard(),
+            )
+            return income_message_id
+    except Exception:
+        LOGGER.debug("Failed to edit income message, sending new", exc_info=True)
+
+    new_message = await message.answer(text, reply_markup=income_confirm_keyboard())
+    return new_message.message_id
+
+
+async def _start_allocation_flow(message: Message, state: FSMContext, amount: float) -> None:
+    """Begin allocation confirmations for the provided income amount."""
+
+    allocations: List[Dict[str, Any]] = []
+    for item in distribution_scheme:
+        allocated = amount * item["percent"] / 100
+        allocations.append({"label": item["label"], "category": item["category"], "amount": allocated})
+
+    await state.update_data(allocations=allocations, index=0)
+    await state.set_state(MoneyState.confirm_category)
+    current = allocations[0]
     await message.answer(
-        f"На категорию {allocation['label']} можно направить {allocation['amount']:.2f}. Перевести?",
-        reply_markup=yes_no_inline_keyboard(),
+        f"На категорию {current['label']} можно направить {current['amount']:.2f}. Перевести?",
+        reply_markup=yes_no_keyboard(),
     )
-
-
-async def _remove_reply_keyboard_silently(message: Message) -> None:
-    """Временная заглушка: больше не отправляет сообщения и не скрывает клавиатуру."""
-
-    return None
 
 
 @router.message(F.text == "Рассчитать доход")
@@ -104,6 +129,12 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
+    income_sum = "0"
+    prompt = _build_income_prompt(income_sum)
+    income_message = await message.answer(prompt, reply_markup=income_confirm_keyboard())
+    await state.update_data(income_sum=income_sum, income_message_id=income_message.message_id)
+    await message.answer("\u200b", reply_markup=income_calculator_keyboard())
+    LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
 
     confirm_markup = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -116,131 +147,93 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
         ]
     )
 
-    income_keyboard = ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
-            [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
-            [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
-            [KeyboardButton(text="0"), KeyboardButton(text="Очистить")],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=False,
+@router.message(MoneyState.waiting_for_amount, F.text.in_(INCOME_DIGITS))
+async def handle_income_digit(message: Message, state: FSMContext) -> None:
+    """Handle digit input for income calculator."""
+
+    data = await state.get_data()
+    income_sum = str(data.get("income_sum", "0") or "0")
+    income_message_id = data.get("income_message_id")
+
+    if income_sum == "0":
+        income_sum = message.text
+    else:
+        income_sum = f"{income_sum}{message.text}"
+
+    income_message_id = await _refresh_income_message(
+        message=message, income_message_id=income_message_id, income_sum=income_sum
     )
+    await state.update_data(income_sum=income_sum, income_message_id=income_message_id)
 
-    sum_message = await message.answer(
-        "Вводим сумму дохода 💰\n\nСумма: 0",
-        reply_markup=income_keyboard,
+
+@router.message(MoneyState.waiting_for_amount, F.text == "Очистить")
+async def handle_income_clear(message: Message, state: FSMContext) -> None:
+    """Reset income sum to zero."""
+
+    data = await state.get_data()
+    income_message_id = data.get("income_message_id")
+    income_sum = "0"
+    income_message_id = await _refresh_income_message(
+        message=message, income_message_id=income_message_id, income_sum=income_sum
     )
-
-    await message.answer(
-        "Когда будет нужная сумма, нажми кнопку ниже:",
-        reply_markup=confirm_markup,
-    )
-
-    await state.update_data(income_sum="0", income_message_id=sum_message.message_id)
-    LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
+    await state.update_data(income_sum=income_sum, income_message_id=income_message_id)
 
 
-async def _process_income_amount_value(
-    message: Message,
-    state: FSMContext,
-    amount: float,
-) -> None:
-    """Validate amount and process income allocation."""
+@router.message(MoneyState.waiting_for_amount)
+async def process_income_amount(message: Message, state: FSMContext) -> None:
+    """Store typed income amount without sending extra messages."""
+
+    text = message.text.replace(" ", "") if message.text else ""
+    if not text:
+        await message.answer("Нужно ввести число. Попробуй ещё раз.")
+        return
+
+    try:
+        amount = float(text.replace(",", "."))
+    except (TypeError, ValueError):
+        await message.answer("Нужно ввести число. Попробуй ещё раз.")
+        return
 
     if amount <= 0 or amount > 10_000_000:
         await message.answer("Сумма должна быть положительной и не больше 10 000 000. Попробуй снова.")
         return
 
-    allocations: List[Dict[str, Any]] = []
-    for item in distribution_scheme:
-        allocated = amount * item["percent"] / 100
-        allocations.append({"label": item["label"], "category": item["category"], "amount": allocated})
-
-    await state.update_data(income_amount=amount, allocations=allocations, index=0)
-    await state.set_state(MoneyState.confirm_category)
-    current = allocations[0]
-    await _ask_allocation_confirmation(message=message, allocation=current)
+    income_sum = text.replace(",", ".")
+    data = await state.get_data()
+    income_message_id = data.get("income_message_id")
+    income_message_id = await _refresh_income_message(
+        message=message, income_message_id=income_message_id, income_sum=income_sum
+    )
+    await state.update_data(income_sum=income_sum, income_message_id=income_message_id)
 
 
-@router.message(
-    MoneyState.waiting_for_amount,
-    F.text.in_("0 1 2 3 4 5 6 7 8 9 Очистить".split()),
-)
-async def handle_income_digit(message: Message, state: FSMContext) -> None:
-    """Handle digit and clear input for income calculator."""
+@router.callback_query(F.data == "income_confirm")
+async def handle_income_confirm(callback: CallbackQuery, state: FSMContext) -> None:
+    """Confirm entered income and start allocation flow."""
+
+    current_state = await state.get_state()
+    if current_state != MoneyState.waiting_for_amount.state:
+        await callback.answer()
+        return
 
     data = await state.get_data()
-    current_sum = data.get("income_sum", "0")
-    sum_message_id = data.get("income_message_id")
-
-    if message.text == "Очистить":
-        new_sum = "0"
-    else:
-        if current_sum == "0":
-            new_sum = message.text
-        else:
-            new_sum = current_sum + message.text
-
-    await state.update_data(income_sum=new_sum)
-
-    new_text = f"Вводим сумму дохода 💰\n\nСумма: {new_sum}"
-
-    if sum_message_id is not None:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=sum_message_id,
-                text=new_text,
-            )
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Failed to edit income message %s: %s", sum_message_id, exc)
-            replacement = await message.answer(new_text)
-            await state.update_data(income_message_id=replacement.message_id)
-    else:
-        replacement = await message.answer(new_text)
-        await state.update_data(income_message_id=replacement.message_id)
-
+    raw_income_sum = str(data.get("income_sum", "0") or "0")
     try:
-        await message.delete()
-    except Exception:
-        pass
-
-
-@router.callback_query(MoneyState.waiting_for_amount, F.data == "income_received")
-async def handle_income_received(query: CallbackQuery, state: FSMContext) -> None:
-    """Handle confirmation of entered income amount."""
-
-    await query.answer()
-
-    data = await state.get_data()
-    amount_str = data.get("income_sum", "0").strip()
-
-    if not amount_str:
-        await query.answer("Сначала набери сумму с помощью кнопок.", show_alert=True)
+        amount = float(raw_income_sum.replace(",", "."))
+    except (TypeError, ValueError):
+        await callback.answer("Нужно ввести число. Попробуй ещё раз.", show_alert=True)
         return
 
-    normalized = amount_str.replace(",", ".")
-    try:
-        amount = float(normalized)
-    except ValueError:
-        await query.answer("Некорректная сумма. Попробуй ещё раз.", show_alert=True)
+    if amount <= 0 or amount > 10_000_000:
+        await callback.answer(
+            "Сумма должна быть положительной и не больше 10 000 000. Попробуй снова.",
+            show_alert=True,
+        )
         return
 
-    if amount <= 0:
-        await query.answer("Сумма должна быть больше нуля.", show_alert=True)
-        return
-
-    await query.message.answer(
-        "Принял сумму, считаю и распределяю по категориям...",
-        reply_markup=ReplyKeyboardRemove(),
-    )
-
-    await _process_income_amount_value(
-        message=query.message,
-        state=state,
-        amount=amount,
-    )
+    await callback.answer()
+    await callback.message.answer("\u200b", reply_markup=ReplyKeyboardRemove())
+    await _start_allocation_flow(message=callback.message, state=state, amount=amount)
 
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))

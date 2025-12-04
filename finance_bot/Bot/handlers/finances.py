@@ -70,6 +70,43 @@ def income_calculator_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
+async def _refresh_income_message(
+    message: Message, income_message_id: Optional[int], income_sum: str
+) -> int:
+    """Update or create income prompt message with current sum.
+
+    Редактируем уже существующее сообщение с подсказкой по сумме.
+    Если id нет (например, первый запуск) — создаём новое.
+    Новых сообщений при ошибке редактирования НЕ создаём, чтобы не плодить дубликаты.
+    """
+
+    text = _build_income_prompt(income_sum)
+
+    # Если сообщения ещё не было — создаём его
+    if income_message_id is None:
+        new_message = await message.answer(text)
+        return new_message.message_id
+
+    # Пытаемся отредактировать существующее сообщение
+    try:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=income_message_id,
+            text=text,
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning(
+            "Failed to edit income message %s: %s",
+            income_message_id,
+            exc,
+        )
+        # Важно: НЕ создаём новое сообщение, просто возвращаем старый id,
+        # чтобы не плодить дублей "Вводим сумму дохода ..."
+        return income_message_id
+
+    return income_message_id
+
+
 def _to_float(value: Any) -> float:
     """Safely convert value to float."""
 
@@ -201,24 +238,13 @@ async def handle_income_digit(message: Message, state: FSMContext) -> None:
         else:
             new_sum = current_sum + message.text
 
-    await state.update_data(income_sum=new_sum)
+    income_message_id = await _refresh_income_message(
+        message=message,
+        income_message_id=sum_message_id,
+        income_sum=new_sum,
+    )
 
-    new_text = f"Вводим сумму дохода 💰\n\nСумма: {new_sum}"
-
-    if sum_message_id is not None:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=sum_message_id,
-                text=new_text,
-            )
-        except Exception as exc:  # noqa: BLE001
-            LOGGER.warning("Failed to edit income message %s: %s", sum_message_id, exc)
-            replacement = await message.answer(new_text)
-            await state.update_data(income_message_id=replacement.message_id)
-    else:
-        replacement = await message.answer(new_text)
-        await state.update_data(income_message_id=replacement.message_id)
+    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
 
     try:
         await message.delete()

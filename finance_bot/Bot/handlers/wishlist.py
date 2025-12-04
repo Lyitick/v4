@@ -1,5 +1,6 @@
 """Handlers for wishlist flow."""
 import logging
+from collections import defaultdict
 from typing import Optional
 
 from aiogram import F, Router
@@ -117,20 +118,31 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text == "Купленное")
 async def show_purchases(message: Message) -> None:
-    """Show purchased items."""
+    """Show purchased items grouped by category with pretty headers."""
 
     db = FinanceDatabase()
     purchases = db.get_purchases_by_user(message.from_user.id)
+
+    # Если покупок нет — сразу выходим
     if not purchases:
-        await message.answer("Список покупок пуст.")
+        await message.answer("Список покупок пуст.", reply_markup=main_menu_keyboard())
         return
 
-    lines = []
+    # Группируем покупки по "очеловеченным" категориям
+    groups: dict[str, list[dict]] = defaultdict(list)
     for purchase in purchases:
-        category = humanize_wishlist_category(purchase.get("category", ""))
-        lines.append(
-            f"{purchase['wish_name']} — {purchase['price']:.2f} ({category}) куплено {purchase['purchased_at']}"
-        )
+        category_key = humanize_wishlist_category(purchase.get("category", ""))
+        groups[category_key].append(purchase)
+
+    lines: list[str] = ["Купленные желания:"]
+    for category, items in groups.items():
+        lines.append(f"\n💡 {category}:")
+        for purchase in items:
+            lines.append(
+                f"• {purchase['wish_name']} — {purchase['price']:.2f} ₽ "
+                f"(куплено {purchase['purchased_at']})"
+            )
+
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
 
 

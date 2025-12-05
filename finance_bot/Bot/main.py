@@ -14,10 +14,10 @@ install()
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 
-from config.settings import get_settings
-from database.crud import FinanceDatabase
-from handlers import callbacks, common, finances, start, wishlist
-from utils.logging import init_logging
+from Bot.config.settings import get_settings
+from Bot.database.crud import FinanceDatabase
+from Bot.handlers import callbacks, common, finances, start, wishlist
+from Bot.utils.logging import init_logging
 
 
 def register_routers(dispatcher: Dispatcher) -> None:

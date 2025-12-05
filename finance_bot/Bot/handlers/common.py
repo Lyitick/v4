@@ -5,11 +5,17 @@ from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from keyboards.main import main_menu_keyboard
+from Bot.keyboards.main import main_menu_keyboard
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+
+
+async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
+    """Compatibility no-op; welcome messages are kept."""
+
+    return None
 
 
 @router.message()

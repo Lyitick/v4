@@ -28,6 +28,8 @@ LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
+INCOME_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
     {"label": "Покушал?", "category": "быт", "percent": 20},
@@ -288,6 +290,16 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         amount=amount,
     )
 
+    await _process_income_amount_value(
+        message=query.message,
+        state=state,
+        amount=amount,
+    )
+
+
+@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
+async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

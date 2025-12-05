@@ -42,7 +42,8 @@ distribution_scheme = [
 def _build_income_prompt(income_sum: str) -> str:
     """Build income input prompt."""
 
-    return f"Вводим сумму дохода 💰\n\nСумма: {income_sum}"
+    # Показываем сумму в формате "БАБКИ: <число>"
+    return f"БАБКИ: {income_sum}"
 
 
 def income_confirm_keyboard() -> InlineKeyboardMarkup:
@@ -175,20 +176,26 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     await state.set_state(MoneyState.waiting_for_amount)
 
     income_sum = "0"
-    prompt = _build_income_prompt(income_sum)
-    income_message = await message.answer(prompt)
-    await state.update_data(
-        income_sum=income_sum,
-        income_message_id=income_message.message_id,
-    )
 
+    # 1) Сначала: стрелочки + reply-клавиатура-калькулятор
     await message.answer(
         "⬇️⬇️⬇️",
         reply_markup=income_calculator_keyboard(),
     )
 
+    # 2) Затем: редактируемое сообщение с суммой (БЕЗ клавиатуры)
+    prompt = _build_income_prompt(income_sum)
+    income_message = await message.answer(prompt)
+
+    # Сохраняем сумму и id сообщения, которое будем редактировать при нажатии цифр
+    await state.update_data(
+        income_sum=income_sum,
+        income_message_id=income_message.message_id,
+    )
+
+    # 3) В конце: сообщение с inline-кнопкой "✅ Получено"
     await message.answer(
-        "Когда введёшь всю сумму, нажми «✅ Получено».",
+        "БАБКИ БАБКИ БАААБКИИИ",
         reply_markup=income_confirm_keyboard(),
     )
 

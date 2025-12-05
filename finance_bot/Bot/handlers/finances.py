@@ -284,9 +284,10 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         await query.answer("Сумма должна быть больше нуля.", show_alert=True)
         return
 
-    await query.message.answer(
-        "Принял сумму, считаю и распределяю по категориям...",
-        reply_markup=ReplyKeyboardRemove(),
+    await _process_income_amount_value(
+        message=query.message,
+        state=state,
+        amount=amount,
     )
 
     await _process_income_amount_value(
@@ -300,41 +301,66 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
     """Handle user confirmation for category allocation via inline buttons."""
 
+@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
+async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle user confirmation for category allocation via inline buttons."""
+
     await query.answer()
 
     data = await state.get_data()
     allocations: List[Dict[str, Any]] = data.get("allocations", [])
     index: int = data.get("index", 0)
 
+    # Если категорий нет или индекс вышел за пределы — выходим в главное меню
     if not allocations or index >= len(allocations):
-        await query.message.answer("Нет категорий для обработки.", reply_markup=main_menu_keyboard())
+        await query.message.answer(
+            "Нет категорий для обработки.",
+            reply_markup=main_menu_keyboard(),
+        )
         await state.clear()
         return
 
     current = allocations[index]
-    await query.message.edit_reply_markup(reply_markup=None)
 
+    # Пытаемся удалить сообщение-вопрос; если не получится, хотя бы убираем инлайны
+    try:
+        await query.message.delete()
+    except Exception:
+        await query.message.edit_reply_markup(reply_markup=None)
+
+    # --- Пользователь нажал "Да" ---
     if query.data == "confirm_yes":
         FinanceDatabase().update_saving(
             user_id=query.from_user.id if query.from_user else None,
             category=current["category"],
             amount_delta=current["amount"],
         )
-        await query.message.answer(f"Добавлено {current['amount']:.2f} в категорию {current['category']}.")
-    else:
-        await query.message.answer("Пропускаем категорию.")
 
-    index += 1
-    if index < len(allocations):
-        next_item = allocations[index]
-        await state.update_data(index=index)
-        await _ask_allocation_confirmation(message=query.message, allocation=next_item)
-    else:
-        await _send_summary_and_goal_prompt(
-            message=query.message,
-            state=state,
-            user_id=query.from_user.id if query.from_user else None,
-        )
+        # Переходим к следующей категории
+        index += 1
+        if index < len(allocations):
+            next_item = allocations[index]
+            await state.update_data(index=index)
+            await _ask_allocation_confirmation(
+                message=query.message,
+                allocation=next_item,
+            )
+        else:
+            # Категорий больше нет — показываем итог по накоплениям
+            await _send_summary_and_goal_prompt(
+                message=query.message,
+                state=state,
+                user_id=query.from_user.id if query.from_user else None,
+            )
+        return
+
+    # --- Пользователь нажал "Нет" ---
+    # Напоминаем про жизнь и задаём тот же вопрос ещё раз
+    await query.message.answer("Ты что про жизнь забыл?")
+    await _ask_allocation_confirmation(
+        message=query.message,
+        allocation=current,
+    )
 
 
 async def _send_summary_and_goal_prompt(

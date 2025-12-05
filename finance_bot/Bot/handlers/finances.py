@@ -143,21 +143,15 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     await state.set_state(MoneyState.waiting_for_amount)
 
     income_sum = "0"
-
-    # 1) Сообщение со стрелочками + reply-клавиатура-калькулятор
-    arrows_message = await message.answer(
-        "⬇️⬇️⬇️",
+    prompt = _build_income_prompt(income_sum)
+    income_message = await message.answer(
+        prompt,
         reply_markup=income_calculator_keyboard(),
     )
-
-    # 2) Сообщение с суммой (": 0") — именно его будем редактировать
-    prompt = _build_income_prompt(income_sum)
-    income_message = await message.answer(prompt)
 
     # Сохраняем служебные message_id и текущую сумму
     await state.update_data(
         income_sum=income_sum,
-        income_arrows_message_id=arrows_message.message_id,
         income_message_id=income_message.message_id,
         life_message_id=None,
         income_amount=None,
@@ -189,24 +183,22 @@ async def _process_income_amount_value(
         )
         return
 
-    # Удаляем служебные сообщения: стрелочки и сообщение с суммой
+    # Удаляем служебное сообщение с суммой
     data = await state.get_data()
-    arrows_message_id: Optional[int] = data.get("income_arrows_message_id")
     income_message_id: Optional[int] = data.get("income_message_id")
 
-    for msg_id in (arrows_message_id, income_message_id):
-        if msg_id:
-            try:
-                await message.bot.delete_message(
-                    chat_id=message.chat.id,
-                    message_id=msg_id,
-                )
-            except Exception as exc:  # noqa: BLE001
-                LOGGER.warning(
-                    "Failed to delete income helper message %s: %s",
-                    msg_id,
-                    exc,
-                )
+    if income_message_id:
+        try:
+            await message.bot.delete_message(
+                chat_id=message.chat.id,
+                message_id=income_message_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning(
+                "Failed to delete income helper message %s: %s",
+                income_message_id,
+                exc,
+            )
 
     # Считаем распределение по категориям
     allocations: List[Dict[str, Any]] = []
@@ -247,6 +239,13 @@ async def _process_income_amount_value(
         allocation=current,
     )
 
+    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
 
 @router.message(
     MoneyState.waiting_for_amount,
@@ -263,12 +262,11 @@ async def _process_income_amount_value(
             "8",
             "9",
             "Очистить",
-            "✅ Газ",
         }
     ),
 )
 async def handle_income_digit(message: Message, state: FSMContext) -> None:
-    """Handle digit, clear, and confirm input for income calculator."""
+    """Handle digit and clear input for income calculator."""
 
     data = await state.get_data()
     current_sum = str(data.get("income_sum", "0"))
@@ -276,46 +274,6 @@ async def handle_income_digit(message: Message, state: FSMContext) -> None:
 
     if message.text == "Очистить":
         new_sum = "0"
-    elif message.text == "✅ Газ":
-        amount_str = current_sum.strip()
-        if not amount_str:
-            await message.answer("Сначала набери сумму с помощью кнопок.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            return
-
-        normalized = amount_str.replace(",", ".")
-        try:
-            amount = float(normalized)
-        except ValueError:
-            await message.answer("Некорректная сумма. Попробуй ещё раз.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            return
-
-        if amount <= 0:
-            await message.answer("Сумма должна быть больше нуля.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
-            return
-
-        await _process_income_amount_value(
-            message=message,
-            state=state,
-            amount=amount,
-        )
-
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        return
     else:
         if current_sum == "0":
             new_sum = message.text
@@ -329,6 +287,52 @@ async def handle_income_digit(message: Message, state: FSMContext) -> None:
     )
 
     await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.message(MoneyState.waiting_for_amount, F.text == "✅ Газ")
+async def handle_income_confirm(message: Message, state: FSMContext) -> None:
+    """Handle confirmation of income input via calculator button."""
+
+    data = await state.get_data()
+    amount_str = str(data.get("income_sum", "0")).strip()
+
+    if not amount_str:
+        await message.answer("Сначала набери сумму с помощью кнопок.")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+
+    normalized = amount_str.replace(",", ".")
+    try:
+        amount = float(normalized)
+    except ValueError:
+        await message.answer("Некорректная сумма. Попробуй ещё раз.")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+
+    if amount <= 0:
+        await message.answer("Сумма должна быть больше нуля.")
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+
+    await _process_income_amount_value(
+        message=message,
+        state=state,
+        amount=amount,
+    )
 
     try:
         await message.delete()

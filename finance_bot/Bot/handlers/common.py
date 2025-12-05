@@ -5,7 +5,7 @@ from aiogram import Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from keyboards.main import main_menu_keyboard
+from Bot.keyboards.main import main_menu_keyboard
 
 LOGGER = logging.getLogger(__name__)
 

@@ -28,6 +28,8 @@ LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
+INCOME_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
     {"label": "Покушал?", "category": "быт", "percent": 20},
@@ -170,6 +172,7 @@ async def _remove_reply_keyboard_silently(message: Message) -> None:
 async def start_income_flow(message: Message, state: FSMContext) -> None:
     """Start income calculation workflow with calculator keyboard."""
 
+    await delete_welcome_message_if_exists(message, state)
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
 

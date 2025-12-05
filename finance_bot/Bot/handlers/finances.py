@@ -161,12 +161,6 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
     )
 
 
-async def _remove_reply_keyboard_silently(message: Message) -> None:
-    """Временная заглушка: больше не отправляет сообщения и не скрывает клавиатуру."""
-
-    return None
-
-
 @router.message(F.text == "Рассчитать доход")
 async def start_income_flow(message: Message, state: FSMContext) -> None:
     """Start income calculation workflow with calculator keyboard."""
@@ -345,9 +339,6 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
     if amount <= 0:
         await query.answer("Сумма должна быть больше нуля.", show_alert=True)
         return
-
-    # Никаких лишних сообщений — сразу запускаем распределение
-    await _remove_reply_keyboard_silently(query.message)
 
     await _process_income_amount_value(
         message=query.message,

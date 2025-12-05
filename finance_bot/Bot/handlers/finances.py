@@ -27,6 +27,9 @@ async def delete_welcome_message_if_exists(message: Message, state: FSMContext) 
 
     return None
 
+INCOME_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+INCOME_INPUT_BUTTONS = INCOME_DIGITS | {"Очистить"}
+
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
     {"label": "Покушал?", "category": "быт", "percent": 20},
@@ -237,25 +240,19 @@ async def _process_income_amount_value(
         allocation=current,
     )
 
-    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
+async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.message(
     MoneyState.waiting_for_amount,
-    F.text.in_(
-        {
-            "0",
-            "1",
-            "2",
-            "3",
-            "4",
-            "5",
-            "6",
-            "7",
-            "8",
-            "9",
-            "Очистить",
-        }
-    ),
+    F.text.in_(INCOME_INPUT_BUTTONS),
 )
 async def handle_income_digit(message: Message, state: FSMContext) -> None:
     """Handle digit and clear input for income calculator."""
@@ -312,8 +309,10 @@ async def handle_income_confirm(message: Message, state: FSMContext) -> None:
             pass
         return
 
-    if amount <= 0:
-        await message.answer("Сумма должна быть больше нуля.")
+    if amount <= 0 or amount > 10_000_000:
+        await message.answer(
+            "Сумма должна быть положительной и не больше 10 000 000. Попробуй снова."
+        )
         try:
             await message.delete()
         except Exception:

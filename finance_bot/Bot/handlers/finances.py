@@ -9,11 +9,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from Bot.database.crud import FinanceDatabase
 from Bot.keyboards.main import (
     back_to_main_keyboard,
-    income_calculator_keyboard,
     main_menu_keyboard,
     purchase_confirmation_keyboard,
     yes_no_inline_keyboard,
 )
+from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.money_states import MoneyState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
@@ -245,10 +245,6 @@ async def _process_income_amount_value(
     except Exception:
         pass
 
-
-@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
-async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
-    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.message(
     MoneyState.waiting_for_amount,

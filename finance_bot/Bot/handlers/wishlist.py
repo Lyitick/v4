@@ -10,13 +10,13 @@ from aiogram.types import Message
 
 from Bot.database.crud import FinanceDatabase
 from Bot.keyboards.main import (
-    income_calculator_keyboard,
     main_menu_keyboard,
     wishlist_categories_keyboard,
     wishlist_reply_keyboard,
     wishlist_reply_keyboard_no_add,
     wishlist_url_keyboard,
 )
+from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import WishlistState
 
 LOGGER = logging.getLogger(__name__)

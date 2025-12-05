@@ -16,6 +16,18 @@ def yes_no_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
 
 
+def yes_no_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with Yes/No options to avoid opening system keyboard."""
+
+    buttons = [
+        [
+            InlineKeyboardButton(text="Да", callback_data="confirm_yes"),
+            InlineKeyboardButton(text="Нет", callback_data="confirm_no"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
 def back_to_main_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard with back to main option."""
 
@@ -27,6 +39,16 @@ def wishlist_reply_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard for wishlist actions."""
 
     buttons = [[KeyboardButton(text="➕"), KeyboardButton(text="Купленное")], [KeyboardButton(text="⏪ На главную")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
+    """Keyboard for wishlist actions without add button (+)."""
+
+    buttons = [
+        [KeyboardButton(text="Купленное")],
+        [KeyboardButton(text="⏪ На главную")],
+    ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 

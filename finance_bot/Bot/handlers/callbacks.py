@@ -6,14 +6,14 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
-from database.crud import FinanceDatabase
-from handlers.finances import (
+from Bot.database.crud import FinanceDatabase
+from Bot.handlers.finances import (
     _format_savings_summary,
     show_affordable_wishes,
 )
-from keyboards.main import main_menu_keyboard, wishlist_categories_keyboard
-from states.wishlist_states import WishlistState
-from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
+from Bot.keyboards.main import main_menu_keyboard, wishlist_categories_keyboard
+from Bot.states.wishlist_states import WishlistState
+from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
 LOGGER = logging.getLogger(__name__)
 

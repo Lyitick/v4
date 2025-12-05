@@ -1,7 +1,7 @@
 """Logging utilities."""
 import logging
 
-from config.logging_config import setup_logging
+from Bot.config.logging_config import setup_logging
 
 
 def init_logging() -> logging.Logger:

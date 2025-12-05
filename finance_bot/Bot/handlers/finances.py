@@ -169,6 +169,7 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
 async def start_income_flow(message: Message, state: FSMContext) -> None:
     """Start income calculation workflow with calculator keyboard."""
 
+    await delete_welcome_message_if_exists(message, state)
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
 
@@ -349,6 +350,17 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         amount=amount,
     )
 
+    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.callback_query(MoneyState.waiting_for_amount, F.data == "income_received")
+async def handle_income_received(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of entered income amount."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

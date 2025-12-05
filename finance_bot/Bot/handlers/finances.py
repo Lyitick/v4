@@ -4,12 +4,25 @@ from typing import Any, Dict, List, Optional
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
-from database.crud import FinanceDatabase
-from keyboards.main import back_to_main_keyboard, main_menu_keyboard, purchase_confirmation_keyboard, yes_no_keyboard
-from states.money_states import MoneyState
-from handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
+from Bot.database.crud import FinanceDatabase
+from Bot.keyboards.main import (
+    back_to_main_keyboard,
+    main_menu_keyboard,
+    purchase_confirmation_keyboard,
+    yes_no_inline_keyboard,
+)
+from Bot.states.money_states import MoneyState
+from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
 LOGGER = logging.getLogger(__name__)
 
@@ -22,6 +35,75 @@ distribution_scheme = [
     {"label": "Сбережения", "category": "сбережения", "percent": 20},
     {"label": "Ну и на хуйню?", "category": "спонтанные траты", "percent": 10},
 ]
+
+
+def _build_income_prompt(income_sum: str) -> str:
+    """Build income input prompt."""
+
+    # Показываем сумму в формате "БАБКИ: <число>"
+    return f"БАБКИ: {income_sum}"
+
+
+def income_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard to confirm entered income amount."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Получено", callback_data="income_received")]
+        ]
+    )
+
+
+def income_calculator_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with digit buttons for income input."""
+
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
+            [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
+            [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
+            [KeyboardButton(text="0"), KeyboardButton(text="Очистить")],
+        ],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+async def _refresh_income_message(
+    message: Message, income_message_id: Optional[int], income_sum: str
+) -> int:
+    """Update or create income prompt message with current sum.
+
+    Редактируем уже существующее сообщение с подсказкой по сумме.
+    Если id нет (например, первый запуск) — создаём новое.
+    Новых сообщений при ошибке редактирования НЕ создаём, чтобы не плодить дубликаты.
+    """
+
+    text = _build_income_prompt(income_sum)
+
+    # Если сообщения ещё не было — создаём его
+    if income_message_id is None:
+        new_message = await message.answer(text)
+        return new_message.message_id
+
+    # Пытаемся отредактировать существующее сообщение
+    try:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=income_message_id,
+            text=text,
+        )
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning(
+            "Failed to edit income message %s: %s",
+            income_message_id,
+            exc,
+        )
+        # Важно: НЕ создаём новое сообщение, просто возвращаем старый id,
+        # чтобы не плодить дублей "Вводим сумму дохода ..."
+        return income_message_id
+
+    return income_message_id
 
 
 def _to_float(value: Any) -> float:
@@ -64,25 +146,69 @@ def _find_reached_goal(savings: Dict[str, Dict[str, Any]]) -> tuple[str, Dict[st
     return None, None
 
 
+async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, Any]) -> None:
+    """Ask user to confirm allocation for a specific category.
+
+    Args:
+        message: Aiogram message object used for sending prompts.
+        allocation: Allocation details with label and amount.
+    """
+
+    await message.answer(
+        f"На категорию {allocation['label']} можно направить {allocation['amount']:.2f}. Перевести?",
+        reply_markup=yes_no_inline_keyboard(),
+    )
+
+
+async def _remove_reply_keyboard_silently(message: Message) -> None:
+    """Временная заглушка: больше не отправляет сообщения и не скрывает клавиатуру."""
+
+    return None
+
+
 @router.message(F.text == "Рассчитать доход")
 async def start_income_flow(message: Message, state: FSMContext) -> None:
-    """Start income calculation workflow."""
+    """Start income calculation workflow with calculator keyboard."""
 
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
-    await message.answer("Введи сумму дохода числом, без пробелов и символов.", reply_markup=back_to_main_keyboard())
-    LOGGER.info("User %s started income calculation", message.from_user.id if message.from_user else "unknown")
+
+    income_sum = "0"
+
+    # 1) Сначала: стрелочки + reply-клавиатура-калькулятор
+    await message.answer(
+        "⬇️⬇️⬇️",
+        reply_markup=income_calculator_keyboard(),
+    )
+
+    # 2) Затем: редактируемое сообщение с суммой (БЕЗ клавиатуры)
+    prompt = _build_income_prompt(income_sum)
+    income_message = await message.answer(prompt)
+
+    # Сохраняем сумму и id сообщения, которое будем редактировать при нажатии цифр
+    await state.update_data(
+        income_sum=income_sum,
+        income_message_id=income_message.message_id,
+    )
+
+    # 3) В конце: сообщение с inline-кнопкой "✅ Получено"
+    await message.answer(
+        "БАБКИ БАБКИ БАААБКИИИ",
+        reply_markup=income_confirm_keyboard(),
+    )
+
+    LOGGER.info(
+        "User %s started income calculation",
+        message.from_user.id if message.from_user else "unknown",
+    )
 
 
-@router.message(MoneyState.waiting_for_amount)
-async def process_income_amount(message: Message, state: FSMContext) -> None:
-    """Validate and process entered income amount."""
-
-    try:
-        amount = float(message.text.replace(",", "."))
-    except (TypeError, ValueError):
-        await message.answer("Нужно ввести число. Попробуй ещё раз.")
-        return
+async def _process_income_amount_value(
+    message: Message,
+    state: FSMContext,
+    amount: float,
+) -> None:
+    """Validate amount and process income allocation."""
 
     if amount <= 0 or amount > 10_000_000:
         await message.answer("Сумма должна быть положительной и не больше 10 000 000. Попробуй снова.")
@@ -93,56 +219,154 @@ async def process_income_amount(message: Message, state: FSMContext) -> None:
         allocated = amount * item["percent"] / 100
         allocations.append({"label": item["label"], "category": item["category"], "amount": allocated})
 
-    await state.update_data(allocations=allocations, index=0)
+    await state.update_data(income_amount=amount, allocations=allocations, index=0)
     await state.set_state(MoneyState.confirm_category)
     current = allocations[0]
-    await message.answer(
-        f"На категорию {current['label']} можно направить {current['amount']:.2f}. Перевести?",
-        reply_markup=yes_no_keyboard(),
+    await _ask_allocation_confirmation(message=message, allocation=current)
+
+
+@router.message(
+    MoneyState.waiting_for_amount,
+    F.text.in_("0 1 2 3 4 5 6 7 8 9 Очистить".split()),
+)
+async def handle_income_digit(message: Message, state: FSMContext) -> None:
+    """Handle digit and clear input for income calculator."""
+
+    data = await state.get_data()
+    current_sum = data.get("income_sum", "0")
+    sum_message_id = data.get("income_message_id")
+
+    if message.text == "Очистить":
+        new_sum = "0"
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
+
+    income_message_id = await _refresh_income_message(
+        message=message,
+        income_message_id=sum_message_id,
+        income_sum=new_sum,
+    )
+
+    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.callback_query(MoneyState.waiting_for_amount, F.data == "income_received")
+async def handle_income_received(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of entered income amount."""
+
+    await query.answer()
+
+    data = await state.get_data()
+    amount_str = data.get("income_sum", "0").strip()
+
+    if not amount_str:
+        await query.answer("Сначала набери сумму с помощью кнопок.", show_alert=True)
+        return
+
+    normalized = amount_str.replace(",", ".")
+    try:
+        amount = float(normalized)
+    except ValueError:
+        await query.answer("Некорректная сумма. Попробуй ещё раз.", show_alert=True)
+        return
+
+    if amount <= 0:
+        await query.answer("Сумма должна быть больше нуля.", show_alert=True)
+        return
+
+    await _process_income_amount_value(
+        message=query.message,
+        state=state,
+        amount=amount,
     )
 
 
-@router.message(MoneyState.confirm_category, F.text.in_({"Да", "Нет"}))
-async def handle_category_confirmation(message: Message, state: FSMContext) -> None:
-    """Handle user confirmation for category allocation."""
+@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
+async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle user confirmation for category allocation via inline buttons."""
+
+    await query.answer()
 
     data = await state.get_data()
     allocations: List[Dict[str, Any]] = data.get("allocations", [])
     index: int = data.get("index", 0)
 
+    # Если категорий нет или индекс вышел за пределы — выходим в главное меню
     if not allocations or index >= len(allocations):
-        await message.answer("Нет категорий для обработки.", reply_markup=main_menu_keyboard())
+        await query.message.answer(
+            "Нет категорий для обработки.",
+            reply_markup=main_menu_keyboard(),
+        )
         await state.clear()
         return
 
     current = allocations[index]
-    if message.text == "Да":
-        FinanceDatabase().update_saving(user_id=message.from_user.id, category=current["category"], amount_delta=current["amount"])
-        await message.answer(
-            f"Добавлено {current['amount']:.2f} в категорию {current['category']}.",
-            reply_markup=yes_no_keyboard(),
+
+    # Пытаемся удалить сообщение-вопрос; если не получится, хотя бы убираем инлайны
+    try:
+        await query.message.delete()
+    except Exception:
+        await query.message.edit_reply_markup(reply_markup=None)
+
+    # --- Пользователь нажал "Да" ---
+    if query.data == "confirm_yes":
+        FinanceDatabase().update_saving(
+            user_id=query.from_user.id if query.from_user else None,
+            category=current["category"],
+            amount_delta=current["amount"],
         )
-    else:
-        await message.answer("Пропускаем категорию.", reply_markup=yes_no_keyboard())
 
-    index += 1
-    if index < len(allocations):
-        next_item = allocations[index]
-        await state.update_data(index=index)
-        await message.answer(
-            f"На категорию {next_item['label']} можно направить {next_item['amount']:.2f}. Перевести?",
-            reply_markup=yes_no_keyboard(),
-        )
-    else:
-        await _send_summary_and_goal_prompt(message, state)
+        # Переходим к следующей категории
+        index += 1
+        if index < len(allocations):
+            next_item = allocations[index]
+            await state.update_data(index=index)
+            await _ask_allocation_confirmation(
+                message=query.message,
+                allocation=next_item,
+            )
+        else:
+            # Категорий больше нет — показываем итог по накоплениям
+            await _send_summary_and_goal_prompt(
+                message=query.message,
+                state=state,
+                user_id=query.from_user.id if query.from_user else None,
+            )
+        return
+
+    # --- Пользователь нажал "Нет" ---
+    # Напоминаем про жизнь и задаём тот же вопрос ещё раз
+    await query.message.answer("Ты что про жизнь забыл?")
+    await _ask_allocation_confirmation(
+        message=query.message,
+        allocation=current,
+    )
 
 
-async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> None:
+async def _send_summary_and_goal_prompt(
+    message: Message,
+    state: FSMContext,
+    user_id: Optional[int],
+) -> None:
     """Send savings summary and suggest purchase if goal reached."""
+
+    # На всякий случай восстанавливаем user_id, если его не передали явно
+    if user_id is None:
+        user_id = message.from_user.id if message.from_user else message.chat.id
 
     await state.clear()
     db = FinanceDatabase()
-    savings = db.get_user_savings(message.from_user.id)
+
+    # Читаем накопления по реальному user_id пользователя
+    savings = db.get_user_savings(user_id)
     summary = _format_savings_summary(savings)
     await message.answer(f"Текущие накопления:\n{summary}", reply_markup=main_menu_keyboard())
 
@@ -159,7 +383,8 @@ async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> 
         await state.set_state(MoneyState.waiting_for_purchase_confirmation)
         return
 
-    await show_affordable_wishes(message=message, user_id=message.from_user.id, db=db)
+    # Здесь также используем тот же user_id, что и при подсчёте накоплений
+    await show_affordable_wishes(message=message, user_id=user_id, db=db)
 
 
 def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKeyboardMarkup:

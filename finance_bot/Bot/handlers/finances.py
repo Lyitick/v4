@@ -177,27 +177,37 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
 
     income_sum = "0"
 
-    # 1) Сначала: стрелочки + reply-клавиатура-калькулятор
-    await message.answer(
+    # 1) Сообщение со стрелочками + reply-клавиатура-калькулятор
+    arrows_message = await message.answer(
         "⬇️⬇️⬇️",
         reply_markup=income_calculator_keyboard(),
     )
 
-    # 2) Затем: редактируемое сообщение с суммой (БЕЗ клавиатуры)
+    # 2) Сообщение с суммой ("БАБКИ: 0") — именно его будем редактировать
     prompt = _build_income_prompt(income_sum)
     income_message = await message.answer(prompt)
 
-    # Сохраняем сумму и id сообщения, которое будем редактировать при нажатии цифр
-    await state.update_data(
-        income_sum=income_sum,
-        income_message_id=income_message.message_id,
-    )
-
-    # 3) В конце: сообщение с inline-кнопкой "✅ Получено"
-    await message.answer(
+    # 3) Сообщение с текстом и инлайн-кнопкой "✅ Получено"
+    confirm_message = await message.answer(
         "БАБКИ БАБКИ БАААБКИИИ",
         reply_markup=income_confirm_keyboard(),
     )
+
+    # Сохраняем служебные message_id и текущую сумму
+    await state.update_data(
+        income_sum=income_sum,
+        income_arrows_message_id=arrows_message.message_id,
+        income_message_id=income_message.message_id,
+        income_prompt_message_id=confirm_message.message_id,
+        life_message_id=None,
+        income_amount=None,
+    )
+
+    # Удаляем сообщение пользователя "Рассчитать доход"
+    try:
+        await message.delete()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Failed to delete user command message: %s", exc)
 
     LOGGER.info(
         "User %s started income calculation",
@@ -218,6 +228,26 @@ async def _process_income_amount_value(
             "Сумма должна быть положительной и не больше 10 000 000. Попробуй снова."
         )
         return
+
+    # Удаляем служебные сообщения: стрелочки, "БАБКИ: ..." и "БАБКИ БАБКИ БАААБКИИИ"
+    data = await state.get_data()
+    arrows_message_id: Optional[int] = data.get("income_arrows_message_id")
+    income_message_id: Optional[int] = data.get("income_message_id")
+    income_prompt_message_id: Optional[int] = data.get("income_prompt_message_id")
+
+    for msg_id in (arrows_message_id, income_message_id, income_prompt_message_id):
+        if msg_id:
+            try:
+                await message.bot.delete_message(
+                    chat_id=message.chat.id,
+                    message_id=msg_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning(
+                    "Failed to delete income helper message %s: %s",
+                    msg_id,
+                    exc,
+                )
 
     # Считаем распределение по категориям
     allocations: List[Dict[str, Any]] = []
@@ -245,6 +275,7 @@ async def _process_income_amount_value(
         income_amount=amount,
         allocations=allocations,
         index=0,
+        life_message_id=None,
     )
 
     # Переходим в состояние подтверждения категорий
@@ -315,6 +346,9 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         await query.answer("Сумма должна быть больше нуля.", show_alert=True)
         return
 
+    # Никаких лишних сообщений — сразу запускаем распределение
+    await _remove_reply_keyboard_silently(query.message)
+
     await _process_income_amount_value(
         message=query.message,
         state=state,
@@ -330,7 +364,8 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
 
     data = await state.get_data()
     allocations: List[Dict[str, Any]] = data.get("allocations", [])
-    index: int = data.get("index", 0)
+    index: int = int(data.get("index", 0))
+    life_message_id: Optional[int] = data.get("life_message_id")
 
     # Если категорий нет или индекс вышел за пределы — выходим в главное меню
     if not allocations or index >= len(allocations):
@@ -343,14 +378,32 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
 
     current = allocations[index]
 
-    # Пытаемся удалить сообщение-вопрос; если не получится, хотя бы убираем инлайны
+    # Удаляем сообщение-вопрос с кнопками Да/Нет
     try:
         await query.message.delete()
-    except Exception:
-        await query.message.edit_reply_markup(reply_markup=None)
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Failed to delete category question message: %s", exc)
+
+    new_life_message_id: Optional[int] = life_message_id
 
     # --- Пользователь нажал "Да" ---
     if query.data == "confirm_yes":
+        # Если было сообщение "Ты что про жизнь забыл?" — удаляем его
+        if life_message_id:
+            try:
+                await query.message.bot.delete_message(
+                    chat_id=query.message.chat.id,
+                    message_id=life_message_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning(
+                    "Failed to delete life message %s: %s",
+                    life_message_id,
+                    exc,
+                )
+        new_life_message_id = None
+
+        # Обновляем накопления
         FinanceDatabase().update_saving(
             user_id=query.from_user.id if query.from_user else None,
             category=current["category"],
@@ -359,29 +412,50 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
 
         # Переходим к следующей категории
         index += 1
-        if index < len(allocations):
-            next_item = allocations[index]
-            await state.update_data(index=index)
-            await _ask_allocation_confirmation(
-                message=query.message,
-                allocation=next_item,
-            )
-        else:
-            # Категорий больше нет — показываем итог по накоплениям
-            await _send_summary_and_goal_prompt(
-                message=query.message,
-                state=state,
-                user_id=query.from_user.id if query.from_user else None,
-            )
-        return
 
     # --- Пользователь нажал "Нет" ---
-    # Напоминаем про жизнь и задаём тот же вопрос ещё раз
-    await query.message.answer("Ты что про жизнь забыл?")
-    await _ask_allocation_confirmation(
-        message=query.message,
-        allocation=current,
-    )
+    else:
+        # Перед тем как отправить новое "Ты что про жизнь забыл?" — удаляем старое, если было
+        if life_message_id:
+            try:
+                await query.message.bot.delete_message(
+                    chat_id=query.message.chat.id,
+                    message_id=life_message_id,
+                )
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.warning(
+                    "Failed to delete previous life message %s: %s",
+                    life_message_id,
+                    exc,
+                )
+
+        life_msg = await query.message.bot.send_message(
+            chat_id=query.message.chat.id,
+            text="Ты что про жизнь забыл?",
+        )
+        new_life_message_id = life_msg.message_id
+
+        # index НЕ меняем — задаём тот же вопрос по той же категории
+
+    # Если ещё есть категории — задаём следующий вопрос
+    if index < len(allocations):
+        await state.update_data(
+            index=index,
+            life_message_id=new_life_message_id,
+        )
+        next_allocation = allocations[index]
+        await _ask_allocation_confirmation(
+            message=query.message,
+            allocation=next_allocation,
+        )
+    else:
+        # Категорий больше нет — life_message_id очищаем и показываем итог
+        await state.update_data(life_message_id=None)
+        await _send_summary_and_goal_prompt(
+            message=query.message,
+            state=state,
+            user_id=query.from_user.id if query.from_user else None,
+        )
 
 
 async def _send_summary_and_goal_prompt(
@@ -391,7 +465,11 @@ async def _send_summary_and_goal_prompt(
 ) -> None:
     """Send savings summary and suggest purchase if goal reached."""
 
-    # На всякий случай восстанавливаем user_id, если его не передали явно
+    # Достаём сумму, которую пользователь ввёл как доход
+    data = await state.get_data()
+    income_amount = data.get("income_amount", 0)
+
+    # Восстанавливаем user_id, если не передали явно
     if user_id is None:
         user_id = message.from_user.id if message.from_user else message.chat.id
 
@@ -401,23 +479,38 @@ async def _send_summary_and_goal_prompt(
     # Читаем накопления по реальному user_id пользователя
     savings = db.get_user_savings(user_id)
     summary = _format_savings_summary(savings)
-    await message.answer(f"Текущие накопления:\n{summary}", reply_markup=main_menu_keyboard())
 
-    category, data = _find_reached_goal(savings)
+    # Формируем текст: сначала "Получено бабок", затем текущие накопления
+    lines: List[str] = []
+    if income_amount:
+        lines.append(f"Получено бабок: {income_amount:.2f}")
+        lines.append("")  # пустая строка для читаемости
+
+    lines.append("Текущие накопления:")
+    lines.append(summary)
+
+    await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+
+    category, goal_data = _find_reached_goal(savings)
     if category:
-        goal = data.get("goal", 0)
-        purpose = data.get("purpose", "цель")
-        current = data.get("current", 0)
+        goal = goal_data.get("goal", 0)
+        purpose = goal_data.get("purpose", "цель")
+        current = goal_data.get("current", 0)
         await message.answer(
-            f"🎯 Цель достигнута по категории {category}. На цели {purpose} накоплено {current:.2f} из {goal:.2f}.",
+            f"🎯 Цель достигнута по категории {category}. "
+            f"На цели {purpose} накоплено {current:.2f} из {goal:.2f}.",
             reply_markup=purchase_confirmation_keyboard(),
         )
         await state.update_data(category=category, goal=goal)
         await state.set_state(MoneyState.waiting_for_purchase_confirmation)
         return
 
-    # Здесь также используем тот же user_id, что и при подсчёте накоплений
-    await show_affordable_wishes(message=message, user_id=user_id, db=db)
+    # Подбор желаний из вишлиста по тем же savings и user_id
+    await show_affordable_wishes(
+        message=message,
+        user_id=user_id,
+        db=db,
+    )
 
 
 def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKeyboardMarkup:

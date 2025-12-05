@@ -330,15 +330,29 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
         await state.update_data(index=index)
         await _ask_allocation_confirmation(message=query.message, allocation=next_item)
     else:
-        await _send_summary_and_goal_prompt(query.message, state)
+        await _send_summary_and_goal_prompt(
+            message=query.message,
+            state=state,
+            user_id=query.from_user.id if query.from_user else None,
+        )
 
 
-async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> None:
+async def _send_summary_and_goal_prompt(
+    message: Message,
+    state: FSMContext,
+    user_id: Optional[int],
+) -> None:
     """Send savings summary and suggest purchase if goal reached."""
+
+    # На всякий случай восстанавливаем user_id, если его не передали явно
+    if user_id is None:
+        user_id = message.from_user.id if message.from_user else message.chat.id
 
     await state.clear()
     db = FinanceDatabase()
-    savings = db.get_user_savings(message.from_user.id)
+
+    # Читаем накопления по реальному user_id пользователя
+    savings = db.get_user_savings(user_id)
     summary = _format_savings_summary(savings)
     await message.answer(f"Текущие накопления:\n{summary}", reply_markup=main_menu_keyboard())
 
@@ -355,7 +369,8 @@ async def _send_summary_and_goal_prompt(message: Message, state: FSMContext) -> 
         await state.set_state(MoneyState.waiting_for_purchase_confirmation)
         return
 
-    await show_affordable_wishes(message=message, user_id=message.from_user.id, db=db)
+    # Здесь также используем тот же user_id, что и при подсчёте накоплений
+    await show_affordable_wishes(message=message, user_id=user_id, db=db)
 
 
 def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKeyboardMarkup:

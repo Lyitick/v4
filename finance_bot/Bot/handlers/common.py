@@ -13,22 +13,9 @@ router = Router()
 
 
 async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
-    """Delete stored welcome message if present in FSM."""
+    """Compatibility no-op; welcome messages are kept."""
 
-    data = await state.get_data()
-    welcome_message_id = data.get("welcome_message_id")
-    if welcome_message_id is None:
-        return
-
-    try:
-        await message.bot.delete_message(
-            chat_id=message.chat.id,
-            message_id=welcome_message_id,
-        )
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Failed to delete welcome message %s: %s", welcome_message_id, exc)
-    finally:
-        await state.update_data(welcome_message_id=None)
+    return None
 
 
 @router.message()

@@ -31,6 +31,10 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     """Handle /start command."""
 
     await _handle_start_common(message, state)
+    try:
+        await message.delete()
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning("Failed to delete /start message: %s", exc)
 
 
 @router.message(F.text == "Поехалиии")

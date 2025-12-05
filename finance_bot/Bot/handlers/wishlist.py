@@ -1,23 +1,30 @@
 """Handlers for wishlist flow."""
 import logging
+from collections import defaultdict
 from typing import Optional
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from database.crud import FinanceDatabase
-from keyboards.main import (
+from Bot.database.crud import FinanceDatabase
+from Bot.keyboards.main import (
     main_menu_keyboard,
     wishlist_categories_keyboard,
     wishlist_reply_keyboard,
     wishlist_url_keyboard,
 )
-from states.wishlist_states import WishlistState
+from Bot.states.wishlist_states import WishlistState
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+
+
+async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
+    """Legacy no-op to keep compatibility when welcome cleanup is referenced."""
+
+    return None
 
 WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY = {
     "Инструменты": "инвестиции",
@@ -117,20 +124,31 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
 
 @router.message(F.text == "Купленное")
 async def show_purchases(message: Message) -> None:
-    """Show purchased items."""
+    """Show purchased items grouped by category with pretty headers."""
 
     db = FinanceDatabase()
     purchases = db.get_purchases_by_user(message.from_user.id)
+
+    # Если покупок нет — сразу выходим
     if not purchases:
-        await message.answer("Список покупок пуст.")
+        await message.answer("Список покупок пуст.", reply_markup=main_menu_keyboard())
         return
 
-    lines = []
+    # Группируем покупки по "очеловеченным" категориям
+    groups: dict[str, list[dict]] = defaultdict(list)
     for purchase in purchases:
-        category = humanize_wishlist_category(purchase.get("category", ""))
-        lines.append(
-            f"{purchase['wish_name']} — {purchase['price']:.2f} ({category}) куплено {purchase['purchased_at']}"
-        )
+        category_key = humanize_wishlist_category(purchase.get("category", ""))
+        groups[category_key].append(purchase)
+
+    lines: list[str] = ["Купленные желания:"]
+    for category, items in groups.items():
+        lines.append(f"\n💡 {category}:")
+        for purchase in items:
+            lines.append(
+                f"• {purchase['wish_name']} — {purchase['price']:.2f} ₽ "
+                f"(куплено {purchase['purchased_at']})"
+            )
+
     await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
 
 

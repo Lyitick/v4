@@ -20,6 +20,12 @@ LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
+
+async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
+    """Legacy no-op to keep compatibility when welcome cleanup is referenced."""
+
+    return None
+
 WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY = {
     "Инструменты": "инвестиции",
     "Финансы": "сбережения",

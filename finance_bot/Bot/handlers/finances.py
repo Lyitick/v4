@@ -27,7 +27,11 @@ LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
-INCOME_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+
+async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
+    """Legacy no-op to keep compatibility when welcome cleanup is referenced."""
+
+    return None
 
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
@@ -346,6 +350,17 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         amount=amount,
     )
 
+    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.callback_query(MoneyState.waiting_for_amount, F.data == "income_received")
+async def handle_income_received(query: CallbackQuery, state: FSMContext) -> None:
+    """Handle confirmation of entered income amount."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

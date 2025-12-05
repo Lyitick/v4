@@ -22,6 +22,7 @@ async def delete_welcome_message_if_exists(message: Message, state: FSMContext) 
 async def fallback_handler(message: Message, state: FSMContext) -> None:
     """Handle unmatched messages."""
 
+    await delete_welcome_message_if_exists(message, state)
     current_state = await state.get_state()
     LOGGER.info("Fallback triggered. User: %s State: %s Text: %s", message.from_user.id, current_state, message.text)
     await message.answer(

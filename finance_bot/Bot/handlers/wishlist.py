@@ -1,4 +1,5 @@
 """Handlers for wishlist flow."""
+
 import logging
 from collections import defaultdict
 from typing import Optional
@@ -9,9 +10,11 @@ from aiogram.types import Message
 
 from Bot.database.crud import FinanceDatabase
 from Bot.keyboards.main import (
+    income_calculator_keyboard,
     main_menu_keyboard,
     wishlist_categories_keyboard,
     wishlist_reply_keyboard,
+    wishlist_reply_keyboard_no_add,
     wishlist_url_keyboard,
 )
 from Bot.states.wishlist_states import WishlistState
@@ -81,7 +84,10 @@ async def add_wish_start(message: Message, state: FSMContext) -> None:
     """Start adding wish."""
 
     await state.set_state(WishlistState.waiting_for_name)
-    await message.answer("Введи название желания.")
+    await message.answer(
+        "Введи название желания.",
+        reply_markup=wishlist_reply_keyboard_no_add(),
+    )
 
 
 @router.message(WishlistState.waiting_for_name)
@@ -90,26 +96,108 @@ async def add_wish_name(message: Message, state: FSMContext) -> None:
 
     await state.update_data(name=message.text)
     await state.set_state(WishlistState.waiting_for_price)
-    await message.answer("Введи цену (только цифры).")
+
+    question = await message.answer(
+        "Введи цену (используй кнопки ниже).",
+        reply_markup=income_calculator_keyboard(),
+    )
+    prompt = await message.answer(": 0")
+
+    await state.update_data(
+        price_sum="0",
+        price_question_message_id=question.message_id,
+        price_message_id=prompt.message_id,
+    )
 
 
-@router.message(WishlistState.waiting_for_price)
-async def add_wish_price(message: Message, state: FSMContext) -> None:
-    """Validate and save price."""
+@router.message(
+    WishlistState.waiting_for_price,
+    F.text.in_(
+        {
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "Очистить",
+            "✅ Газ",
+        }
+    ),
+)
+async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
+    """Handle price input via calculator buttons."""
+
+    data = await state.get_data()
+    current_sum = str(data.get("price_sum", "0"))
+    price_message_id = data.get("price_message_id")
+
+    if message.text == "Очистить":
+        new_sum = "0"
+    elif message.text == "✅ Газ":
+        amount_str = current_sum.strip()
+        if not amount_str:
+            await message.answer("Нужно ввести число. Попробуй снова.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        normalized = amount_str.replace(",", ".")
+        try:
+            price = float(normalized)
+        except (TypeError, ValueError):
+            await message.answer("Нужно ввести число. Попробуй снова.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        if price <= 0:
+            await message.answer("Цена должна быть больше нуля. Попробуй снова.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        await state.update_data(price=price)
+        await state.set_state(WishlistState.waiting_for_url)
+        await message.answer("Дай ссылку", reply_markup=wishlist_url_keyboard())
+
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
+
+    if price_message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=price_message_id,
+                text=f": {new_sum}",
+            )
+        except Exception:
+            pass
+
+    await state.update_data(price_sum=new_sum, price_message_id=price_message_id)
 
     try:
-        price = float(message.text.replace(",", "."))
-    except (TypeError, ValueError):
-        await message.answer("Нужно ввести число. Попробуй снова.")
-        return
-
-    if price <= 0:
-        await message.answer("Цена должна быть больше нуля. Попробуй снова.")
-        return
-
-    await state.update_data(price=price)
-    await state.set_state(WishlistState.waiting_for_url)
-    await message.answer("Дай ссылку", reply_markup=wishlist_url_keyboard())
+        await message.delete()
+    except Exception:
+        pass
 
 
 @router.message(WishlistState.waiting_for_url)
@@ -157,7 +245,7 @@ async def show_purchases(message: Message) -> None:
 async def invalid_price(message: Message) -> None:
     """Handle invalid price input."""
 
-    await message.answer("Нужно ввести число. Попробуй снова.")
+    await message.answer("Используй кнопки калькулятора ниже для ввода цены.")
 
 
 @router.message(WishlistState.waiting_for_category)

@@ -53,7 +53,8 @@ async def _refresh_income_message(
 
     Редактируем уже существующее сообщение с подсказкой по сумме.
     Если id нет (например, первый запуск) — создаём новое.
-    Новых сообщений при ошибке редактирования НЕ создаём, чтобы не плодить дубликаты.
+    При ошибке редактирования пытаемся удалить старое сообщение и создаём новое,
+    чтобы пользователь видел актуальную сумму.
     """
 
     text = _build_income_prompt(income_sum)
@@ -70,17 +71,24 @@ async def _refresh_income_message(
             message_id=income_message_id,
             text=text,
         )
+        return income_message_id
     except Exception as exc:  # noqa: BLE001
         LOGGER.warning(
             "Failed to edit income message %s: %s",
             income_message_id,
             exc,
         )
-        # Важно: НЕ создаём новое сообщение, просто возвращаем старый id,
-        # чтобы не плодить дублей "Вводим сумму дохода ..."
-        return income_message_id
 
-    return income_message_id
+    try:
+        await message.bot.delete_message(
+            chat_id=message.chat.id,
+            message_id=income_message_id,
+        )
+    except Exception:
+        pass
+
+    new_message = await message.answer(text)
+    return new_message.message_id
 
 
 def _to_float(value: Any) -> float:
@@ -239,11 +247,6 @@ async def _process_income_amount_value(
         message=message,
         allocation=current,
     )
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
 
 
 @router.message(

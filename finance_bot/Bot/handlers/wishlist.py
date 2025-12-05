@@ -14,7 +14,6 @@ from Bot.keyboards.main import (
     wishlist_categories_keyboard,
     wishlist_reply_keyboard,
     wishlist_reply_keyboard_no_add,
-    wishlist_url_keyboard,
 )
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import WishlistState
@@ -169,7 +168,11 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
 
         await state.update_data(price=price)
         await state.set_state(WishlistState.waiting_for_url)
-        await message.answer("Дай ссылку", reply_markup=wishlist_url_keyboard())
+        await message.answer(
+            "Дай ссылку на желание.\n"
+            "Если ссылки нет — просто напиши «-».",
+            reply_markup=wishlist_reply_keyboard_no_add(),
+        )
 
         try:
             await message.delete()

@@ -8,6 +8,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from Bot.database.crud import FinanceDatabase
+from Bot.handlers.common import delete_welcome_message_if_exists
 from Bot.keyboards.main import (
     main_menu_keyboard,
     wishlist_categories_keyboard,
@@ -48,6 +49,7 @@ def humanize_wishlist_category(category: str) -> str:
 async def open_wishlist(message: Message, state: FSMContext) -> None:
     """Open wishlist menu."""
 
+    await delete_welcome_message_if_exists(message, state)
     await state.clear()
     db = FinanceDatabase()
     wishes = db.get_wishes_by_user(message.from_user.id)

@@ -23,6 +23,7 @@ from Bot.keyboards.main import (
 )
 from Bot.states.money_states import MoneyState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
+from Bot.handlers.common import delete_welcome_message_if_exists
 
 LOGGER = logging.getLogger(__name__)
 
@@ -172,6 +173,7 @@ async def _remove_reply_keyboard_silently(message: Message) -> None:
 async def start_income_flow(message: Message, state: FSMContext) -> None:
     """Start income calculation workflow with calculator keyboard."""
 
+    await delete_welcome_message_if_exists(message, state)
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
 

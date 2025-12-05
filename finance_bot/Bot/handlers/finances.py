@@ -23,7 +23,6 @@ from Bot.keyboards.main import (
 )
 from Bot.states.money_states import MoneyState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
-from Bot.handlers.common import delete_welcome_message_if_exists
 
 LOGGER = logging.getLogger(__name__)
 

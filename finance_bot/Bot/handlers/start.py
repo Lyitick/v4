@@ -17,12 +17,8 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     """Shared start logic for /start and "Поехалиии" commands."""
 
     await state.clear()
-    greeting = (
-        "Привет! Я финансовый помощник. Помогу распределить доход, вести накопления "
-        "и управлять твоим вишлистом."
-    )
-    greeting_message = await message.answer(greeting, reply_markup=main_menu_keyboard())
-    await state.update_data(welcome_message_id=greeting_message.message_id)
+    greeting = "Поработаем бл"
+    await message.answer(greeting, reply_markup=main_menu_keyboard())
     LOGGER.info("User %s started bot", message.from_user.id if message.from_user else "unknown")
 
 

@@ -29,6 +29,8 @@ LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
+INCOME_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
     {"label": "Покушал?", "category": "быт", "percent": 20},

@@ -210,21 +210,52 @@ async def _process_income_amount_value(
     state: FSMContext,
     amount: float,
 ) -> None:
-    """Validate amount and process income allocation."""
+    """Validate amount and start category confirmation workflow."""
 
+    # Базовая валидация суммы
     if amount <= 0 or amount > 10_000_000:
-        await message.answer("Сумма должна быть положительной и не больше 10 000 000. Попробуй снова.")
+        await message.answer(
+            "Сумма должна быть положительной и не больше 10 000 000. Попробуй снова."
+        )
         return
 
+    # Считаем распределение по категориям
     allocations: List[Dict[str, Any]] = []
     for item in distribution_scheme:
         allocated = amount * item["percent"] / 100
-        allocations.append({"label": item["label"], "category": item["category"], "amount": allocated})
+        allocations.append(
+            {
+                "label": item["label"],
+                "category": item["category"],
+                "amount": allocated,
+            }
+        )
 
-    await state.update_data(income_amount=amount, allocations=allocations, index=0)
+    # Если по какой-то причине схема пустая — выходим в главное меню
+    if not allocations:
+        await message.answer(
+            "Нет категорий для распределения.",
+            reply_markup=main_menu_keyboard(),
+        )
+        await state.clear()
+        return
+
+    # Сохраняем данные в FSM
+    await state.update_data(
+        income_amount=amount,
+        allocations=allocations,
+        index=0,
+    )
+
+    # Переходим в состояние подтверждения категорий
     await state.set_state(MoneyState.confirm_category)
+
+    # Задаём вопрос ТОЛЬКО по первой категории
     current = allocations[0]
-    await _ask_allocation_confirmation(message=message, allocation=current)
+    await _ask_allocation_confirmation(
+        message=message,
+        allocation=current,
+    )
 
 
 @router.message(
@@ -290,16 +321,6 @@ async def handle_income_received(query: CallbackQuery, state: FSMContext) -> Non
         amount=amount,
     )
 
-    await _process_income_amount_value(
-        message=query.message,
-        state=state,
-        amount=amount,
-    )
-
-
-@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
-async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
-    """Handle user confirmation for category allocation via inline buttons."""
 
 @router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
 async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:

@@ -138,6 +138,7 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
 async def start_income_flow(message: Message, state: FSMContext) -> None:
     """Start income calculation workflow with calculator keyboard."""
 
+    await delete_welcome_message_if_exists(message, state)
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
 
@@ -236,6 +237,7 @@ async def _process_income_amount_value(
         allocation=current,
     )
 
+    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
 
 @router.message(
     MoneyState.waiting_for_amount,

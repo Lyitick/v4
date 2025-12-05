@@ -153,8 +153,6 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     await state.update_data(
         income_sum=income_sum,
         income_message_id=income_message.message_id,
-        life_message_id=None,
-        income_amount=None,
     )
 
     # Удаляем сообщение пользователя "Рассчитать доход"
@@ -240,12 +238,6 @@ async def _process_income_amount_value(
     )
 
     await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
 
 @router.message(
     MoneyState.waiting_for_amount,

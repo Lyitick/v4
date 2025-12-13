@@ -32,10 +32,10 @@ INCOME_INPUT_BUTTONS = INCOME_DIGITS | {"Очистить"}
 
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
-    {"label": "Покушал?", "category": "быт", "percent": 20},
-    {"label": "Инвестиции", "category": "инвестиции", "percent": 20},
-    {"label": "Сбережения", "category": "сбережения", "percent": 20},
-    {"label": "Ну и на хуйню?", "category": "спонтанные траты", "percent": 10},
+    {"label": "бытовые расходы на Тиньк", "category": "быт", "percent": 20},
+    {"label": "Инвестиции на Альфу", "category": "инвестиции", "percent": 20},
+    {"label": "Сбережения на Сбер", "category": "сбережения", "percent": 20},
+    {"label": "спонтанные траты на Яндекс", "category": "спонтанные траты", "percent": 10},
 ]
 
 

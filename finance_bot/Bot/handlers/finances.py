@@ -9,11 +9,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from Bot.database.crud import FinanceDatabase
 from Bot.keyboards.main import (
     back_to_main_keyboard,
+    income_calculator_keyboard,
     main_menu_keyboard,
     purchase_confirmation_keyboard,
     yes_no_inline_keyboard,
 )
-from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.money_states import MoneyState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
@@ -139,8 +139,15 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
         allocation: Allocation details with label and amount.
     """
 
+    label_text = {
+        "Покушал?": "бытовые расходы на Тиньк",
+        "Инвестиции": "Инвестиции на Альфу",
+        "Сбережения": "Сбережения на Сбер",
+        "Ну и на хуйню?": "спонтанные траты на Яндекс",
+    }.get(allocation["label"], allocation["label"])
+
     await message.answer(
-        f"На категорию {allocation['label']} можно направить {allocation['amount']:.2f}. Перевести?",
+        f"На категорию {label_text} можно направить {allocation['amount']:.2f}. Перевести?",
         reply_markup=yes_no_inline_keyboard(),
     )
 

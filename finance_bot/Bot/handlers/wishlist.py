@@ -9,8 +9,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from Bot.database.crud import FinanceDatabase
+from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import (
-    main_menu_keyboard,
     wishlist_categories_keyboard,
     wishlist_reply_keyboard,
     wishlist_reply_keyboard_no_add,
@@ -223,7 +223,10 @@ async def show_purchases(message: Message) -> None:
 
     # Если покупок нет — сразу выходим
     if not purchases:
-        await message.answer("Список покупок пуст.", reply_markup=main_menu_keyboard())
+        await message.answer(
+            "Список покупок пуст.",
+            reply_markup=await build_main_menu_for_user(message.from_user.id),
+        )
         return
 
     # Группируем покупки по "очеловеченным" категориям
@@ -241,7 +244,10 @@ async def show_purchases(message: Message) -> None:
                 f"(куплено {purchase['purchased_at']})"
             )
 
-    await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=await build_main_menu_for_user(message.from_user.id),
+    )
 
 
 @router.message(WishlistState.waiting_for_price)

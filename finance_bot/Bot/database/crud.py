@@ -10,6 +10,14 @@ from typing import Any, Dict, List, Optional
 
 LOGGER = logging.getLogger(__name__)
 DB_PATH = Path(__file__).resolve().parents[2] / "finance.db"
+HOUSEHOLD_QUESTION_CODES = [
+    "phone",
+    "internet",
+    "vpn",
+    "gpt",
+    "yandex_sub",
+    "rent",
+]
 
 
 class FinanceDatabase:
@@ -83,6 +91,18 @@ class FinanceDatabase:
                 price REAL,
                 category TEXT,
                 purchased_at TEXT
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS household_payments (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                month TEXT,
+                question_code TEXT,
+                is_paid INTEGER DEFAULT 0,
+                UNIQUE(user_id, month, question_code)
             )
             """
         )
@@ -299,6 +319,130 @@ class FinanceDatabase:
             LOGGER.info("Added purchase for user %s", user_id)
         except sqlite3.Error as error:
             LOGGER.error("Failed to add purchase for user %s: %s", user_id, error)
+
+    async def household_status_exists(self, user_id: int, month: str) -> bool:
+        """Check if household payment statuses exist for month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT 1 FROM household_payments WHERE user_id = ? AND month = ? LIMIT 1",
+                (user_id, month),
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to check household status for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return False
+
+    async def init_household_questions_for_month(self, user_id: int, month: str) -> None:
+        """Initialize household payment questions for month."""
+
+        try:
+            cursor = self.connection.cursor()
+            for code in HOUSEHOLD_QUESTION_CODES:
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO household_payments (user_id, month, question_code, is_paid)
+                    VALUES (?, ?, ?, 0)
+                    """,
+                    (user_id, month, code),
+                )
+            self.connection.commit()
+            LOGGER.info(
+                "Initialized household questions for user %s month %s", user_id, month
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to init household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+
+    async def mark_household_question_paid(
+        self, user_id: int, month: str, question_code: str
+    ) -> None:
+        """Mark household question as paid."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE household_payments
+                SET is_paid = 1
+                WHERE user_id = ? AND month = ? AND question_code = ?
+                """,
+                (user_id, month, question_code),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Marked household question %s as paid for user %s month %s",
+                question_code,
+                user_id,
+                month,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to mark household question %s paid for user %s month %s: %s",
+                question_code,
+                user_id,
+                month,
+                error,
+            )
+
+    async def get_unpaid_household_questions(self, user_id: int, month: str) -> List[str]:
+        """Get unpaid household question codes for user and month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT question_code
+                FROM household_payments
+                WHERE user_id = ? AND month = ? AND is_paid = 0
+                ORDER BY id
+                """,
+                (user_id, month),
+            )
+            rows = cursor.fetchall()
+            return [row["question_code"] for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to get unpaid household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return []
+
+    async def has_unpaid_household_questions(self, user_id: int, month: str) -> bool:
+        """Return True if unpaid household questions exist for month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT 1
+                FROM household_payments
+                WHERE user_id = ? AND month = ? AND is_paid = 0
+                LIMIT 1
+                """,
+                (user_id, month),
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to check unpaid household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return False
 
     def get_purchases_by_user(self, user_id: int) -> List[Dict[str, Any]]:
         """Get all purchases for user."""

@@ -2,10 +2,12 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 
-def main_menu_keyboard() -> ReplyKeyboardMarkup:
+def main_menu_keyboard(show_household: bool = False) -> ReplyKeyboardMarkup:
     """Create main menu keyboard."""
 
     buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
+    if show_household:
+        buttons.append([KeyboardButton(text="Бытовые платежи")])
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 

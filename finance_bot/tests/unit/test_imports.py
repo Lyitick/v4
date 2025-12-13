@@ -12,6 +12,7 @@ def test_import_handlers() -> None:
 
     import Bot.handlers.start  # noqa: F401
     import Bot.handlers.finances  # noqa: F401
+    import Bot.handlers.household_payments  # noqa: F401
     import Bot.handlers.wishlist  # noqa: F401
     import Bot.handlers.callbacks  # noqa: F401
     import Bot.handlers.common  # noqa: F401

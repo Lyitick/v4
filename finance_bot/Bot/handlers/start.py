@@ -1,12 +1,14 @@
 """Handlers for start and cancel commands."""
 import logging
+import logging
 
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
-from Bot.keyboards.main import back_to_main_keyboard, main_menu_keyboard
+from Bot.handlers.common import build_main_menu_for_user
+from Bot.keyboards.main import back_to_main_keyboard
 
 LOGGER = logging.getLogger(__name__)
 
@@ -18,7 +20,9 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
 
     await state.clear()
     greeting = "Поработаем бл"
-    await message.answer(greeting, reply_markup=main_menu_keyboard())
+    await message.answer(
+        greeting, reply_markup=await build_main_menu_for_user(message.from_user.id)
+    )
     LOGGER.info("User %s started bot", message.from_user.id if message.from_user else "unknown")
 
 
@@ -49,7 +53,10 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     """Handle /cancel command."""
 
     await state.clear()
-    await message.answer("Операция отменена. Вы в главном меню.", reply_markup=main_menu_keyboard())
+    await message.answer(
+        "Операция отменена. Вы в главном меню.",
+        reply_markup=await build_main_menu_for_user(message.from_user.id),
+    )
     LOGGER.info("User %s cancelled current operation", message.from_user.id if message.from_user else "unknown")
 
 
@@ -58,5 +65,8 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
     """Return user to main menu."""
 
     await state.clear()
-    await message.answer("Главное меню", reply_markup=main_menu_keyboard())
+    await message.answer(
+        "Главное меню",
+        reply_markup=await build_main_menu_for_user(message.from_user.id),
+    )
     LOGGER.info("User %s returned to main menu", message.from_user.id if message.from_user else "unknown")

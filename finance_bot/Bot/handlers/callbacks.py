@@ -7,11 +7,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
 
 from Bot.database.crud import FinanceDatabase
+from Bot.handlers.common import build_main_menu_for_user
 from Bot.handlers.finances import (
     _format_savings_summary,
     show_affordable_wishes,
 )
-from Bot.keyboards.main import main_menu_keyboard, wishlist_categories_keyboard
+from Bot.keyboards.main import wishlist_categories_keyboard
 from Bot.states.wishlist_states import WishlistState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
@@ -201,5 +202,8 @@ async def handle_affordable_wishes_later(callback: CallbackQuery, state: FSMCont
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             LOGGER.debug("Failed to clear inline keyboard for affordable wishes", exc_info=True)
-        await callback.message.answer("Хорошо, вернёмся к покупкам позже. Главное меню.", reply_markup=main_menu_keyboard())
+        await callback.message.answer(
+            "Хорошо, вернёмся к покупкам позже. Главное меню.",
+            reply_markup=await build_main_menu_for_user(callback.from_user.id),
+        )
     await callback.answer()

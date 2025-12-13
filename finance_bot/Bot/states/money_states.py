@@ -8,3 +8,9 @@ class MoneyState(StatesGroup):
     waiting_for_amount = State()
     confirm_category = State()
     waiting_for_purchase_confirmation = State()
+
+
+class HouseholdPaymentsState(StatesGroup):
+    """State machine for household payments flow."""
+
+    waiting_for_answer = State()

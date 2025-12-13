@@ -98,6 +98,58 @@ async def _refresh_income_message(
     return new_message.message_id
 
 
+def _build_income_prompt(income_sum: str) -> str:
+    """Build income input prompt."""
+
+    # Отображаем сумму в формате ": <число>"
+    return f": {income_sum}"
+
+
+async def _refresh_income_message(
+    message: Message, income_message_id: Optional[int], income_sum: str
+) -> int:
+    """Update or create income prompt message with current sum.
+
+    Редактируем уже существующее сообщение с подсказкой по сумме.
+    Если id нет (например, первый запуск) — создаём новое.
+    При ошибке редактирования пытаемся удалить старое сообщение и создаём новое,
+    чтобы пользователь видел актуальную сумму.
+    """
+
+    text = _build_income_prompt(income_sum)
+
+    # Если сообщения ещё не было — создаём его
+    if income_message_id is None:
+        new_message = await message.answer(text)
+        return new_message.message_id
+
+    # Пытаемся отредактировать существующее сообщение
+    try:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=income_message_id,
+            text=text,
+        )
+        return income_message_id
+    except Exception as exc:  # noqa: BLE001
+        LOGGER.warning(
+            "Failed to edit income message %s: %s",
+            income_message_id,
+            exc,
+        )
+
+    try:
+        await message.bot.delete_message(
+            chat_id=message.chat.id,
+            message_id=income_message_id,
+        )
+    except Exception:
+        pass
+
+    new_message = await message.answer(text)
+    return new_message.message_id
+
+
 def _to_float(value: Any) -> float:
     """Safely convert value to float."""
 
@@ -160,6 +212,7 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
 async def start_income_flow(message: Message, state: FSMContext) -> None:
     """Start income calculation workflow with calculator keyboard."""
 
+    await delete_welcome_message_if_exists(message, state)
     await state.clear()
     await state.set_state(MoneyState.waiting_for_amount)
 

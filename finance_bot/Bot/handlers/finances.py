@@ -9,11 +9,11 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from Bot.database.crud import FinanceDatabase
 from Bot.keyboards.main import (
     back_to_main_keyboard,
-    income_calculator_keyboard,
     main_menu_keyboard,
     purchase_confirmation_keyboard,
     yes_no_inline_keyboard,
 )
+from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.money_states import MoneyState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 
@@ -37,65 +37,6 @@ distribution_scheme = [
     {"label": "Сбережения", "category": "сбережения", "percent": 20},
     {"label": "Ну и на хуйню?", "category": "спонтанные траты", "percent": 10},
 ]
-
-ALLOCATION_QUESTION_LABELS = {
-    "Покушал?": "бытовые расходы на Тиньк",
-    "Инвестиции": "Инвестиции на Альфу",
-    "Сбережения": "Сбережения на Сбер",
-    "Ну и на хуйню?": "спонтанные траты на Яндекс",
-}
-
-
-def _build_income_prompt(income_sum: str) -> str:
-    """Build income input prompt."""
-
-    # Отображаем сумму в формате ": <число>"
-    return f": {income_sum}"
-
-
-async def _refresh_income_message(
-    message: Message, income_message_id: Optional[int], income_sum: str
-) -> int:
-    """Update or create income prompt message with current sum.
-
-    Редактируем уже существующее сообщение с подсказкой по сумме.
-    Если id нет (например, первый запуск) — создаём новое.
-    При ошибке редактирования пытаемся удалить старое сообщение и создаём новое,
-    чтобы пользователь видел актуальную сумму.
-    """
-
-    text = _build_income_prompt(income_sum)
-
-    # Если сообщения ещё не было — создаём его
-    if income_message_id is None:
-        new_message = await message.answer(text)
-        return new_message.message_id
-
-    # Пытаемся отредактировать существующее сообщение
-    try:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=income_message_id,
-            text=text,
-        )
-        return income_message_id
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning(
-            "Failed to edit income message %s: %s",
-            income_message_id,
-            exc,
-        )
-
-    try:
-        await message.bot.delete_message(
-            chat_id=message.chat.id,
-            message_id=income_message_id,
-        )
-    except Exception:
-        pass
-
-    new_message = await message.answer(text)
-    return new_message.message_id
 
 
 def _build_income_prompt(income_sum: str) -> str:
@@ -198,12 +139,8 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
         allocation: Allocation details with label and amount.
     """
 
-    label_text = ALLOCATION_QUESTION_LABELS.get(
-        allocation["label"], allocation["label"]
-    )
-
     await message.answer(
-        f"На категорию {label_text} можно направить {allocation['amount']:.2f}. Перевести?",
+        f"На категорию {allocation['label']} можно направить {allocation['amount']:.2f}. Перевести?",
         reply_markup=yes_no_inline_keyboard(),
     )
 
@@ -326,6 +263,11 @@ async def _process_income_amount_value(
         message=message,
         allocation=current,
     )
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 @router.message(

@@ -9,3 +9,9 @@ class WishlistState(StatesGroup):
     waiting_for_price = State()
     waiting_for_url = State()
     waiting_for_category = State()
+
+
+class WishlistBytReminderState(StatesGroup):
+    """State machine for BYT reminder flow."""
+
+    waiting_answer = State()

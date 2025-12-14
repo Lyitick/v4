@@ -87,11 +87,11 @@ async def _refresh_income_message(
             text=text,
         )
         return income_message_id
-    except Exception as exc:  # noqa: BLE001
+    except Exception:  # noqa: BLE001
         LOGGER.warning(
-            "Failed to edit income message %s: %s",
+            "Failed to edit income message %s",
             income_message_id,
-            exc,
+            exc_info=True,
         )
 
     try:
@@ -169,8 +169,8 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     # Удаляем сообщение пользователя "Рассчитать доход"
     try:
         await message.delete()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Failed to delete user command message: %s", exc)
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("Failed to delete user command message", exc_info=True)
 
     LOGGER.info(
         "User %s started income calculation",
@@ -203,11 +203,11 @@ async def _process_income_amount_value(
                 chat_id=message.chat.id,
                 message_id=income_question_message_id,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             LOGGER.warning(
-                "Failed to delete income helper message %s: %s",
+                "Failed to delete income helper message %s",
                 income_question_message_id,
-                exc,
+                exc_info=True,
             )
 
     if income_message_id:
@@ -216,11 +216,11 @@ async def _process_income_amount_value(
                 chat_id=message.chat.id,
                 message_id=income_message_id,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             LOGGER.warning(
-                "Failed to delete income helper message %s: %s",
+                "Failed to delete income helper message %s",
                 income_message_id,
-                exc,
+                exc_info=True,
             )
 
     # Считаем распределение по категориям
@@ -374,8 +374,8 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
     # Удаляем сообщение-вопрос с кнопками Да/Нет
     try:
         await query.message.delete()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Failed to delete category question message: %s", exc)
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("Failed to delete category question message", exc_info=True)
 
     new_life_message_id: Optional[int] = life_message_id
 
@@ -388,11 +388,11 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
                     chat_id=query.message.chat.id,
                     message_id=life_message_id,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 LOGGER.warning(
-                    "Failed to delete life message %s: %s",
+                    "Failed to delete life message %s",
                     life_message_id,
-                    exc,
+                    exc_info=True,
                 )
         new_life_message_id = None
 
@@ -415,11 +415,11 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
                     chat_id=query.message.chat.id,
                     message_id=life_message_id,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception:  # noqa: BLE001
                 LOGGER.warning(
-                    "Failed to delete previous life message %s: %s",
+                    "Failed to delete previous life message %s",
                     life_message_id,
-                    exc,
+                    exc_info=True,
                 )
 
         life_msg = await query.message.bot.send_message(
@@ -513,7 +513,7 @@ def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKey
     """Build inline keyboard with purchase buttons for affordable wishes."""
 
     buttons = [
-        [InlineKeyboardButton(text=f"Купил: {wish['name']}", callback_data=f"wish_buy_{wish['id']}")]
+        [InlineKeyboardButton(text=f"{wish['name']}", callback_data=f"wish_buy_{wish['id']}")]
         for wish in wishes
     ]
     buttons.append([InlineKeyboardButton(text="Потом", callback_data="affordable_wishes_later")])

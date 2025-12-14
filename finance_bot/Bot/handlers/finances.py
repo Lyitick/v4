@@ -9,17 +9,32 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from Bot.database.crud import FinanceDatabase
 from Bot.keyboards.main import (
     back_to_main_keyboard,
-    main_menu_keyboard,
     purchase_confirmation_keyboard,
     yes_no_inline_keyboard,
 )
 from Bot.keyboards.calculator import income_calculator_keyboard
+from Bot.handlers.common import build_main_menu_for_user
 from Bot.states.money_states import MoneyState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
+from Bot.utils.savings import find_reached_goal, format_savings_summary
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+
+
+def _message_user_id(message: Message) -> int:
+    """Extract user id from message."""
+
+    return message.from_user.id if message.from_user else message.chat.id
+
+
+def _callback_user_id(callback: CallbackQuery) -> int:
+    """Extract user id from callback."""
+
+    if callback.from_user:
+        return callback.from_user.id
+    return callback.message.chat.id
 
 
 async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
@@ -32,10 +47,10 @@ INCOME_INPUT_BUTTONS = INCOME_DIGITS | {"Очистить"}
 
 distribution_scheme = [
     {"label": "Убил боль?", "category": "долги", "percent": 30},
-    {"label": "Покушал?", "category": "быт", "percent": 20},
-    {"label": "Инвестиции", "category": "инвестиции", "percent": 20},
-    {"label": "Сбережения", "category": "сбережения", "percent": 20},
-    {"label": "Ну и на хуйню?", "category": "спонтанные траты", "percent": 10},
+    {"label": "бытовые расходы на Тиньк", "category": "быт", "percent": 20},
+    {"label": "Инвестиции на Альфу", "category": "инвестиции", "percent": 20},
+    {"label": "Сбережения на Сбер", "category": "сбережения", "percent": 20},
+    {"label": "спонтанные траты на Яндекс", "category": "спонтанные траты", "percent": 10},
 ]
 
 
@@ -103,32 +118,15 @@ def _to_float(value: Any) -> float:
 def _format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
     """Format savings summary for user message."""
 
-    if not savings:
-        return "Пока нет накоплений."
-
-    lines = []
-    for category, data in savings.items():
-        current = data.get("current", 0)
-        goal = data.get("goal", 0)
-        purpose = data.get("purpose", "")
-        line = f"{category}: {current:.2f}"
-        if goal and goal > 0:
-            progress = min(current / goal * 100, 100)
-            extra = f" (цель {goal:.2f} для '{purpose}', прогресс {progress:.1f}%)"
-            line = f"{line}{extra}"
-        lines.append(line)
-    return "\n".join(lines)
+    return format_savings_summary(savings)
 
 
-def _find_reached_goal(savings: Dict[str, Dict[str, Any]]) -> tuple[str, Dict[str, Any]] | tuple[None, None]:
+def _find_reached_goal(
+    savings: Dict[str, Dict[str, Any]]
+) -> tuple[str, Dict[str, Any]] | tuple[None, None]:
     """Find category where goal is reached."""
 
-    for category, data in savings.items():
-        current = data.get("current", 0)
-        goal = data.get("goal", 0)
-        if goal and current >= goal:
-            return category, data
-    return None, None
+    return find_reached_goal(savings)
 
 
 async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, Any]) -> None:
@@ -241,7 +239,7 @@ async def _process_income_amount_value(
     if not allocations:
         await message.answer(
             "Нет категорий для распределения.",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
         )
         await state.clear()
         return
@@ -366,7 +364,7 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
     if not allocations or index >= len(allocations):
         await query.message.answer(
             "Нет категорий для обработки.",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=await build_main_menu_for_user(_callback_user_id(query)),
         )
         await state.clear()
         return
@@ -484,7 +482,10 @@ async def _send_summary_and_goal_prompt(
     lines.append("Текущие накопления:")
     lines.append(summary)
 
-    await message.answer("\n".join(lines), reply_markup=main_menu_keyboard())
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=await build_main_menu_for_user(user_id),
+    )
 
     category, goal_data = _find_reached_goal(savings)
     if category:
@@ -593,13 +594,16 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
         db.set_goal(message.from_user.id, category, 0, "")
         await message.answer(
             f"Поздравляю с покупкой по категории {category}! Сумма {goal_amount:.2f} списана.",
-            reply_markup=main_menu_keyboard(),
+            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
         )
         savings = db.get_user_savings(message.from_user.id)
         summary = _format_savings_summary(savings)
         await message.answer(f"Обновлённые накопления:\n{summary}")
     else:
-        await message.answer("Продолжаем копить!", reply_markup=main_menu_keyboard())
+        await message.answer(
+            "Продолжаем копить!",
+            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+        )
 
     await state.clear()
     LOGGER.info("User %s handled goal decision for category %s", message.from_user.id, category)

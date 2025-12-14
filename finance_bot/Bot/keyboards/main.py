@@ -2,12 +2,16 @@
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 
-def main_menu_keyboard(show_household: bool = False) -> ReplyKeyboardMarkup:
+def main_menu_keyboard(
+    show_household: bool = False, show_test_button: bool = False
+) -> ReplyKeyboardMarkup:
     """Create main menu keyboard."""
 
     buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
     if show_household:
         buttons.append([KeyboardButton(text="Бытовые платежи")])
+    if show_test_button:
+        buttons.append([KeyboardButton(text="12:00")])  # TODO: удалить после тестов
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -61,6 +65,7 @@ def wishlist_categories_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🛠 инвестиции в работу", callback_data="wishlist_cat_tools")],
         [InlineKeyboardButton(text="💸 вклад в себя", callback_data="wishlist_cat_currency")],
         [InlineKeyboardButton(text="✨ кайфы", callback_data="wishlist_cat_magic")],
+        [InlineKeyboardButton(text="БЫТ", callback_data="wishlist_cat_byt")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

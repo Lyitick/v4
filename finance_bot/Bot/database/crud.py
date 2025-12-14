@@ -3,9 +3,13 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from datetime import datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
+
+from Bot.config import settings
+from Bot.utils.datetime_utils import add_one_month, now_tz
 
 
 LOGGER = logging.getLogger(__name__)
@@ -78,7 +82,8 @@ class FinanceDatabase:
                 url TEXT,
                 category TEXT,
                 is_purchased INTEGER,
-                saved_amount REAL DEFAULT 0
+                saved_amount REAL DEFAULT 0,
+                purchased_at TEXT
             )
             """
         )
@@ -106,7 +111,23 @@ class FinanceDatabase:
             )
             """
         )
+        self._add_column_if_missing(cursor, "wishes", "purchased_at", "TEXT")
         self.connection.commit()
+
+    @staticmethod
+    def _column_exists(cursor: sqlite3.Cursor, table: str, column: str) -> bool:
+        """Return True if column exists in table."""
+
+        cursor.execute(f"PRAGMA table_info({table})")
+        return any(row[1] == column for row in cursor.fetchall())
+
+    def _add_column_if_missing(
+        self, cursor: sqlite3.Cursor, table: str, column: str, definition: str
+    ) -> None:
+        """Add column to table if it does not already exist."""
+
+        if not self._column_exists(cursor, table, column):
+            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def get_user_savings(self, user_id: int) -> Dict[str, Dict[str, Any]]:
         """Get all savings for a user.
@@ -210,6 +231,11 @@ class FinanceDatabase:
                 error,
             )
 
+    def decrease_savings(self, user_id: int, category: str, amount: float) -> None:
+        """Decrease savings for category by amount."""
+
+        self.update_saving(user_id, category, -abs(amount))
+
     def set_goal(self, user_id: int, category: str, goal: float, purpose: str) -> None:
         """Set goal and purpose for saving category."""
 
@@ -252,7 +278,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "INSERT INTO wishes (user_id, name, price, url, category, is_purchased, saved_amount) VALUES (?, ?, ?, ?, ?, 0, 0)",
+                "INSERT INTO wishes (user_id, name, price, url, category, is_purchased, saved_amount, purchased_at) VALUES (?, ?, ?, ?, ?, 0, 0, NULL)",
                 (user_id, name, price, url, category),
             )
             self.connection.commit()
@@ -269,7 +295,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, name, price, url, category, is_purchased, saved_amount FROM wishes WHERE user_id = ?",
+                "SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at FROM wishes WHERE user_id = ?",
                 (user_id,),
             )
             rows = cursor.fetchall()
@@ -285,7 +311,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, user_id, name, price, url, category, is_purchased, saved_amount FROM wishes WHERE id = ?",
+                "SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at FROM wishes WHERE id = ?",
                 (wish_id,),
             )
             row = cursor.fetchone()
@@ -295,25 +321,58 @@ class FinanceDatabase:
             LOGGER.error("Failed to fetch wish %s: %s", wish_id, error)
             return None
 
-    def mark_wish_purchased(self, wish_id: int) -> None:
-        """Mark wish as purchased."""
+    def get_active_byt_wishes(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return active BYT wishes for user."""
 
         try:
             cursor = self.connection.cursor()
-            cursor.execute("UPDATE wishes SET is_purchased = 1 WHERE id = ?", (wish_id,))
+            cursor.execute(
+                """
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at
+                FROM wishes
+                WHERE user_id = ? AND category = 'byt' AND (is_purchased = 0 OR is_purchased IS NULL)
+                ORDER BY id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            LOGGER.info("Fetched active BYT wishes for user %s", user_id)
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to fetch BYT wishes for user %s: %s", user_id, error)
+            return []
+
+    def mark_wish_purchased(self, wish_id: int, purchased_at: Optional[datetime] = None) -> None:
+        """Mark wish as purchased with timestamp."""
+
+        try:
+            cursor = self.connection.cursor()
+            purchased_value = (purchased_at or now_tz()).isoformat()
+            cursor.execute(
+                "UPDATE wishes SET is_purchased = 1, purchased_at = ? WHERE id = ?",
+                (purchased_value, wish_id),
+            )
             self.connection.commit()
             LOGGER.info("Marked wish %s as purchased", wish_id)
         except sqlite3.Error as error:
             LOGGER.error("Failed to mark wish %s as purchased: %s", wish_id, error)
 
-    def add_purchase(self, user_id: int, wish_name: str, price: float, category: str) -> None:
+    def add_purchase(
+        self,
+        user_id: int,
+        wish_name: str,
+        price: float,
+        category: str,
+        purchased_at: Optional[datetime] = None,
+    ) -> None:
         """Add purchase record."""
 
         try:
             cursor = self.connection.cursor()
+            purchased_value = (purchased_at or now_tz()).isoformat()
             cursor.execute(
-                "INSERT INTO purchases (user_id, wish_name, price, category, purchased_at) VALUES (?, ?, ?, ?, datetime('now'))",
-                (user_id, wish_name, price, category),
+                "INSERT INTO purchases (user_id, wish_name, price, category, purchased_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, wish_name, price, category, purchased_value),
             )
             self.connection.commit()
             LOGGER.info("Added purchase for user %s", user_id)
@@ -455,10 +514,105 @@ class FinanceDatabase:
             )
             rows = cursor.fetchall()
             LOGGER.info("Fetched purchases for user %s", user_id)
-            return [dict(row) for row in rows]
+            purchases = [dict(row) for row in rows]
+            filtered: list[Dict[str, Any]] = []
+            current_time = now_tz()
+            for purchase in purchases:
+                category = purchase.get("category")
+                if category in {"byt", "БЫТ"}:
+                    timestamp = purchase.get("purchased_at")
+                    if timestamp:
+                        try:
+                            purchase_dt = datetime.fromisoformat(str(timestamp))
+                            if purchase_dt.tzinfo is None:
+                                purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
+                        except ValueError:
+                            continue
+                        if add_one_month(purchase_dt) <= current_time:
+                            continue
+                filtered.append(purchase)
+            return filtered
         except sqlite3.Error as error:
             LOGGER.error("Failed to fetch purchases for user %s: %s", user_id, error)
             return []
+
+    def get_users_with_active_byt_wishes(self) -> List[int]:
+        """Return user ids that have active BYT wishes."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT DISTINCT user_id
+                FROM wishes
+                WHERE category = 'byt' AND (is_purchased = 0 OR is_purchased IS NULL)
+                """
+            )
+            rows = cursor.fetchall()
+            return [int(row["user_id"]) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get users with active BYT wishes: %s", error)
+            return []
+
+    def cleanup_old_byt_purchases(self, now: Optional[datetime] = None) -> None:
+        """Remove BYT purchases older than one month from purchases and wishes."""
+
+        current_time = now or now_tz()
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT id, purchased_at FROM purchases WHERE category = 'byt'"
+            )
+            purchases = cursor.fetchall()
+            ids_to_delete: list[int] = []
+            for purchase in purchases:
+                timestamp = purchase["purchased_at"]
+                if not timestamp:
+                    continue
+                try:
+                    purchase_dt = datetime.fromisoformat(timestamp)
+                    if purchase_dt.tzinfo is None:
+                        purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
+                except ValueError:
+                    continue
+                if add_one_month(purchase_dt) <= current_time:
+                    ids_to_delete.append(int(purchase["id"]))
+
+            if ids_to_delete:
+                cursor.execute(
+                    "DELETE FROM purchases WHERE id IN ({})".format(
+                        ",".join("?" * len(ids_to_delete))
+                    ),
+                    ids_to_delete,
+                )
+
+            cursor.execute(
+                "SELECT id, purchased_at FROM wishes WHERE category = 'byt' AND is_purchased = 1"
+            )
+            wish_rows = cursor.fetchall()
+            wish_ids: list[int] = []
+            for wish in wish_rows:
+                purchased_at = wish["purchased_at"]
+                if not purchased_at:
+                    continue
+                try:
+                    wish_dt = datetime.fromisoformat(purchased_at)
+                    if wish_dt.tzinfo is None:
+                        wish_dt = wish_dt.replace(tzinfo=settings.TIMEZONE)
+                except ValueError:
+                    continue
+                if add_one_month(wish_dt) <= current_time:
+                    wish_ids.append(int(wish["id"]))
+
+            if wish_ids:
+                cursor.execute(
+                    "DELETE FROM wishes WHERE id IN ({})".format(",".join("?" * len(wish_ids))),
+                    wish_ids,
+                )
+            if ids_to_delete or wish_ids:
+                self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to cleanup old BYT purchases: %s", error)
 
     def close(self) -> None:
         """Close database connection."""

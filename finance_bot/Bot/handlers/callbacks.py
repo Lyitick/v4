@@ -1,7 +1,6 @@
 """Callback query handlers."""
 import logging
 from typing import Dict
-
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
@@ -24,6 +23,7 @@ CATEGORY_MAP: Dict[str, str] = {
     "wishlist_cat_tools": "инвестиции в работу",
     "wishlist_cat_currency": "вклад в себя",
     "wishlist_cat_magic": "кайфы",
+    "wishlist_cat_byt": "byt",
 }
 
 
@@ -31,12 +31,13 @@ CATEGORY_MAP: Dict[str, str] = {
 async def handle_category_selection(callback: CallbackQuery, state: FSMContext) -> None:
     """Handle category selection for viewing or adding wishes."""
 
-    category = humanize_wishlist_category(CATEGORY_MAP.get(callback.data, ""))
+    category_code = CATEGORY_MAP.get(callback.data, "")
+    category = humanize_wishlist_category(category_code)
     data = await state.get_data()
     current_state = await state.get_state()
 
     if current_state == WishlistState.waiting_for_category.state:
-        await _finalize_wish(callback, state, category)
+        await _finalize_wish(callback, state, category_code, category)
         return
 
     await _send_wishes_list(callback, category)
@@ -54,13 +55,15 @@ async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(url=None)
     await state.set_state(WishlistState.waiting_for_category)
     await callback.message.edit_text(
-        "Ок, ссылку пропустим. Теперь выбери категорию желания.",
+        "Выбери категорию желания.",
         reply_markup=wishlist_categories_keyboard(),
     )
     await callback.answer()
 
 
-async def _finalize_wish(callback: CallbackQuery, state: FSMContext, category: str) -> None:
+async def _finalize_wish(
+    callback: CallbackQuery, state: FSMContext, category_code: str, humanized_category: str
+) -> None:
     """Finalize wish creation after category selection."""
 
     db = FinanceDatabase()
@@ -70,10 +73,10 @@ async def _finalize_wish(callback: CallbackQuery, state: FSMContext, category: s
         name=data.get("name", ""),
         price=float(data.get("price", 0)),
         url=data.get("url"),
-        category=category,
+        category=category_code,
     )
     await callback.message.edit_text(
-        f"✅ Желание добавлено: {data.get('name')} за {data.get('price')} ({category}). ID: {wish_id}"
+        f"✅ Желание добавлено: {data.get('name')} за {data.get('price')} ({humanized_category}). ID: {wish_id}"
     )
     await state.clear()
     LOGGER.info("User %s added wish %s", callback.from_user.id, wish_id)

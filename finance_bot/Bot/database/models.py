@@ -27,6 +27,7 @@ class Wish:
     category: str
     is_purchased: bool
     saved_amount: float
+    purchased_at: Optional[str]
 
 
 @dataclass

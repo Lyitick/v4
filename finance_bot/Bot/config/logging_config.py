@@ -3,7 +3,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-LOG_FORMAT = "[%(asctime)s] [%(levelname)s] [%(name)s] %(message)s"
+LOG_FORMAT = "[%(asctime)s] [%(levelname)s] %(message)s"
 LOG_LEVEL = logging.INFO
 LOG_FILE = Path(__file__).resolve().parents[2] / "finance_bot.log"
 

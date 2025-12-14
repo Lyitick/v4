@@ -33,8 +33,8 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await _handle_start_common(message, state)
     try:
         await message.delete()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Failed to delete /start message: %s", exc)
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("Failed to delete /start message", exc_info=True)
 
 
 @router.message(F.text == "Поехалиии")
@@ -44,8 +44,8 @@ async def handle_poehali(message: Message, state: FSMContext) -> None:
     await _handle_start_common(message, state)
     try:
         await message.delete()
-    except Exception as exc:  # noqa: BLE001
-        LOGGER.warning("Failed to delete 'Поехалиии' message: %s", exc)
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("Failed to delete 'Поехалиии' message", exc_info=True)
 
 
 @router.message(Command("cancel"))

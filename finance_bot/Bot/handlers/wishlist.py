@@ -7,7 +7,13 @@ from typing import Optional
 
 from aiogram import Bot, F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardRemove,
+)
 from aiogram import Dispatcher
 
 from Bot.database.crud import FinanceDatabase
@@ -192,10 +198,8 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
 
         await state.update_data(price=price)
         await state.set_state(WishlistState.waiting_for_url)
-        await message.answer(
-            "дай ссылочку",
-            reply_markup=wishlist_url_keyboard(),
-        )
+        await message.answer("дай", reply_markup=ReplyKeyboardRemove())
+        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
 
         try:
             await message.delete()

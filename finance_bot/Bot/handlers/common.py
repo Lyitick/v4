@@ -3,13 +3,27 @@ import logging
 
 from aiogram import Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+from aiogram.types import Message, ReplyKeyboardMarkup
 
+from Bot.database.crud import FinanceDatabase
 from Bot.keyboards.main import main_menu_keyboard
+from Bot.utils.datetime_utils import current_month_str
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+
+
+async def build_main_menu_for_user(user_id: int) -> ReplyKeyboardMarkup:
+    """Construct main menu keyboard with optional household button."""
+
+    db = FinanceDatabase()
+    from Bot.handlers.household_payments import reset_household_cycle_if_needed
+
+    await reset_household_cycle_if_needed(user_id, db)
+    month = current_month_str()
+    show_household = await db.has_unpaid_household_questions(user_id, month)
+    return main_menu_keyboard(show_household=show_household)
 
 
 async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
@@ -27,5 +41,5 @@ async def fallback_handler(message: Message, state: FSMContext) -> None:
     LOGGER.info("Fallback triggered. User: %s State: %s Text: %s", message.from_user.id, current_state, message.text)
     await message.answer(
         "Не понял сообщение. Пожалуйста, пользуйся кнопками или командами.",
-        reply_markup=main_menu_keyboard(),
+        reply_markup=await build_main_menu_for_user(message.from_user.id),
     )

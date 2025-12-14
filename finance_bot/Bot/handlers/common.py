@@ -42,7 +42,7 @@ async def fallback_handler(message: Message, state: FSMContext) -> None:
 
     await delete_welcome_message_if_exists(message, state)
     current_state = await state.get_state()
-    LOGGER.info("Fallback triggered. User: %s State: %s Text: %s", message.from_user.id, current_state, message.text)
+    LOGGER.debug("Fallback triggered. User: %s State: %s Text: %s", message.from_user.id, current_state, message.text)
     await message.answer(
         "Не понял сообщение. Пожалуйста, пользуйся кнопками или командами.",
         reply_markup=await build_main_menu_for_user(message.from_user.id),

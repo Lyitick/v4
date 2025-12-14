@@ -513,7 +513,7 @@ def _build_affordable_wishes_keyboard(wishes: List[Dict[str, Any]]) -> InlineKey
     """Build inline keyboard with purchase buttons for affordable wishes."""
 
     buttons = [
-        [InlineKeyboardButton(text=f"Купил: {wish['name']}", callback_data=f"wish_buy_{wish['id']}")]
+        [InlineKeyboardButton(text=f"{wish['name']}", callback_data=f"wish_buy_{wish['id']}")]
         for wish in wishes
     ]
     buttons.append([InlineKeyboardButton(text="Потом", callback_data="affordable_wishes_later")])

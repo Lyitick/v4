@@ -73,7 +73,7 @@ def wishlist_categories_keyboard() -> InlineKeyboardMarkup:
 def wishlist_url_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for skipping wishlist URL input."""
 
-    buttons = [[InlineKeyboardButton(text="Скип", callback_data="wishlist_skip_url")]]
+    buttons = [[InlineKeyboardButton(text="скип", callback_data="wishlist_skip_url")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

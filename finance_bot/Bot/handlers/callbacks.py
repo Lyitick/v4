@@ -55,7 +55,7 @@ async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
     await state.update_data(url=None)
     await state.set_state(WishlistState.waiting_for_category)
     await callback.message.edit_text(
-        "Ок, ссылку пропустим. Теперь выбери категорию желания.",
+        "Выбери категорию желания.",
         reply_markup=wishlist_categories_keyboard(),
     )
     await callback.answer()

@@ -28,6 +28,7 @@ HOUSEHOLD_QUESTIONS: List[Dict[str, int | str]] = [
     {"code": "yandex_sub", "text": "Яндекс подписка 400р?", "amount": 400},
     {"code": "rent", "text": "Квартплата 4000р?", "amount": 4000},
     {"code": "dad_transfer", "text": "Папе скинул?", "amount": 0},
+    {"code": "training_495", "text": "Оплатил тренировки 495?", "amount": 5000},
 ]
 
 

@@ -10596,3 +10596,129 @@ aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: messa
 [2025-12-14 16:31:34,832] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
 [2025-12-14 16:31:35,090] [INFO] [__main__] Bot shutdown complete
 [2025-12-14 16:31:35,092] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-12-14 16:48:21,719] [INFO] [Bot.database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-12-14 16:48:21,720] [INFO] [__main__] Starting bot polling
+[2025-12-14 16:48:21,720] [INFO] [aiogram.dispatcher] Start polling
+[2025-12-14 16:48:21,896] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-12-14 16:48:56,526] [INFO] [Bot.database.crud] Initialized household questions for user 838347504 month 2025-12
+[2025-12-14 16:48:56,682] [INFO] [Bot.handlers.start] User 838347504 started bot
+[2025-12-14 16:48:56,750] [INFO] [aiogram.event] Update id=131880124 is handled. Duration 230 ms by bot id=8440100118
+[2025-12-14 16:49:14,001] [INFO] [Bot.handlers.household_payments] User 838347504 started household payments for month 2025-12
+[2025-12-14 16:49:14,001] [INFO] [aiogram.event] Update id=131880125 is handled. Duration 148 ms by bot id=8440100118
+[2025-12-14 16:49:17,482] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question phone
+[2025-12-14 16:49:17,618] [INFO] [aiogram.event] Update id=131880126 is handled. Duration 193 ms by bot id=8440100118
+[2025-12-14 16:49:21,610] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -700.0
+[2025-12-14 16:49:21,616] [INFO] [Bot.database.crud] Marked household question internet as paid for user 838347504 month 2025-12
+[2025-12-14 16:49:21,617] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question internet
+[2025-12-14 16:49:21,826] [INFO] [aiogram.event] Update id=131880127 is handled. Duration 312 ms by bot id=8440100118
+[2025-12-14 16:49:23,522] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question vpn
+[2025-12-14 16:49:23,762] [INFO] [aiogram.event] Update id=131880128 is handled. Duration 436 ms by bot id=8440100118
+[2025-12-14 16:49:24,816] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question gpt
+[2025-12-14 16:49:24,981] [INFO] [aiogram.event] Update id=131880129 is handled. Duration 218 ms by bot id=8440100118
+[2025-12-14 16:49:27,229] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question yandex_sub
+[2025-12-14 16:49:27,386] [INFO] [aiogram.event] Update id=131880130 is handled. Duration 212 ms by bot id=8440100118
+[2025-12-14 16:49:30,191] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question rent
+[2025-12-14 16:49:30,192] [INFO] [Bot.database.crud] Fetched savings for user 838347504
+[2025-12-14 16:49:30,259] [INFO] [Bot.handlers.household_payments] User 838347504 completed household payments for month 2025-12
+[2025-12-14 16:49:30,259] [INFO] [aiogram.event] Update id=131880131 is handled. Duration 120 ms by bot id=8440100118
+[2025-12-14 16:49:37,369] [INFO] [Bot.handlers.finances] User 838347504 started income calculation
+[2025-12-14 16:49:37,369] [INFO] [aiogram.event] Update id=131880132 is handled. Duration 205 ms by bot id=8440100118
+[2025-12-14 16:49:39,585] [INFO] [aiogram.event] Update id=131880133 is handled. Duration 118 ms by bot id=8440100118
+[2025-12-14 16:49:40,584] [INFO] [aiogram.event] Update id=131880134 is handled. Duration 139 ms by bot id=8440100118
+[2025-12-14 16:49:41,381] [INFO] [aiogram.event] Update id=131880135 is handled. Duration 228 ms by bot id=8440100118
+[2025-12-14 16:49:42,211] [INFO] [aiogram.event] Update id=131880136 is handled. Duration 290 ms by bot id=8440100118
+[2025-12-14 16:49:43,895] [INFO] [aiogram.event] Update id=131880137 is handled. Duration 563 ms by bot id=8440100118
+[2025-12-14 16:49:46,836] [INFO] [Bot.database.crud] Updated saving for user 838347504 category долги by 600.0
+[2025-12-14 16:49:46,911] [INFO] [aiogram.event] Update id=131880138 is handled. Duration 194 ms by bot id=8440100118
+[2025-12-14 16:49:49,948] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by 400.0
+[2025-12-14 16:49:50,060] [INFO] [aiogram.event] Update id=131880139 is handled. Duration 300 ms by bot id=8440100118
+[2025-12-14 16:49:53,007] [INFO] [Bot.database.crud] Updated saving for user 838347504 category инвестиции by 400.0
+[2025-12-14 16:49:53,124] [INFO] [aiogram.event] Update id=131880140 is handled. Duration 335 ms by bot id=8440100118
+[2025-12-14 16:49:55,957] [INFO] [Bot.database.crud] Updated saving for user 838347504 category сбережения by 400.0
+[2025-12-14 16:49:56,023] [INFO] [aiogram.event] Update id=131880141 is handled. Duration 200 ms by bot id=8440100118
+[2025-12-14 16:49:58,887] [INFO] [Bot.database.crud] Updated saving for user 838347504 category спонтанные траты by 200.0
+[2025-12-14 16:49:58,887] [INFO] [Bot.database.crud] Fetched savings for user 838347504
+[2025-12-14 16:49:58,960] [INFO] [Bot.database.crud] Fetched savings map for user 838347504
+[2025-12-14 16:49:58,960] [INFO] [Bot.database.crud] Fetched wishes for user 838347504
+[2025-12-14 16:49:58,960] [INFO] [aiogram.event] Update id=131880142 is handled. Duration 191 ms by bot id=8440100118
+[2025-12-14 16:51:20,594] [INFO] [Bot.handlers.household_payments] User 838347504 started household payments for month 2025-12
+[2025-12-14 16:51:20,594] [INFO] [aiogram.event] Update id=131880143 is handled. Duration 144 ms by bot id=8440100118
+[2025-12-14 16:51:22,403] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -600.0
+[2025-12-14 16:51:22,408] [INFO] [Bot.database.crud] Marked household question phone as paid for user 838347504 month 2025-12
+[2025-12-14 16:51:22,408] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question phone
+[2025-12-14 16:51:22,547] [INFO] [aiogram.event] Update id=131880144 is handled. Duration 239 ms by bot id=8440100118
+[2025-12-14 16:51:27,686] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question vpn
+[2025-12-14 16:51:27,811] [INFO] [aiogram.event] Update id=131880145 is handled. Duration 176 ms by bot id=8440100118
+[2025-12-14 16:51:28,917] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question gpt
+[2025-12-14 16:51:29,058] [INFO] [aiogram.event] Update id=131880146 is handled. Duration 211 ms by bot id=8440100118
+[2025-12-14 16:51:30,595] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question yandex_sub
+[2025-12-14 16:51:30,722] [INFO] [aiogram.event] Update id=131880147 is handled. Duration 176 ms by bot id=8440100118
+[2025-12-14 16:51:32,171] [INFO] [Bot.handlers.household_payments] User 838347504 answered NO for household question rent
+[2025-12-14 16:51:32,171] [INFO] [Bot.database.crud] Fetched savings for user 838347504
+[2025-12-14 16:51:32,289] [INFO] [Bot.handlers.household_payments] User 838347504 completed household payments for month 2025-12
+[2025-12-14 16:51:32,289] [INFO] [aiogram.event] Update id=131880148 is handled. Duration 234 ms by bot id=8440100118
+[2025-12-14 16:51:36,094] [INFO] [Bot.handlers.household_payments] User 838347504 started household payments for month 2025-12
+[2025-12-14 16:51:36,094] [INFO] [aiogram.event] Update id=131880149 is handled. Duration 144 ms by bot id=8440100118
+[2025-12-14 16:51:37,129] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -100.0
+[2025-12-14 16:51:37,135] [INFO] [Bot.database.crud] Marked household question vpn as paid for user 838347504 month 2025-12
+[2025-12-14 16:51:37,135] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question vpn
+[2025-12-14 16:51:37,345] [INFO] [aiogram.event] Update id=131880150 is handled. Duration 310 ms by bot id=8440100118
+[2025-12-14 16:51:38,515] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -2000.0
+[2025-12-14 16:51:38,520] [INFO] [Bot.database.crud] Marked household question gpt as paid for user 838347504 month 2025-12
+[2025-12-14 16:51:38,520] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question gpt
+[2025-12-14 16:51:38,648] [INFO] [aiogram.event] Update id=131880151 is handled. Duration 203 ms by bot id=8440100118
+[2025-12-14 16:51:39,774] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -400.0
+[2025-12-14 16:51:39,779] [INFO] [Bot.database.crud] Marked household question yandex_sub as paid for user 838347504 month 2025-12
+[2025-12-14 16:51:39,779] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question yandex_sub
+[2025-12-14 16:51:39,958] [INFO] [aiogram.event] Update id=131880152 is handled. Duration 258 ms by bot id=8440100118
+[2025-12-14 16:51:41,003] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -3000.0
+[2025-12-14 16:51:41,007] [INFO] [Bot.database.crud] Marked household question rent as paid for user 838347504 month 2025-12
+[2025-12-14 16:51:41,008] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question rent
+[2025-12-14 16:51:41,008] [INFO] [Bot.database.crud] Fetched savings for user 838347504
+[2025-12-14 16:51:41,077] [INFO] [Bot.handlers.household_payments] User 838347504 completed household payments for month 2025-12
+[2025-12-14 16:51:41,077] [INFO] [aiogram.event] Update id=131880153 is handled. Duration 147 ms by bot id=8440100118
+[2025-12-14 16:54:44,681] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-12-14 16:54:44,682] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-12-14 16:54:44,683] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-12-14 16:54:44,944] [INFO] [__main__] Bot shutdown complete
+[2025-12-14 16:54:44,944] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-12-14 17:01:46,458] [INFO] [Bot.database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-12-14 17:01:46,459] [INFO] [__main__] Starting bot polling
+[2025-12-14 17:01:46,459] [INFO] [aiogram.dispatcher] Start polling
+[2025-12-14 17:01:46,637] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-12-14 17:03:06,675] [INFO] [Bot.database.crud] Initialized household questions for user 838347504 month 2025-12
+[2025-12-14 17:03:06,910] [INFO] [Bot.handlers.start] User 838347504 started bot
+[2025-12-14 17:03:06,997] [INFO] [aiogram.event] Update id=131880154 is handled. Duration 348 ms by bot id=8440100118
+[2025-12-14 17:03:08,508] [INFO] [Bot.handlers.household_payments] User 838347504 started household payments for month 2025-12
+[2025-12-14 17:03:08,508] [INFO] [aiogram.event] Update id=131880155 is handled. Duration 161 ms by bot id=8440100118
+[2025-12-14 17:03:09,784] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -600.0
+[2025-12-14 17:03:09,790] [INFO] [Bot.database.crud] Marked household question phone as paid for user 838347504 month 2025-12
+[2025-12-14 17:03:09,790] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question phone
+[2025-12-14 17:03:10,120] [INFO] [aiogram.event] Update id=131880156 is handled. Duration 508 ms by bot id=8440100118
+[2025-12-14 17:03:11,102] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -700.0
+[2025-12-14 17:03:11,107] [INFO] [Bot.database.crud] Marked household question internet as paid for user 838347504 month 2025-12
+[2025-12-14 17:03:11,107] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question internet
+[2025-12-14 17:03:11,311] [INFO] [aiogram.event] Update id=131880157 is handled. Duration 323 ms by bot id=8440100118
+[2025-12-14 17:03:12,165] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -100.0
+[2025-12-14 17:03:12,170] [INFO] [Bot.database.crud] Marked household question vpn as paid for user 838347504 month 2025-12
+[2025-12-14 17:03:12,170] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question vpn
+[2025-12-14 17:03:12,343] [INFO] [aiogram.event] Update id=131880158 is handled. Duration 261 ms by bot id=8440100118
+[2025-12-14 17:03:13,315] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -2000.0
+[2025-12-14 17:03:13,321] [INFO] [Bot.database.crud] Marked household question gpt as paid for user 838347504 month 2025-12
+[2025-12-14 17:03:13,321] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question gpt
+[2025-12-14 17:03:13,467] [INFO] [aiogram.event] Update id=131880159 is handled. Duration 234 ms by bot id=8440100118
+[2025-12-14 17:03:14,572] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -400.0
+[2025-12-14 17:03:14,577] [INFO] [Bot.database.crud] Marked household question yandex_sub as paid for user 838347504 month 2025-12
+[2025-12-14 17:03:14,578] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question yandex_sub
+[2025-12-14 17:03:14,736] [INFO] [aiogram.event] Update id=131880160 is handled. Duration 248 ms by bot id=8440100118
+[2025-12-14 17:03:15,864] [INFO] [Bot.database.crud] Updated saving for user 838347504 category быт by -3000.0
+[2025-12-14 17:03:15,869] [INFO] [Bot.database.crud] Marked household question rent as paid for user 838347504 month 2025-12
+[2025-12-14 17:03:15,869] [INFO] [Bot.handlers.household_payments] User 838347504 answered YES for household question rent
+[2025-12-14 17:03:15,870] [INFO] [Bot.database.crud] Fetched savings for user 838347504
+[2025-12-14 17:03:15,943] [INFO] [Bot.handlers.household_payments] User 838347504 completed household payments for month 2025-12
+[2025-12-14 17:03:15,944] [INFO] [aiogram.event] Update id=131880161 is handled. Duration 149 ms by bot id=8440100118
+[2025-12-14 17:18:36,007] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-12-14 17:18:36,009] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-12-14 17:18:36,009] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-12-14 17:18:36,263] [INFO] [__main__] Bot shutdown complete
+[2025-12-14 17:18:36,264] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'

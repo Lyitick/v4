@@ -26,9 +26,12 @@ HOUSEHOLD_QUESTIONS: List[Dict[str, int | str]] = [
     {"code": "vpn", "text": "VPN 100р?", "amount": 100},
     {"code": "gpt", "text": "GPT 2000р?", "amount": 2000},
     {"code": "yandex_sub", "text": "Яндекс подписка 400р?", "amount": 400},
-    {"code": "rent", "text": "Квартплата 4000р?", "amount": 4000},
-    {"code": "dad_transfer", "text": "Папе скинул?", "amount": 0},
-    {"code": "training_495", "text": "Оплатил тренировки 495?", "amount": 5000},
+    {
+        "code": "rent",
+        "text": "Квартплата 4000р? Папе скинул?",
+        "amount": 4000,
+    },
+    {"code": "training_495", "text": "Оплатил тренировки 495 ?", "amount": 5000},
 ]
 
 
@@ -39,9 +42,6 @@ async def reset_household_cycle_if_needed(
 
     current = now or datetime.now(tz=settings.TIMEZONE)
     month = current_month_str(current)
-    exists = await db.household_status_exists(user_id, month)
-    if exists:
-        return
 
     threshold = datetime(current.year, current.month, 6, 12, 0, tzinfo=settings.TIMEZONE)
     if current >= threshold:

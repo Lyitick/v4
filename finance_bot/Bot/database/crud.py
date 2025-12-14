@@ -21,6 +21,7 @@ HOUSEHOLD_QUESTION_CODES = [
     "gpt",
     "yandex_sub",
     "rent",
+    "training_495",
 ]
 
 
@@ -411,6 +412,14 @@ class FinanceDatabase:
                     """,
                     (user_id, month, code),
                 )
+            placeholders = ",".join(["?"] * len(HOUSEHOLD_QUESTION_CODES))
+            cursor.execute(
+                f"""
+                DELETE FROM household_payments
+                WHERE user_id = ? AND month = ? AND question_code NOT IN ({placeholders})
+                """,
+                (user_id, month, *HOUSEHOLD_QUESTION_CODES),
+            )
             self.connection.commit()
             LOGGER.info(
                 "Initialized household questions for user %s month %s", user_id, month

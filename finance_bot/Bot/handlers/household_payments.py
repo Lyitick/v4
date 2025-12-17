@@ -31,7 +31,7 @@ HOUSEHOLD_QUESTIONS: List[Dict[str, int | str]] = [
         "text": "Квартплата 4000р? Папе скинул?",
         "amount": 4000,
     },
-    {"code": "training_495", "text": "Оплатил тренировки 495 ?", "amount": 5000},
+    {"code": "training_495", "text": "Оплатил тренировки 495 - 5000р?", "amount": 5000},
 ]
 
 

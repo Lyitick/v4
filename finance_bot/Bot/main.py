@@ -20,7 +20,7 @@ from aiogram.client.default import DefaultBotProperties
 from Bot.config.settings import get_settings
 from Bot.database.crud import FinanceDatabase
 from Bot.handlers import callbacks, common, finances, household_payments, start, wishlist
-from Bot.handlers.wishlist import run_byt_wishlist_reminders, set_reminder_dispatcher
+from Bot.handlers.wishlist import run_byt_wishlist_reminders
 from Bot.utils.logging import init_logging
 
 
@@ -60,7 +60,7 @@ async def _run_byt_scheduler(bot: Bot, db: FinanceDatabase, timezone: ZoneInfo) 
         now = datetime.now(tz=timezone)
         sleep_for = _seconds_until_next_reminder(now)
         await asyncio.sleep(sleep_for)
-        await run_byt_wishlist_reminders(bot, db)
+        await run_byt_wishlist_reminders(bot, db, run_time=datetime.now(tz=timezone))
 
 
 async def main() -> None:
@@ -77,7 +77,6 @@ async def main() -> None:
     dp = Dispatcher()
 
     db = FinanceDatabase()
-    set_reminder_dispatcher(dp)
     register_routers(dp)
 
     reminder_task = asyncio.create_task(

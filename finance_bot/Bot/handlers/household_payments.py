@@ -1,6 +1,7 @@
 """Handlers for household payments scenario."""
 from datetime import datetime
 import logging
+import time
 from typing import Dict, List, Optional
 
 from aiogram import F, Router
@@ -11,28 +12,19 @@ from Bot.config import settings
 from Bot.database.crud import FinanceDatabase
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.household import household_yes_no_keyboard
-from Bot.keyboards.main import back_to_main_keyboard
-from Bot.states.money_states import HouseholdPaymentsState
+from Bot.keyboards.main import back_to_main_keyboard, income_calculator_keyboard
+from Bot.keyboards.settings import (
+    household_remove_keyboard,
+    household_settings_inline_keyboard,
+    settings_menu_keyboard,
+)
+from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router(name="household_payments")
-
-HOUSEHOLD_QUESTIONS: List[Dict[str, int | str]] = [
-    {"code": "phone", "text": "Телефон 600р?", "amount": 600},
-    {"code": "internet", "text": "Интернет 700р?", "amount": 700},
-    {"code": "vpn", "text": "VPN 100р?", "amount": 100},
-    {"code": "gpt", "text": "GPT 2000р?", "amount": 2000},
-    {"code": "yandex_sub", "text": "Яндекс подписка 400р?", "amount": 400},
-    {
-        "code": "rent",
-        "text": "Квартплата 4000р? Папе скинул?",
-        "amount": 4000,
-    },
-    {"code": "training_495", "text": "Оплатил тренировки 495 - 5000р?", "amount": 5000},
-]
 
 
 async def reset_household_cycle_if_needed(
@@ -48,33 +40,244 @@ async def reset_household_cycle_if_needed(
         await db.init_household_questions_for_month(user_id, month)
 
 
-async def get_first_unpaid_question_index(user_id: int, month: str, db: FinanceDatabase) -> Optional[int]:
-    """Return first unpaid question index for user/month."""
-
-    unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
-    for index, question in enumerate(HOUSEHOLD_QUESTIONS):
-        if question["code"] in unpaid_codes:
-            return index
+def _get_first_unpaid_item(
+    items: List[Dict[str, int | str]], unpaid_set: set[str]
+) -> Optional[Dict[str, int | str]]:
+    for item in items:
+        if item.get("code") in unpaid_set:
+            return item
     return None
 
 
-async def get_next_unpaid_question_index(
-    start_index: int, user_id: int, month: str, db: FinanceDatabase
-) -> Optional[int]:
-    """Return next unpaid question index after given start."""
-
-    unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
-    for index in range(start_index + 1, len(HOUSEHOLD_QUESTIONS)):
-        if HOUSEHOLD_QUESTIONS[index]["code"] in unpaid_codes:
-            return index
+def _get_next_unpaid_item(
+    items: List[Dict[str, int | str]], current_code: str, unpaid_set: set[str]
+) -> Optional[Dict[str, int | str]]:
+    found_current = False
+    for item in items:
+        if found_current and item.get("code") in unpaid_set:
+            return item
+        if item.get("code") == current_code:
+            found_current = True
     return None
 
 
-def _get_question_by_code(code: str) -> Optional[Dict[str, int | str]]:
-    for question in HOUSEHOLD_QUESTIONS:
-        if question["code"] == code:
-            return question
-    return None
+def _format_household_items(items: List[Dict[str, int | str]]) -> str:
+    if not items:
+        return "Список платежей пуст."
+
+    lines = ["Текущий список платежей:"]
+    for index, item in enumerate(items, start=1):
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        if amount is not None:
+            lines.append(f"{index}) {title} — {amount}")
+        else:
+            lines.append(f"{index}) {title}")
+    return "\n".join(lines)
+
+
+async def _send_household_settings_overview(
+    message: Message, db: FinanceDatabase, user_id: int
+) -> None:
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+    await message.answer(
+        _format_household_items(items),
+        reply_markup=household_settings_inline_keyboard(),
+    )
+
+
+@router.message(F.text == "⚙️")
+async def open_settings(message: Message, state: FSMContext) -> None:
+    """Open settings menu."""
+
+    if message.from_user.id != settings.ADMIN_ID:
+        await message.answer(
+            "Что-то пошло не так. Вернёмся в главное меню.",
+            reply_markup=await build_main_menu_for_user(message.from_user.id),
+        )
+        return
+
+    await state.clear()
+    await message.answer("Настройки", reply_markup=settings_menu_keyboard())
+
+
+@router.message(F.text == "⚙️ Бытовые платежи ⚙️")
+async def open_household_settings(message: Message, state: FSMContext) -> None:
+    """Open household payments settings menu."""
+
+    if message.from_user.id != settings.ADMIN_ID:
+        await message.answer(
+            "Что-то пошло не так. Вернёмся в главное меню.",
+            reply_markup=await build_main_menu_for_user(message.from_user.id),
+        )
+        return
+
+    await state.clear()
+    db = FinanceDatabase()
+    await message.answer(
+        "⚙️ Бытовые платежи ⚙️", reply_markup=settings_menu_keyboard()
+    )
+    await _send_household_settings_overview(message, db, message.from_user.id)
+
+
+@router.callback_query(F.data == "hh_set:add")
+async def household_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    """Prompt for new household payment title."""
+
+    await callback.answer()
+    if callback.from_user.id != settings.ADMIN_ID:
+        return
+
+    await state.clear()
+    await state.set_state(HouseholdSettingsState.waiting_for_title)
+    await callback.message.answer("Введи название платежа")
+
+
+@router.message(HouseholdSettingsState.waiting_for_title)
+async def household_add_set_title(message: Message, state: FSMContext) -> None:
+    """Handle title input for new household payment."""
+
+    title = (message.text or "").strip()
+    if not title:
+        await message.answer("Нужно ввести название платежа.")
+        return
+
+    await state.update_data(title=title)
+    await state.set_state(HouseholdSettingsState.waiting_for_amount)
+
+    question = await message.answer(
+        "Введи сумму (используй кнопки ниже).",
+        reply_markup=income_calculator_keyboard(),
+    )
+    prompt = await message.answer(": 0")
+
+    await state.update_data(
+        amount_sum="0",
+        amount_message_id=prompt.message_id,
+        amount_question_message_id=question.message_id,
+    )
+
+
+@router.message(
+    HouseholdSettingsState.waiting_for_amount,
+    F.text.in_({"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "Очистить", "✅ Газ"}),
+)
+async def household_add_amount_calc(message: Message, state: FSMContext) -> None:
+    """Handle calculator input for new household payment amount."""
+
+    data = await state.get_data()
+    current_sum = str(data.get("amount_sum", "0"))
+    amount_message_id = data.get("amount_message_id")
+
+    if message.text == "Очистить":
+        new_sum = "0"
+    elif message.text == "✅ Газ":
+        amount_str = current_sum.strip()
+        if not amount_str:
+            await message.answer("Нужно ввести число. Попробуй снова.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        try:
+            amount = int(amount_str)
+        except (TypeError, ValueError):
+            await message.answer("Нужно ввести число. Попробуй снова.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        if amount <= 0:
+            await message.answer("Сумма должна быть больше нуля. Попробуй снова.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        user_id = message.from_user.id
+        db = FinanceDatabase()
+        position = db.get_next_household_position(user_id)
+        title = str(data.get("title", "")).strip() or "Платёж"
+        code = f"custom_{time.time_ns()}"
+        text = f"{title} {amount}р?"
+        db.add_household_payment_item(user_id, code, text, amount, position)
+        await reset_household_cycle_if_needed(user_id, db)
+        await state.clear()
+        await message.answer("Платёж добавлен.", reply_markup=settings_menu_keyboard())
+        await _send_household_settings_overview(message, db, user_id)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
+
+    if amount_message_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=amount_message_id,
+                text=f": {new_sum}",
+            )
+        except Exception:
+            pass
+
+    await state.update_data(amount_sum=new_sum, amount_message_id=amount_message_id)
+
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+@router.callback_query(F.data == "hh_set:del")
+async def household_remove_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show list of household payments for removal."""
+
+    await callback.answer()
+    if callback.from_user.id != settings.ADMIN_ID:
+        return
+
+    await state.clear()
+    db = FinanceDatabase()
+    db.ensure_household_items_seeded(callback.from_user.id)
+    items = db.list_active_household_items(callback.from_user.id)
+    if not items:
+        await callback.message.answer("Список платежей пуст.")
+        return
+
+    await callback.message.answer(
+        "Выбери платеж для удаления:",
+        reply_markup=household_remove_keyboard(items),
+    )
+
+
+@router.callback_query(F.data.startswith("hh_set:remove:"))
+async def household_remove_item(callback: CallbackQuery, state: FSMContext) -> None:
+    """Deactivate selected household payment item."""
+
+    await callback.answer()
+    if callback.from_user.id != settings.ADMIN_ID:
+        return
+
+    parts = callback.data.split(":") if callback.data else []
+    if len(parts) != 3:
+        return
+    code = parts[2]
+    db = FinanceDatabase()
+    db.deactivate_household_payment_item(callback.from_user.id, code)
+    await reset_household_cycle_if_needed(callback.from_user.id, db)
+    await _send_household_settings_overview(callback.message, db, callback.from_user.id)
 
 
 @router.message(F.text == "Бытовые платежи")
@@ -85,10 +288,14 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
     db = FinanceDatabase()
 
     await reset_household_cycle_if_needed(user_id, db)
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
     month = current_month_str()
-    index = await get_first_unpaid_question_index(user_id, month, db)
+    unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
+    unpaid_set: set[str] = set(unpaid_codes)
+    first_item = _get_first_unpaid_item(items, unpaid_set)
 
-    if index is None:
+    if first_item is None:
         await state.clear()
         await message.answer(
             "Все бытовые платежи на этот месяц уже учтены.",
@@ -98,14 +305,14 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
         return
 
     await state.set_state(HouseholdPaymentsState.waiting_for_answer)
-    await state.update_data(current_index=index, month=month)
+    await state.update_data(current_code=first_item["code"], month=month)
 
     await message.answer(
         "Используй кнопку ⏪ На главную, чтобы выйти.", reply_markup=back_to_main_keyboard()
     )
-    question = HOUSEHOLD_QUESTIONS[index]
     await message.answer(
-        question["text"], reply_markup=household_yes_no_keyboard(question["code"])
+        str(first_item.get("text", "")),
+        reply_markup=household_yes_no_keyboard(str(first_item.get("code", ""))),
     )
     LOGGER.info("User %s started household payments for month %s", user_id, month)
 
@@ -130,10 +337,11 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         return
 
     month = data.get("month")
-    current_index = int(data.get("current_index", 0))
+    current_code = data.get("current_code")
     user_id = callback.from_user.id
     db = FinanceDatabase()
-    question = _get_question_by_code(question_code)
+    db.ensure_household_items_seeded(user_id)
+    question = db.get_household_item_by_code(user_id, question_code)
 
     if not month or question is None:
         await state.clear()
@@ -150,9 +358,12 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     else:
         LOGGER.info("User %s answered NO for household question %s", user_id, question_code)
 
-    next_index = await get_next_unpaid_question_index(current_index, user_id, month, db)
+    unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
+    unpaid_set: set[str] = set(unpaid_codes)
+    items = db.list_active_household_items(user_id)
+    next_question = _get_next_unpaid_item(items, current_code or question_code, unpaid_set)
 
-    if next_index is None:
+    if next_question is None:
         await state.clear()
         savings = db.get_user_savings(user_id)
         summary = format_savings_summary(savings)
@@ -165,13 +376,12 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         )
         return
 
-    await state.update_data(current_index=next_index)
-    next_question = HOUSEHOLD_QUESTIONS[next_index]
+    await state.update_data(current_code=next_question["code"])
     try:
         await callback.message.edit_reply_markup(reply_markup=None)
     except Exception:
         LOGGER.debug("Failed to clear inline keyboard for household question", exc_info=True)
     await callback.message.answer(
-        next_question["text"],
-        reply_markup=household_yes_no_keyboard(next_question["code"]),
+        str(next_question.get("text", "")),
+        reply_markup=household_yes_no_keyboard(str(next_question.get("code", ""))),
     )

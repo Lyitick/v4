@@ -3,13 +3,17 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 
 
 def main_menu_keyboard(
-    show_household: bool = False, show_test_button: bool = False
+    show_household: bool = False,
+    show_test_button: bool = False,
+    show_settings: bool = False,
 ) -> ReplyKeyboardMarkup:
     """Create main menu keyboard."""
 
     buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
     if show_household:
         buttons.append([KeyboardButton(text="Бытовые платежи")])
+    if show_settings:
+        buttons.append([KeyboardButton(text="⚙️")])
     if show_test_button:
         buttons.append([KeyboardButton(text="12:00")])  # TODO: удалить после тестов
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)

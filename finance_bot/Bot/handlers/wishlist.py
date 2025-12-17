@@ -370,8 +370,6 @@ async def run_byt_wishlist_reminders(
     for uid in user_ids:
         items = db.list_active_byt_items_for_reminder(uid, now_dt)
         if not items:
-            if is_evening or forced:
-                await bot.send_message(uid, "Напоминание: проверь бытовые покупки.")
             continue
 
         keyboard = _build_byt_items_keyboard(items)
@@ -402,6 +400,32 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
     except ValueError:
         await callback.answer("Некорректный элемент.", show_alert=True)
         return
+
+    price = float(wish.get("price", 0) or 0)
+    purchase_time = now_tz()
+    db.decrease_savings(callback.from_user.id, "быт", price)
+    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
+    db.add_purchase(
+        callback.from_user.id,
+        wish.get("name", ""),
+        price,
+        humanize_wishlist_category(wish.get("category", "")),
+        purchased_at=purchase_time,
+    )
+
+    await callback.answer()
+    if callback.message:
+        await _refresh_byt_reminder_message(
+            callback.bot,
+            callback.message.chat.id,
+            callback.message.message_id,
+            callback.from_user.id,
+        )
+
+
+@router.callback_query(F.data == "byt_defer_menu")
+async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show BYT items to choose which to defer."""
 
     db = FinanceDatabase()
     wish = db.get_wish(item_id)
@@ -482,7 +506,12 @@ async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer()
     await callback.message.answer("На сколько дней отложить?")
     prompt = await callback.message.answer(": 0", reply_markup=income_calculator_keyboard())
-    await state.update_data(defer_message_id=prompt.message_id)
+    await state.update_data(
+        defer_display_chat_id=callback.message.chat.id
+        if callback.message
+        else callback.from_user.id,
+        defer_display_message_id=prompt.message_id,
+    )
 
 
 @router.message(
@@ -509,7 +538,8 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     current_sum = str(data.get("defer_days_str", "0"))
-    message_id_to_edit = data.get("defer_message_id")
+    display_chat_id = data.get("defer_display_chat_id", message.chat.id)
+    display_message_id = data.get("defer_display_message_id")
 
     if message.text == "Очистить":
         new_sum = "0"
@@ -566,18 +596,34 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
         else:
             new_sum = current_sum + message.text
 
-    if message_id_to_edit:
+    new_display_message_id = display_message_id
+    new_display_chat_id = display_chat_id
+    if display_message_id:
         try:
             await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=int(message_id_to_edit),
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
                 text=f": {new_sum}",
             )
+        except Exception:
+            try:
+                prompt = await message.answer(f": {new_sum}")
+                new_display_message_id = prompt.message_id
+                new_display_chat_id = message.chat.id
+            except Exception:
+                pass
+    else:
+        try:
+            prompt = await message.answer(f": {new_sum}")
+            new_display_message_id = prompt.message_id
+            new_display_chat_id = message.chat.id
         except Exception:
             pass
 
     await state.update_data(
-        defer_days_str=new_sum, defer_message_id=message_id_to_edit
+        defer_days_str=new_sum,
+        defer_display_message_id=new_display_message_id,
+        defer_display_chat_id=new_display_chat_id,
     )
 
     try:

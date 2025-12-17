@@ -15,3 +15,9 @@ class WishlistBytReminderState(StatesGroup):
     """State machine for BYT reminder flow."""
 
     waiting_answer = State()
+
+
+class BytDeferState(StatesGroup):
+    """State machine for deferring BYT wishlist items."""
+
+    waiting_for_days = State()

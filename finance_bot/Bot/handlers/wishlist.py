@@ -401,32 +401,6 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
         await callback.answer("Некорректный элемент.", show_alert=True)
         return
 
-    price = float(wish.get("price", 0) or 0)
-    purchase_time = now_tz()
-    db.decrease_savings(callback.from_user.id, "быт", price)
-    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
-    db.add_purchase(
-        callback.from_user.id,
-        wish.get("name", ""),
-        price,
-        humanize_wishlist_category(wish.get("category", "")),
-        purchased_at=purchase_time,
-    )
-
-    await callback.answer()
-    if callback.message:
-        await _refresh_byt_reminder_message(
-            callback.bot,
-            callback.message.chat.id,
-            callback.message.message_id,
-            callback.from_user.id,
-        )
-
-
-@router.callback_query(F.data == "byt_defer_menu")
-async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    """Show BYT items to choose which to defer."""
-
     db = FinanceDatabase()
     wish = db.get_wish(item_id)
     if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
@@ -464,7 +438,13 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
     items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
     if not items:
         await state.clear()
-        await callback.answer("Нет активных позиций.", show_alert=True)
+        if callback.message:
+            await callback.message.answer("Нет бытовых покупок для отложки.")
+        else:
+            await callback.bot.send_message(
+                callback.from_user.id, "Нет бытовых покупок для отложки."
+            )
+        await callback.answer()
         return
 
     keyboard = _build_byt_defer_keyboard(items)

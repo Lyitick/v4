@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
@@ -84,7 +84,8 @@ class FinanceDatabase:
                 category TEXT,
                 is_purchased INTEGER,
                 saved_amount REAL DEFAULT 0,
-                purchased_at TEXT
+                purchased_at TEXT,
+                deferred_until TEXT
             )
             """
         )
@@ -100,6 +101,7 @@ class FinanceDatabase:
             )
             """
         )
+        self._add_column_if_missing(cursor, "wishes", "deferred_until", "TEXT")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS household_payments (
@@ -466,7 +468,11 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at FROM wishes WHERE user_id = ?",
+                """
+                SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                FROM wishes
+                WHERE user_id = ?
+                """,
                 (user_id,),
             )
             rows = cursor.fetchall()
@@ -482,7 +488,11 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at FROM wishes WHERE id = ?",
+                """
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                FROM wishes
+                WHERE id = ?
+                """,
                 (wish_id,),
             )
             row = cursor.fetchone()
@@ -499,7 +509,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
                 FROM wishes
                 WHERE user_id = ? AND category = 'byt' AND (is_purchased = 0 OR is_purchased IS NULL)
                 ORDER BY id
@@ -513,6 +523,63 @@ class FinanceDatabase:
             LOGGER.error("Failed to fetch BYT wishes for user %s: %s", user_id, error)
             return []
 
+    def list_active_byt_items_for_reminder(
+        self, user_id: int, now_dt: datetime
+    ) -> List[Dict[str, Any]]:
+        """Return BYT wishlist items available for reminders at given time."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                FROM wishes
+                WHERE user_id = ?
+                  AND category = 'byt'
+                  AND (is_purchased = 0 OR is_purchased IS NULL)
+                  AND (deferred_until IS NULL OR deferred_until <= ?)
+                ORDER BY id
+                """,
+                (user_id, now_dt.isoformat()),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch BYT reminder wishes for user %s: %s", user_id, error
+            )
+            return []
+
+    def set_wishlist_item_deferred_until(
+        self, user_id: int, item_id: int, deferred_until_iso: Optional[str]
+    ) -> None:
+        """Set deferred_until for wishlist item."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE wishes
+                SET deferred_until = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (deferred_until_iso, item_id, user_id),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Set deferred_until for wish %s user %s to %s",
+                item_id,
+                user_id,
+                deferred_until_iso,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to set deferred_until for wish %s user %s: %s",
+                item_id,
+                user_id,
+                error,
+            )
+
     def mark_wish_purchased(self, wish_id: int, purchased_at: Optional[datetime] = None) -> None:
         """Mark wish as purchased with timestamp."""
 
@@ -520,7 +587,11 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             purchased_value = (purchased_at or now_tz()).isoformat()
             cursor.execute(
-                "UPDATE wishes SET is_purchased = 1, purchased_at = ? WHERE id = ?",
+                """
+                UPDATE wishes
+                SET is_purchased = 1, purchased_at = ?, deferred_until = NULL
+                WHERE id = ?
+                """,
                 (purchased_value, wish_id),
             )
             self.connection.commit()

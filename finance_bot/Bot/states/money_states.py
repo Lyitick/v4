@@ -14,3 +14,10 @@ class HouseholdPaymentsState(StatesGroup):
     """State machine for household payments flow."""
 
     waiting_for_answer = State()
+
+
+class HouseholdSettingsState(StatesGroup):
+    """State machine for household payments settings."""
+
+    waiting_for_title = State()
+    waiting_for_amount = State()

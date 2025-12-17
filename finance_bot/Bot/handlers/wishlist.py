@@ -460,18 +460,22 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
     """Show BYT items to choose which to defer."""
 
     db = FinanceDatabase()
-    items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_tz())
+    now_dt = now_tz()
+    items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
     if not items:
+        await state.clear()
         await callback.answer("Нет активных позиций.", show_alert=True)
         return
 
     keyboard = _build_byt_defer_keyboard(items)
+    await state.clear()
     if callback.message:
         try:
             await callback.message.edit_text("ЧТО?", reply_markup=keyboard)
         except Exception:
             await callback.message.answer("ЧТО?", reply_markup=keyboard)
-    await state.clear()
+    else:
+        await callback.bot.send_message(callback.from_user.id, "ЧТО?", reply_markup=keyboard)
     await callback.answer()
 
 

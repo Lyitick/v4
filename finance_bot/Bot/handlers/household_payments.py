@@ -6,13 +6,14 @@ from typing import Dict, List, Optional
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from Bot.config import settings
 from Bot.database.crud import FinanceDatabase
 from Bot.handlers.common import build_main_menu_for_user
+from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.keyboards.household import household_yes_no_keyboard
-from Bot.keyboards.main import back_to_main_keyboard, income_calculator_keyboard
+from Bot.keyboards.main import back_to_main_keyboard
 from Bot.keyboards.settings import (
     household_remove_keyboard,
     household_settings_inline_keyboard,
@@ -209,7 +210,12 @@ async def household_add_amount_calc(message: Message, state: FSMContext) -> None
         db.add_household_payment_item(user_id, code, text, amount, position)
         await reset_household_cycle_if_needed(user_id, db)
         await state.clear()
-        await message.answer("Платёж добавлен.", reply_markup=settings_menu_keyboard())
+        await message.answer(
+            "Платёж добавлен.", reply_markup=ReplyKeyboardRemove()
+        )
+        await message.answer(
+            "⚙️ Бытовые платежи ⚙️", reply_markup=settings_menu_keyboard()
+        )
         await _send_household_settings_overview(message, db, user_id)
         try:
             await message.delete()

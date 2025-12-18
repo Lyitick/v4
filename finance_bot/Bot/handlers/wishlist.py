@@ -365,6 +365,8 @@ async def run_byt_wishlist_reminders(
     if not user_ids:
         return
 
+    is_evening = now_dt.hour == 18
+
     for uid in user_ids:
         items = db.list_active_byt_items_for_reminder(uid, now_dt)
         if not items:

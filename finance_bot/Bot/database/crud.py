@@ -1018,6 +1018,11 @@ class FinanceDatabase:
                 "Failed to update byt_defer_max_days for user %s: %s", user_id, error
             )
 
+    def update_byt_defer_max_days(self, user_id: int, days: int) -> None:
+        """Alias for set_byt_defer_max_days for compatibility."""
+
+        self.set_byt_defer_max_days(user_id, days)
+
     def get_wishlist_category_by_id(
         self, user_id: int, category_id: int
     ) -> Optional[Dict[str, Any]]:
@@ -1553,6 +1558,32 @@ class FinanceDatabase:
                 error,
             )
             return False
+
+    async def reset_household_questions_for_month(self, user_id: int, month: str) -> None:
+        """Reset household payment progress for a specific month."""
+
+        try:
+            await self.init_household_questions_for_month(user_id, month)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE household_payments
+                SET is_paid = 0
+                WHERE user_id = ? AND month = ?
+                """,
+                (user_id, month),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Reset household questions for user %s month %s", user_id, month
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to reset household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
 
     def get_purchases_by_user(self, user_id: int) -> List[Dict[str, Any]]:
         """Get purchases for user honoring retention settings."""

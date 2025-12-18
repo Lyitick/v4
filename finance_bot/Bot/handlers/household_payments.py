@@ -23,6 +23,7 @@ from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsSta
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.ui_cleanup import ui_register_message
+from Bot.handlers.wishlist import run_byt_wishlist_reminders
 
 LOGGER = logging.getLogger(__name__)
 
@@ -310,6 +311,15 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
         reply_markup=household_yes_no_keyboard(str(first_item.get("code", ""))),
     )
     LOGGER.info("User %s started household payments for month %s", user_id, month)
+
+
+@router.message(F.text == "Проверить быт")
+async def trigger_household_notifications(message: Message, state: FSMContext) -> None:
+    """Trigger BYT purchases check (household wishlist) as if timer fired."""
+
+    user_id = message.from_user.id
+    db = FinanceDatabase()
+    await run_byt_wishlist_reminders(message.bot, db, user_id=user_id)
 
 
 @router.callback_query(F.data.startswith("household:"))

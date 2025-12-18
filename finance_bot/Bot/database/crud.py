@@ -1582,6 +1582,39 @@ class FinanceDatabase:
             )
             return False
 
+    async def should_show_household_payments_button(
+        self, user_id: int, month: str
+    ) -> bool:
+        """Return True if any active household payment is unpaid for the month."""
+
+        try:
+            self.ensure_household_items_seeded(user_id)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT 1
+                FROM household_payment_items i
+                LEFT JOIN household_payments p
+                    ON p.user_id = i.user_id
+                    AND p.month = ?
+                    AND p.question_code = i.code
+                WHERE i.user_id = ?
+                  AND i.is_active = 1
+                  AND (p.is_paid IS NULL OR p.is_paid = 0)
+                LIMIT 1
+                """,
+                (month, user_id),
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to decide household payments button for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return False
+
     async def reset_household_questions_for_month(self, user_id: int, month: str) -> None:
         """Reset household payment progress for a specific month."""
 

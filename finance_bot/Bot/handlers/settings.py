@@ -241,7 +241,7 @@ async def _render_household_payments_settings(
     items = db.list_active_household_items(user_id)
     month = current_month_str()
     await db.init_household_questions_for_month(user_id, month)
-    has_unpaid = await db.has_unpaid_household_questions(user_id, month)
+    has_unpaid = await db.should_show_household_payments_button(user_id, month)
     chat_id, message_id = await _get_settings_message_ids(state, message)
     await _edit_settings_page(
         bot=message.bot,

@@ -28,6 +28,7 @@ class Wish:
     is_purchased: bool
     saved_amount: float
     purchased_at: Optional[str]
+    deferred_until: Optional[str]
 
 
 @dataclass

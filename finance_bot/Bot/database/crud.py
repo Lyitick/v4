@@ -1554,6 +1554,32 @@ class FinanceDatabase:
             )
             return False
 
+    async def reset_household_questions_for_month(self, user_id: int, month: str) -> None:
+        """Reset household payment progress for a specific month."""
+
+        try:
+            await self.init_household_questions_for_month(user_id, month)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE household_payments
+                SET is_paid = 0
+                WHERE user_id = ? AND month = ?
+                """,
+                (user_id, month),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Reset household questions for user %s month %s", user_id, month
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to reset household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+
     def get_purchases_by_user(self, user_id: int) -> List[Dict[str, Any]]:
         """Get purchases for user honoring retention settings."""
 

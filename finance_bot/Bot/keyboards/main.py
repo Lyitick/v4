@@ -15,7 +15,7 @@ def main_menu_keyboard(
     if show_settings:
         buttons.append([KeyboardButton(text="⚙️")])
     if show_test_button:
-        buttons.append([KeyboardButton(text="12:00")])  # TODO: удалить после тестов
+        buttons.append([KeyboardButton(text="Проверить быт")])  # TODO: удалить после тестов
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 

@@ -18,6 +18,7 @@ from Bot.handlers.wishlist import (
     _get_user_wishlist_categories,
     humanize_wishlist_category,
 )
+from Bot.utils.ui_cleanup import ui_register_message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -220,8 +221,9 @@ async def handle_affordable_wishes_later(callback: CallbackQuery, state: FSMCont
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             LOGGER.debug("Failed to clear inline keyboard for affordable wishes", exc_info=True)
-        await callback.message.answer(
+        sent = await callback.message.answer(
             "Хорошо, вернёмся к покупкам позже. Главное меню.",
             reply_markup=await build_main_menu_for_user(callback.from_user.id),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
     await callback.answer()

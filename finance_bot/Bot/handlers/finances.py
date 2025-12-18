@@ -17,6 +17,7 @@ from Bot.handlers.common import build_main_menu_for_user
 from Bot.states.money_states import MoneyState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 from Bot.utils.savings import find_reached_goal, format_savings_summary
+from Bot.utils.ui_cleanup import ui_register_message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -238,20 +239,22 @@ async def _process_income_amount_value(
     categories = db.list_active_income_categories(message.from_user.id)
     total_percent = db.sum_income_category_percents(message.from_user.id)
     if total_percent != 100:
-        await message.answer(
+        sent = await message.answer(
             f"Сумма процентов должна быть 100%. Сейчас: {total_percent}%. Исправь настройки через ⚙️ → 📊 Доход.",
             reply_markup=await build_main_menu_for_user(_message_user_id(message)),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
         await state.clear()
         return
 
     allocations: List[Dict[str, Any]] = _build_allocations(categories, amount)
 
     if not allocations:
-        await message.answer(
+        sent = await message.answer(
             "Нет категорий для распределения.",
             reply_markup=await build_main_menu_for_user(_message_user_id(message)),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
         await state.clear()
         return
 
@@ -373,10 +376,11 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
 
     # Если категорий нет или индекс вышел за пределы — выходим в главное меню
     if not allocations or index >= len(allocations):
-        await query.message.answer(
+        sent = await query.message.answer(
             "Нет категорий для обработки.",
             reply_markup=await build_main_menu_for_user(_callback_user_id(query)),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
         await state.clear()
         return
 
@@ -493,10 +497,11 @@ async def _send_summary_and_goal_prompt(
     lines.append("Текущие накопления:")
     lines.append(summary)
 
-    await message.answer(
+    sent = await message.answer(
         "\n".join(lines),
         reply_markup=await build_main_menu_for_user(user_id),
     )
+    await ui_register_message(state, sent.chat.id, sent.message_id)
 
     category, goal_data = _find_reached_goal(savings)
     if category:
@@ -603,18 +608,20 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
     if message.text == "✅ Купил" and category:
         db.update_saving(message.from_user.id, category, -goal_amount)
         db.set_goal(message.from_user.id, category, 0, "")
-        await message.answer(
+        sent = await message.answer(
             f"Поздравляю с покупкой по категории {category}! Сумма {goal_amount:.2f} списана.",
             reply_markup=await build_main_menu_for_user(_message_user_id(message)),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
         savings = db.get_user_savings(message.from_user.id)
         summary = _format_savings_summary(savings)
         await message.answer(f"Обновлённые накопления:\n{summary}")
     else:
-        await message.answer(
+        sent = await message.answer(
             "Продолжаем копить!",
             reply_markup=await build_main_menu_for_user(_message_user_id(message)),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
 
     await state.clear()
     LOGGER.info("User %s handled goal decision for category %s", message.from_user.id, category)

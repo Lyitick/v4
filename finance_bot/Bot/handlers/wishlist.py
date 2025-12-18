@@ -27,6 +27,7 @@ from Bot.keyboards.main import (
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import BytDeferState, WishlistState
 from Bot.utils.datetime_utils import now_tz
+from Bot.utils.ui_cleanup import ui_register_message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -236,7 +237,7 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
 
 
 @router.message(F.text == "Купленное")
-async def show_purchases(message: Message) -> None:
+async def show_purchases(message: Message, state: FSMContext | None = None) -> None:
     """Show purchased items grouped by category with pretty headers."""
 
     db = FinanceDatabase()
@@ -244,10 +245,12 @@ async def show_purchases(message: Message) -> None:
 
     # Если покупок нет — сразу выходим
     if not purchases:
-        await message.answer(
+        sent = await message.answer(
             "Список покупок пуст.",
             reply_markup=await build_main_menu_for_user(message.from_user.id),
         )
+        if state:
+            await ui_register_message(state, sent.chat.id, sent.message_id)
         return
 
     # Группируем покупки по "очеловеченным" категориям
@@ -265,10 +268,12 @@ async def show_purchases(message: Message) -> None:
                 f"(куплено {purchase['purchased_at']})"
             )
 
-    await message.answer(
+    sent = await message.answer(
         "\n".join(lines),
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
+    if state:
+        await ui_register_message(state, sent.chat.id, sent.message_id)
 
 
 @router.message(WishlistState.waiting_for_price)
@@ -427,64 +432,6 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
         await callback.answer("Некорректный элемент.", show_alert=True)
         return
 
-    price = float(wish.get("price", 0) or 0)
-    purchase_time = now_tz()
-    db.decrease_savings(callback.from_user.id, "быт", price)
-    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
-    db.add_purchase(
-        callback.from_user.id,
-        wish.get("name", ""),
-        price,
-        humanize_wishlist_category(wish.get("category", "")),
-        purchased_at=purchase_time,
-    )
-
-    await callback.answer()
-    if callback.message:
-        await _refresh_byt_reminder_message(
-            callback.bot,
-            callback.message.chat.id,
-            callback.message.message_id,
-            callback.from_user.id,
-        )
-
-
-@router.callback_query(F.data == "byt_defer_menu")
-async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    """Show BYT items to choose which to defer."""
-
-    db = FinanceDatabase()
-    wish = db.get_wish(item_id)
-    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
-        await callback.answer("Элемент не найден.", show_alert=True)
-        return
-
-    price = float(wish.get("price", 0) or 0)
-    purchase_time = now_tz()
-    db.decrease_savings(callback.from_user.id, "быт", price)
-    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
-    db.add_purchase(
-        callback.from_user.id,
-        wish.get("name", ""),
-        price,
-        humanize_wishlist_category(wish.get("category", "")),
-        purchased_at=purchase_time,
-    )
-
-    await callback.answer()
-    if callback.message:
-        await _refresh_byt_reminder_message(
-            callback.bot,
-            callback.message.chat.id,
-            callback.message.message_id,
-            callback.from_user.id,
-        )
-
-
-@router.callback_query(F.data == "byt_defer_menu")
-async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    """Show BYT items to choose which to defer."""
-
     db = FinanceDatabase()
     wish = db.get_wish(item_id)
     if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
@@ -572,33 +519,6 @@ async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> N
         await callback.answer("Отключено в настройках", show_alert=True)
         await state.clear()
         return
-    settings_row = db.get_user_settings(callback.from_user.id)
-    if not bool(settings_row.get("byt_defer_enabled", 1)):
-        await callback.answer("Отключено в настройках", show_alert=True)
-        await state.clear()
-        return
-    settings_row = db.get_user_settings(callback.from_user.id)
-    if not bool(settings_row.get("byt_defer_enabled", 1)):
-        await callback.answer("Отключено в настройках", show_alert=True)
-        await state.clear()
-        return
-
-    await state.set_state(BytDeferState.waiting_for_days)
-    await state.update_data(
-        defer_item_id=item_id,
-        defer_days_str="0",
-        reminder_message_id=callback.message.message_id if callback.message else None,
-    )
-
-    await callback.answer()
-    await callback.message.answer("На сколько дней отложить?")
-    prompt = await callback.message.answer(": 0", reply_markup=income_calculator_keyboard())
-    await state.update_data(
-        defer_display_chat_id=callback.message.chat.id
-        if callback.message
-        else callback.from_user.id,
-        defer_display_message_id=prompt.message_id,
-    )
 
     await state.set_state(BytDeferState.waiting_for_days)
     await state.update_data(

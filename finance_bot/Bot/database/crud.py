@@ -1018,6 +1018,11 @@ class FinanceDatabase:
                 "Failed to update byt_defer_max_days for user %s: %s", user_id, error
             )
 
+    def update_byt_defer_max_days(self, user_id: int, days: int) -> None:
+        """Alias for set_byt_defer_max_days for compatibility."""
+
+        self.set_byt_defer_max_days(user_id, days)
+
     def get_wishlist_category_by_id(
         self, user_id: int, category_id: int
     ) -> Optional[Dict[str, Any]]:

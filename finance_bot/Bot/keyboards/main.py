@@ -62,16 +62,24 @@ def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
-def wishlist_categories_keyboard() -> InlineKeyboardMarkup:
+def wishlist_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
     """Inline keyboard for wishlist categories."""
 
-    buttons = [
-        [InlineKeyboardButton(text="🛠 инвестиции в работу", callback_data="wishlist_cat_tools")],
-        [InlineKeyboardButton(text="💸 вклад в себя", callback_data="wishlist_cat_currency")],
-        [InlineKeyboardButton(text="✨ кайфы", callback_data="wishlist_cat_magic")],
-        [InlineKeyboardButton(text="БЫТ", callback_data="wishlist_cat_byt")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        row.append(
+            InlineKeyboardButton(
+                text=category.get("title", ""),
+                callback_data=f"wlcat:{category.get('id')}",
+            )
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
 def wishlist_url_keyboard() -> InlineKeyboardMarkup:

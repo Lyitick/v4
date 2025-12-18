@@ -13,25 +13,33 @@ from Bot.handlers.finances import (
 )
 from Bot.keyboards.main import wishlist_categories_keyboard
 from Bot.states.wishlist_states import WishlistState
-from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
+from Bot.handlers.wishlist import (
+    WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY,
+    _get_user_wishlist_categories,
+    humanize_wishlist_category,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
 
-CATEGORY_MAP: Dict[str, str] = {
-    "wishlist_cat_tools": "инвестиции в работу",
-    "wishlist_cat_currency": "вклад в себя",
-    "wishlist_cat_magic": "кайфы",
-    "wishlist_cat_byt": "byt",
-}
-
-
-@router.callback_query(F.data.in_(CATEGORY_MAP.keys()))
+@router.callback_query(F.data.startswith("wlcat:"))
 async def handle_category_selection(callback: CallbackQuery, state: FSMContext) -> None:
     """Handle category selection for viewing or adding wishes."""
 
-    category_code = CATEGORY_MAP.get(callback.data, "")
+    try:
+        category_id = int(callback.data.split(":")[1])
+    except (IndexError, ValueError):
+        await callback.answer("Некорректная категория", show_alert=True)
+        return
+
+    db = FinanceDatabase()
+    category_row = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
+    if not category_row:
+        await callback.answer("Категория не найдена", show_alert=True)
+        return
+
+    category_code = category_row.get("title", "")
     category = humanize_wishlist_category(category_code)
     data = await state.get_data()
     current_state = await state.get_state()
@@ -56,7 +64,9 @@ async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
     await state.set_state(WishlistState.waiting_for_category)
     await callback.message.edit_text(
         "Выбери категорию желания.",
-        reply_markup=wishlist_categories_keyboard(),
+        reply_markup=wishlist_categories_keyboard(
+            _get_user_wishlist_categories(FinanceDatabase(), callback.from_user.id)
+        ),
     )
     await callback.answer()
 
@@ -99,7 +109,12 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
     ]
 
     if not filtered:
-        await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+        await callback.message.edit_text(
+            "Желаний в этой категории пока нет.",
+            reply_markup=wishlist_categories_keyboard(
+                _get_user_wishlist_categories(db, callback.from_user.id)
+            ),
+        )
         return
 
     for wish in filtered:

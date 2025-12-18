@@ -64,6 +64,13 @@ def humanize_wishlist_category(category: str) -> str:
     return mapping.get(category, category)
 
 
+def _get_user_wishlist_categories(db: FinanceDatabase, user_id: int) -> list[dict]:
+    """Return active wishlist categories ensuring defaults exist."""
+
+    db.ensure_wishlist_categories_seeded(user_id)
+    return db.list_active_wishlist_categories(user_id)
+
+
 @router.message(F.text == "📋 Вишлист")
 async def open_wishlist(message: Message, state: FSMContext) -> None:
     """Open wishlist menu."""
@@ -72,6 +79,7 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
     await state.clear()
     db = FinanceDatabase()
     wishes = db.get_wishes_by_user(message.from_user.id)
+    categories = _get_user_wishlist_categories(db, message.from_user.id)
     has_active_wishes = any(not wish.get("is_purchased") for wish in wishes)
 
     if not has_active_wishes:
@@ -85,7 +93,7 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
     await message.answer("Раздел вишлиста.", reply_markup=wishlist_reply_keyboard())
     await message.answer(
         "Выбери категорию для просмотра или добавь новое желание.",
-        reply_markup=wishlist_categories_keyboard(),
+        reply_markup=wishlist_categories_keyboard(categories),
     )
     LOGGER.info("User %s opened wishlist", message.from_user.id if message.from_user else "unknown")
 
@@ -220,7 +228,11 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
     url: Optional[str] = None if text in {"-", ""} else text
     await state.update_data(url=url)
     await state.set_state(WishlistState.waiting_for_category)
-    await message.answer("Выбери категорию желания.", reply_markup=wishlist_categories_keyboard())
+    db = FinanceDatabase()
+    categories = _get_user_wishlist_categories(db, message.from_user.id)
+    await message.answer(
+        "Выбери категорию желания.", reply_markup=wishlist_categories_keyboard(categories)
+    )
 
 
 @router.message(F.text == "Купленное")
@@ -270,10 +282,15 @@ async def invalid_price(message: Message) -> None:
 async def waiting_category_text(message: Message) -> None:
     """Prompt to use inline keyboard for category."""
 
-    await message.answer("Выбери категорию через кнопки ниже.", reply_markup=wishlist_categories_keyboard())
+    db = FinanceDatabase()
+    categories = _get_user_wishlist_categories(db, message.from_user.id)
+    await message.answer(
+        "Выбери категорию через кнопки ниже.",
+        reply_markup=wishlist_categories_keyboard(categories),
+    )
 
 
-def _build_byt_items_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+def _build_byt_items_keyboard(items: list[dict], allow_defer: bool = True) -> InlineKeyboardMarkup:
     """Build inline keyboard for BYT items with optional two-column layout."""
 
     rows: list[list[InlineKeyboardButton]] = []
@@ -288,7 +305,10 @@ def _build_byt_items_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
                 )
             )
         rows.append(row)
-    rows.append([InlineKeyboardButton(text="ОТЛОЖИТЬ", callback_data="byt_defer_menu")])
+    if allow_defer:
+        rows.append(
+            [InlineKeyboardButton(text="ОТЛОЖИТЬ", callback_data="byt_defer_menu")]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -318,6 +338,8 @@ async def _refresh_byt_reminder_message(
 
     db = FinanceDatabase()
     items = db.list_active_byt_items_for_reminder(user_id, now_tz())
+    settings_row = db.get_user_settings(user_id)
+    allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
     if not items:
         try:
             await bot.edit_message_text(
@@ -332,7 +354,7 @@ async def _refresh_byt_reminder_message(
                 pass
         return
 
-    keyboard = _build_byt_items_keyboard(items)
+    keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
     try:
         await bot.edit_message_text(
             chat_id=chat_id,
@@ -368,11 +390,15 @@ async def run_byt_wishlist_reminders(
     is_evening = now_dt.hour == 18
 
     for uid in user_ids:
+        settings_row = db.get_user_settings(uid)
+        if not bool(settings_row.get("byt_reminders_enabled", 1)):
+            continue
         items = db.list_active_byt_items_for_reminder(uid, now_dt)
         if not items:
             continue
 
-        keyboard = _build_byt_items_keyboard(items)
+        allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
+        keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
         await bot.send_message(uid, "Что ты купил?", reply_markup=keyboard)
 
 
@@ -400,6 +426,32 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
     except ValueError:
         await callback.answer("Некорректный элемент.", show_alert=True)
         return
+
+    price = float(wish.get("price", 0) or 0)
+    purchase_time = now_tz()
+    db.decrease_savings(callback.from_user.id, "быт", price)
+    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
+    db.add_purchase(
+        callback.from_user.id,
+        wish.get("name", ""),
+        price,
+        humanize_wishlist_category(wish.get("category", "")),
+        purchased_at=purchase_time,
+    )
+
+    await callback.answer()
+    if callback.message:
+        await _refresh_byt_reminder_message(
+            callback.bot,
+            callback.message.chat.id,
+            callback.message.message_id,
+            callback.from_user.id,
+        )
+
+
+@router.callback_query(F.data == "byt_defer_menu")
+async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show BYT items to choose which to defer."""
 
     db = FinanceDatabase()
     wish = db.get_wish(item_id)
@@ -434,6 +486,10 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
     """Show BYT items to choose which to defer."""
 
     db = FinanceDatabase()
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        await callback.answer("Отключено в настройках", show_alert=True)
+        return
     now_dt = now_tz()
     items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
     if not items:
@@ -478,6 +534,11 @@ async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> N
     wish = db.get_wish(item_id)
     if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
         await callback.answer("Элемент не найден.", show_alert=True)
+        return
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        await callback.answer("Отключено в настройках", show_alert=True)
+        await state.clear()
         return
 
     await state.set_state(BytDeferState.waiting_for_days)
@@ -539,8 +600,10 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 pass
             return
 
-        if days < 1 or days > 365:
-            await message.answer("Количество дней должно быть от 1 до 365.")
+        settings_row = db.get_user_settings(message.from_user.id)
+        max_days = int(settings_row.get("byt_defer_max_days", 365) or 365)
+        if days < 1 or days > max_days:
+            await message.answer(f"Количество дней должно быть от 1 до {max_days}.")
             try:
                 await message.delete()
             except Exception:

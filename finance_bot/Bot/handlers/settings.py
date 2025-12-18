@@ -1177,6 +1177,111 @@ async def category_delete_menu(callback: CallbackQuery, state: FSMContext) -> No
     await _navigate_to_screen("inc:del_menu", message=callback.message, state=state)
 
 
+@router.message(
+    HouseholdSettingsState.waiting_for_amount, F.text.in_(PERCENT_INPUT_BUTTONS)
+)
+async def household_payment_amount(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    amount_str = data.get("hp_amount_str", "0")
+    display_chat_id = data.get("hp_amount_display_chat_id", message.chat.id)
+    display_message_id = data.get("hp_amount_display_message_id")
+
+    if text in PERCENT_DIGITS:
+        amount_str = amount_str.lstrip("0") if amount_str != "0" else ""
+        amount_str = f"{amount_str}{text}" or "0"
+        try:
+            await message.bot.edit_message_text(
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {amount_str}",
+            )
+        except Exception:
+            fallback = await message.bot.send_message(
+                chat_id=display_chat_id, text=f": {amount_str}"
+            )
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            hp_amount_str=amount_str,
+            hp_amount_display_chat_id=display_chat_id,
+            hp_amount_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "Очистить":
+        amount_str = "0"
+        try:
+            await message.bot.edit_message_text(
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=": 0",
+            )
+        except Exception:
+            fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            hp_amount_str=amount_str,
+            hp_amount_display_chat_id=display_chat_id,
+            hp_amount_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "✅ Газ":
+        error_message = None
+        try:
+            amount = int(amount_str or "0")
+        except ValueError:
+            error_message = "Нужно ввести число."
+            amount = 0
+        else:
+            if amount <= 0:
+                error_message = "Сумма должна быть больше нуля."
+
+        title = (data.get("hp_new_title") or "").strip()
+        db = FinanceDatabase()
+
+        if not title:
+            error_message = error_message or "Название платежа не задано."
+
+        if error_message is None:
+            position = db.get_next_household_position(message.from_user.id)
+            code = f"custom_{time.time_ns()}"
+            text_value = f"{title} {amount}р?"
+            db.add_household_payment_item(
+                message.from_user.id, code, text_value, amount, position
+            )
+            await db.init_household_questions_for_month(
+                message.from_user.id, current_month_str()
+            )
+
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="hp_amount_display_chat_id",
+            display_message_key="hp_amount_display_message_id",
+        )
+        await _remove_calculator_keyboard(message)
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "st:household_payments"
+        await render_settings_screen(
+            previous_screen,
+            message=message,
+            state=state,
+            error_message=error_message,
+        )
+
+
+@router.callback_query(F.data == "inc:del_menu")
+async def category_delete_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(None)
+    await _navigate_to_screen("inc:del_menu", message=callback.message, state=state)
+
+
 @router.callback_query(F.data == "wl:del_cat_menu")
 async def wishlist_delete_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
@@ -1318,6 +1423,7 @@ async def wishlist_purchased_category(callback: CallbackQuery, state: FSMContext
         )
         return
 
+    await _push_current_screen(state, "wl:purchased_mode")
     await state.update_data(editing_wl_category_id=category_id)
     await _navigate_to_screen(
         "wl:purchased_mode", message=callback.message, state=state

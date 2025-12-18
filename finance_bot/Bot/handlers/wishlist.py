@@ -387,6 +387,8 @@ async def run_byt_wishlist_reminders(
     if not user_ids:
         return
 
+    is_evening = now_dt.hour == 18
+
     for uid in user_ids:
         settings_row = db.get_user_settings(uid)
         if not bool(settings_row.get("byt_reminders_enabled", 1)):
@@ -424,6 +426,32 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
     except ValueError:
         await callback.answer("Некорректный элемент.", show_alert=True)
         return
+
+    price = float(wish.get("price", 0) or 0)
+    purchase_time = now_tz()
+    db.decrease_savings(callback.from_user.id, "быт", price)
+    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
+    db.add_purchase(
+        callback.from_user.id,
+        wish.get("name", ""),
+        price,
+        humanize_wishlist_category(wish.get("category", "")),
+        purchased_at=purchase_time,
+    )
+
+    await callback.answer()
+    if callback.message:
+        await _refresh_byt_reminder_message(
+            callback.bot,
+            callback.message.chat.id,
+            callback.message.message_id,
+            callback.from_user.id,
+        )
+
+
+@router.callback_query(F.data == "byt_defer_menu")
+async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show BYT items to choose which to defer."""
 
     db = FinanceDatabase()
     wish = db.get_wish(item_id)

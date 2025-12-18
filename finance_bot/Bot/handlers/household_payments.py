@@ -312,6 +312,13 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
     LOGGER.info("User %s started household payments for month %s", user_id, month)
 
 
+@router.message(F.text == "Проверить быт")
+async def trigger_household_notifications(message: Message, state: FSMContext) -> None:
+    """Trigger household payment questions as if timer fired."""
+
+    await start_household_payments(message, state)
+
+
 @router.callback_query(F.data.startswith("household:"))
 async def handle_household_answer(callback: CallbackQuery, state: FSMContext) -> None:
     """Handle Yes/No answers for household questions."""

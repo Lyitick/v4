@@ -407,16 +407,6 @@ async def run_byt_wishlist_reminders(
         await bot.send_message(uid, "Что ты купил?", reply_markup=keyboard)
 
 
-@router.message(F.text == "12:00")
-async def trigger_byt_reminder_test(message: Message) -> None:
-    """Trigger BYT reminder sequence for current user (test button)."""
-
-    db = FinanceDatabase()
-    await run_byt_wishlist_reminders(
-        message.bot, db, user_id=message.from_user.id, forced=True, run_time=now_tz()
-    )
-
-
 @router.callback_query(F.data.startswith("byt_buy:"))
 async def handle_byt_buy(callback: CallbackQuery) -> None:
     """Handle purchase confirmation from BYT reminder list."""

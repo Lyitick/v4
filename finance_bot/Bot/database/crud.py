@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
@@ -22,6 +23,34 @@ DEFAULT_HOUSEHOLD_ITEMS = [
     {"code": "yandex_sub", "text": "Яндекс подписка 400р?", "amount": 400},
     {"code": "rent", "text": "Квартплата 4000р? Папе скинул?", "amount": 4000},
     {"code": "training_495", "text": "Оплатил тренировки 495 - 5000р?", "amount": 5000},
+]
+
+DEFAULT_INCOME_CATEGORIES = [
+    {"code": "долги", "title": "Убил боль?", "percent": 30, "position": 1},
+    {
+        "code": "быт",
+        "title": "бытовые расходы на Тиньк",
+        "percent": 20,
+        "position": 2,
+    },
+    {
+        "code": "инвестиции",
+        "title": "Инвестиции на Альфу",
+        "percent": 20,
+        "position": 3,
+    },
+    {
+        "code": "сбережения",
+        "title": "Сбережения на Сбер",
+        "percent": 20,
+        "position": 4,
+    },
+    {
+        "code": "спонтанные траты",
+        "title": "спонтанные траты на Яндекс",
+        "percent": 10,
+        "position": 5,
+    },
 ]
 
 
@@ -125,6 +154,20 @@ class FinanceDatabase:
                 position INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
                 created_at TEXT,
+                UNIQUE(user_id, code)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS income_categories (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                title TEXT NOT NULL,
+                percent INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
                 UNIQUE(user_id, code)
             )
             """
@@ -286,6 +329,175 @@ class FinanceDatabase:
                 user_id,
                 error,
             )
+
+    def ensure_income_categories_seeded(self, user_id: int) -> None:
+        """Seed default income categories if user has none."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT 1 FROM income_categories WHERE user_id = ? AND is_active = 1 LIMIT 1",
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return
+
+            for item in DEFAULT_INCOME_CATEGORIES:
+                cursor.execute(
+                    """
+                    INSERT INTO income_categories (
+                        user_id, code, title, percent, position, is_active
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        user_id,
+                        item["code"],
+                        item["title"],
+                        item["percent"],
+                        item["position"],
+                    ),
+                )
+            self.connection.commit()
+            LOGGER.info("Seeded default income categories for user %s", user_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to seed income categories for user %s: %s", user_id, error)
+
+    def list_active_income_categories(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return active income categories ordered by position."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, code, title, percent, position
+                FROM income_categories
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY position, id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to list income categories for user %s: %s",
+                user_id,
+                error,
+            )
+            return []
+
+    def create_income_category(self, user_id: int, title: str) -> Optional[int]:
+        """Create a new income category with zero percent."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT COALESCE(MAX(position), 0) FROM income_categories WHERE user_id = ?",
+                (user_id,),
+            )
+            current_position = cursor.fetchone()[0] or 0
+            code = f"custom_{time.time_ns()}"
+            cursor.execute(
+                """
+                INSERT INTO income_categories (user_id, code, title, percent, position)
+                VALUES (?, ?, ?, 0, ?)
+                """,
+                (user_id, code, title, current_position + 1),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to create income category for user %s: %s", user_id, error)
+            return None
+
+    def deactivate_income_category(self, user_id: int, category_id: int) -> None:
+        """Deactivate income category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE income_categories
+                SET is_active = 0
+                WHERE user_id = ? AND id = ?
+                """,
+                (user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to deactivate income category %s for user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
+    def update_income_category_percent(self, user_id: int, category_id: int, percent: int) -> None:
+        """Update percent for income category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE income_categories
+                SET percent = ?
+                WHERE user_id = ? AND id = ?
+                """,
+                (percent, user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update percent for income category %s of user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
+    def sum_income_category_percents(self, user_id: int) -> int:
+        """Return sum of percents for active income categories."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT COALESCE(SUM(percent), 0) FROM income_categories WHERE user_id = ? AND is_active = 1",
+                (user_id,),
+            )
+            result = cursor.fetchone()
+            return int(result[0]) if result and result[0] is not None else 0
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to calculate percent sum for user %s: %s",
+                user_id,
+                error,
+            )
+            return 0
+
+    def get_income_category_by_id(self, user_id: int, category_id: int) -> Optional[Dict[str, Any]]:
+        """Return income category by id."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, code, title, percent, position
+                FROM income_categories
+                WHERE user_id = ? AND id = ? AND is_active = 1
+                LIMIT 1
+                """,
+                (user_id, category_id),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch income category %s for user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+            return None
 
     @staticmethod
     def _column_exists(cursor: sqlite3.Cursor, table: str, column: str) -> bool:

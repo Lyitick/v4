@@ -5,7 +5,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 def main_menu_keyboard(
     show_household: bool = False,
     show_test_button: bool = False,
-    show_settings: bool = False,
+    show_settings: bool = True,
 ) -> ReplyKeyboardMarkup:
     """Create main menu keyboard."""
 

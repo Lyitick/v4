@@ -28,7 +28,7 @@ async def build_main_menu_for_user(user_id: int) -> ReplyKeyboardMarkup:
     return main_menu_keyboard(
         show_household=show_household,
         show_test_button=show_test_button,
-        show_settings=user_id == settings.ADMIN_ID,
+        show_settings=True,
     )
 
 

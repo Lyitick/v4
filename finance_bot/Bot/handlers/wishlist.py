@@ -392,6 +392,8 @@ async def run_byt_wishlist_reminders(
     if not user_ids:
         return
 
+    is_evening = now_dt.hour == 18
+
     for uid in user_ids:
         settings_row = db.get_user_settings(uid)
         if not bool(settings_row.get("byt_reminders_enabled", 1)):

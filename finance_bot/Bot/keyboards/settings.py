@@ -53,9 +53,6 @@ def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🧺 БЫТ условия", callback_data="st:byt_rules"),
-            InlineKeyboardButton(text="⏰ Таймер БЫТ", callback_data="st:byt_timer"),
-        ],
-        [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="st:back_main"),
         ],
     ]
@@ -71,7 +68,7 @@ def wishlist_settings_inline_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="➖ Категорию", callback_data="wl:del_cat_menu"),
         ],
         [
-            InlineKeyboardButton(text="⏳ Срок \"Купленное\"", callback_data="wl:edit_purchased_days"),
+            InlineKeyboardButton(text="⏳ Срок купленного", callback_data="wl:purchased_select_category"),
             InlineKeyboardButton(text="⬅️ Назад", callback_data="st:home"),
         ],
     ]
@@ -100,6 +97,17 @@ def wishlist_categories_select_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def wishlist_purchased_mode_keyboard(back_callback: str) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting wishlist purchased mode."""
+
+    inline_keyboard = [
+        [InlineKeyboardButton(text="Всегда", callback_data="wl:purchased_mode:always")],
+        [InlineKeyboardButton(text="Несколько дней", callback_data="wl:purchased_mode:days")],
+        [InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
 def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for BYT rules settings."""
 
@@ -114,13 +122,16 @@ def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="⏳ Макс. дни отложить", callback_data="byt:edit_max_defer_days"),
+            InlineKeyboardButton(text="⏰ Таймер", callback_data="byt:timer_menu"),
+        ],
+        [
             InlineKeyboardButton(text="⬅️ Назад", callback_data="st:home"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
-def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
+def byt_timer_inline_keyboard(back_callback: str = "st:home") -> InlineKeyboardMarkup:
     """Inline keyboard for BYT timer settings."""
 
     inline_keyboard = [
@@ -130,7 +141,7 @@ def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="🔁 Сбросить по умолчанию", callback_data="bt:reset_default"),
-            InlineKeyboardButton(text="⬅️ Назад", callback_data="st:home"),
+            InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
@@ -155,6 +166,13 @@ def byt_timer_times_select_keyboard(
         inline_keyboard.append(row)
     inline_keyboard.append([InlineKeyboardButton(text="⬅️ Назад", callback_data=back_callback)])
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def settings_back_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with a single back button for settings mode."""
+
+    buttons = [[KeyboardButton(text="Назад")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
 def income_settings_inline_keyboard() -> InlineKeyboardMarkup:

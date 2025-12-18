@@ -486,6 +486,38 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
     """Show BYT items to choose which to defer."""
 
     db = FinanceDatabase()
+    wish = db.get_wish(item_id)
+    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+        await callback.answer("Элемент не найден.", show_alert=True)
+        return
+
+    price = float(wish.get("price", 0) or 0)
+    purchase_time = now_tz()
+    db.decrease_savings(callback.from_user.id, "быт", price)
+    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
+    db.add_purchase(
+        callback.from_user.id,
+        wish.get("name", ""),
+        price,
+        humanize_wishlist_category(wish.get("category", "")),
+        purchased_at=purchase_time,
+    )
+
+    await callback.answer()
+    if callback.message:
+        await _refresh_byt_reminder_message(
+            callback.bot,
+            callback.message.chat.id,
+            callback.message.message_id,
+            callback.from_user.id,
+        )
+
+
+@router.callback_query(F.data == "byt_defer_menu")
+async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show BYT items to choose which to defer."""
+
+    db = FinanceDatabase()
     settings_row = db.get_user_settings(callback.from_user.id)
     if not bool(settings_row.get("byt_defer_enabled", 1)):
         await callback.answer("Отключено в настройках", show_alert=True)
@@ -545,6 +577,11 @@ async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> N
         await callback.answer("Отключено в настройках", show_alert=True)
         await state.clear()
         return
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        await callback.answer("Отключено в настройках", show_alert=True)
+        await state.clear()
+        return
 
     await state.set_state(BytDeferState.waiting_for_days)
     await state.update_data(
@@ -562,34 +599,6 @@ async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> N
         else callback.from_user.id,
         defer_display_message_id=prompt.message_id,
     )
-
-
-@router.message(
-    BytDeferState.waiting_for_days,
-    F.text.in_(
-        {
-            "0",
-            "1",
-            "2",
-            "3",
-            "4",
-            "5",
-            "6",
-            "7",
-            "8",
-            "9",
-            "Очистить",
-            "✅ Газ",
-        }
-    ),
-)
-async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
-    """Handle calculator input for BYT defer days."""
-
-    data = await state.get_data()
-    current_sum = str(data.get("defer_days_str", "0"))
-    display_chat_id = data.get("defer_display_chat_id", message.chat.id)
-    display_message_id = data.get("defer_display_message_id")
 
     await state.set_state(BytDeferState.waiting_for_days)
     await state.update_data(

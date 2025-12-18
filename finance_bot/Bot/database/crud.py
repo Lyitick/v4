@@ -208,7 +208,9 @@ class FinanceDatabase:
                 user_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
                 position INTEGER NOT NULL,
-                is_active INTEGER NOT NULL DEFAULT 1
+                is_active INTEGER NOT NULL DEFAULT 1,
+                purchased_mode TEXT DEFAULT 'days',
+                purchased_days INTEGER DEFAULT 30
             )
             """
         )
@@ -235,6 +237,8 @@ class FinanceDatabase:
             """
         )
         self._add_column_if_missing(cursor, "wishes", "purchased_at", "TEXT")
+        self._add_column_if_missing(cursor, "wishlist_categories", "purchased_mode", "TEXT DEFAULT 'days'")
+        self._add_column_if_missing(cursor, "wishlist_categories", "purchased_days", "INTEGER DEFAULT 30")
         self.connection.commit()
 
     def ensure_household_items_seeded(self, user_id: int) -> None:
@@ -487,23 +491,49 @@ class FinanceDatabase:
 
         try:
             cursor = self.connection.cursor()
+            self.ensure_user_settings(user_id)
             cursor.execute(
                 "SELECT 1 FROM wishlist_categories WHERE user_id = ? AND is_active = 1 LIMIT 1",
                 (user_id,),
             )
             if cursor.fetchone():
+                cursor.execute(
+                    "SELECT purchased_keep_days FROM user_settings WHERE user_id = ?",
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+                default_days = int(row[0]) if row and row[0] is not None else 30
+                cursor.execute(
+                    "UPDATE wishlist_categories SET purchased_mode = COALESCE(purchased_mode, 'days') WHERE user_id = ?",
+                    (user_id,),
+                )
+                cursor.execute(
+                    "UPDATE wishlist_categories SET purchased_days = COALESCE(purchased_days, ?) WHERE user_id = ?",
+                    (default_days, user_id),
+                )
+                self.connection.commit()
                 return
 
+            self.ensure_user_settings(user_id)
+            cursor.execute(
+                "SELECT purchased_keep_days FROM user_settings WHERE user_id = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            default_days = int(row[0]) if row and row[0] is not None else 30
             for item in DEFAULT_WISHLIST_CATEGORIES:
                 cursor.execute(
                     """
-                    INSERT INTO wishlist_categories (user_id, title, position, is_active)
-                    VALUES (?, ?, ?, 1)
+                    INSERT INTO wishlist_categories (
+                        user_id, title, position, is_active, purchased_mode, purchased_days
+                    )
+                    VALUES (?, ?, ?, 1, 'days', ?)
                     """,
                     (
                         user_id,
                         item["title"],
                         item["position"],
+                        default_days,
                     ),
                 )
             self.connection.commit()
@@ -589,7 +619,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                SELECT id, title, position, is_active
+                SELECT id, title, position, is_active, purchased_mode, purchased_days
                 FROM wishlist_categories
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY position, id
@@ -664,12 +694,18 @@ class FinanceDatabase:
                 (user_id,),
             )
             current_position = cursor.fetchone()[0] or 0
+            self.ensure_user_settings(user_id)
+            cursor.execute(
+                "SELECT purchased_keep_days FROM user_settings WHERE user_id = ?", (user_id,)
+            )
+            row = cursor.fetchone()
+            default_days = int(row[0]) if row and row[0] is not None else 30
             cursor.execute(
                 """
-                INSERT INTO wishlist_categories (user_id, title, position)
-                VALUES (?, ?, ?)
+                INSERT INTO wishlist_categories (user_id, title, position, purchased_mode, purchased_days)
+                VALUES (?, ?, ?, 'days', ?)
                 """,
-                (user_id, title, current_position + 1),
+                (user_id, title, current_position + 1, default_days),
             )
             self.connection.commit()
             return cursor.lastrowid
@@ -894,6 +930,46 @@ class FinanceDatabase:
                 "Failed to update purchased_keep_days for user %s: %s", user_id, error
             )
 
+    def update_wishlist_category_purchased_mode(
+        self, user_id: int, category_id: int, mode: str
+    ) -> None:
+        """Update purchased display mode for wishlist category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "UPDATE wishlist_categories SET purchased_mode = ? WHERE user_id = ? AND id = ?",
+                (mode, user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update purchased mode for category %s user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
+    def update_wishlist_category_purchased_days(
+        self, user_id: int, category_id: int, days: int
+    ) -> None:
+        """Update purchased days retention for wishlist category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "UPDATE wishlist_categories SET purchased_days = ? WHERE user_id = ? AND id = ?",
+                (days, user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update purchased days for category %s user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
     def set_byt_reminders_enabled(self, user_id: int, enabled: bool) -> None:
         """Toggle BYT reminders enabled flag."""
 
@@ -951,7 +1027,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                SELECT id, title, position, is_active
+                SELECT id, title, position, is_active, purchased_mode, purchased_days
                 FROM wishlist_categories
                 WHERE user_id = ? AND id = ?
                 LIMIT 1
@@ -1482,6 +1558,7 @@ class FinanceDatabase:
         """Get purchases for user honoring retention settings."""
 
         self.ensure_user_settings(user_id)
+        self.ensure_wishlist_categories_seeded(user_id)
         try:
             cursor = self.connection.cursor()
             cursor.execute(
@@ -1494,9 +1571,24 @@ class FinanceDatabase:
             filtered: list[Dict[str, Any]] = []
             current_time = now_tz()
             settings_row = self.get_user_settings(user_id)
-            keep_days = int(settings_row.get("purchased_keep_days", 30) or 30)
-            keep_delta = timedelta(days=keep_days)
+            default_days = int(settings_row.get("purchased_keep_days", 30) or 30)
+            categories = self.list_active_wishlist_categories(user_id)
+            category_map = {
+                cat.get("title", ""): {
+                    "mode": (cat.get("purchased_mode") or "days"),
+                    "days": int(cat.get("purchased_days") or default_days),
+                }
+                for cat in categories
+            }
             for purchase in purchases:
+                cat_settings = category_map.get(
+                    str(purchase.get("category", "")),
+                    {"mode": "days", "days": default_days},
+                )
+                if cat_settings.get("mode") == "always":
+                    filtered.append(purchase)
+                    continue
+                keep_delta = timedelta(days=int(cat_settings.get("days", default_days)))
                 timestamp = purchase.get("purchased_at")
                 if timestamp:
                     try:

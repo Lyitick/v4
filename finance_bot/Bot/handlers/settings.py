@@ -4,7 +4,7 @@ import logging
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+from aiogram.types import CallbackQuery, Message
 
 from Bot.database.crud import FinanceDatabase
 from Bot.handlers.common import build_main_menu_for_user
@@ -15,7 +15,9 @@ from Bot.keyboards.settings import (
     income_categories_select_keyboard,
     income_settings_inline_keyboard,
     settings_home_inline_keyboard,
+    settings_back_reply_keyboard,
     wishlist_categories_select_keyboard,
+    wishlist_purchased_mode_keyboard,
     wishlist_settings_inline_keyboard,
 )
 from Bot.keyboards.calculator import income_calculator_keyboard
@@ -33,7 +35,9 @@ PERCENT_INPUT_BUTTONS = PERCENT_DIGITS | {"Очистить", "✅ Газ"}
 
 
 async def _store_settings_message(state: FSMContext, chat_id: int, message_id: int) -> None:
-    await state.update_data(settings_chat_id=chat_id, settings_message_id=message_id)
+    await state.update_data(
+        settings_chat_id=chat_id, settings_message_id=message_id, in_settings=True
+    )
 
 
 async def _get_settings_message_ids(
@@ -96,21 +100,27 @@ def _format_category_text(
 
 
 def _format_wishlist_text(
-    categories: list[dict], purchased_days: int, error_message: str | None = None
+    categories: list[dict], error_message: str | None = None
 ) -> str:
     lines: list[str] = ["🧾 ВИШЛИСТ — настройки", "", "Категории:", ""]
     if categories:
         for category in categories:
-            lines.append(category.get("title", ""))
-    lines.append("")
-    lines.append(f'Показывать "Купленное": {purchased_days} дней')
+            mode = str(category.get("purchased_mode") or "days")
+            days = int(category.get("purchased_days") or 30)
+            if mode == "always":
+                display = "Всегда"
+            else:
+                display = f"{days} дней"
+            lines.append(f"{category.get('title', '')} — Купленное: {display}")
     if error_message:
         lines.append("")
         lines.append(error_message)
     return "\n".join(lines)
 
 
-def _format_byt_rules_text(settings: dict, error_message: str | None = None) -> str:
+def _format_byt_rules_text(
+    settings: dict, times: list[dict], error_message: str | None = None
+) -> str:
     on_off = {True: "ДА", False: "НЕТ", 1: "ДА", 0: "НЕТ"}
     lines = [
         "🧺 БЫТ — условия напоминаний",
@@ -120,7 +130,17 @@ def _format_byt_rules_text(settings: dict, error_message: str | None = None) -> 
         'Формат: "Что ты купил?" (кнопки-товары)',
         f"ОТЛОЖИТЬ: {on_off.get(settings.get('byt_defer_enabled', 1), 'НЕТ')}",
         f"Макс. дней отложить: {settings.get('byt_defer_max_days', 365)}",
+        "",
+        "Таймер:",
+        "",
     ]
+    if times:
+        for timer in times:
+            lines.append(
+                f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+            )
+    else:
+        lines.append("(пусто)")
     if error_message:
         lines.append("")
         lines.append(error_message)
@@ -171,17 +191,14 @@ async def _render_wishlist_settings(
     error_message: str | None = None,
 ) -> list[dict]:
     db.ensure_wishlist_categories_seeded(user_id)
-    db.ensure_user_settings(user_id)
     categories = db.list_active_wishlist_categories(user_id)
-    settings_row = db.get_user_settings(user_id)
-    purchased_days = int(settings_row.get("purchased_keep_days", 30) or 30)
     chat_id, message_id = await _get_settings_message_ids(state, message)
     await _edit_settings_page(
         bot=message.bot,
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text=_format_wishlist_text(categories, purchased_days, error_message),
+        text=_format_wishlist_text(categories, error_message),
         reply_markup=wishlist_settings_inline_keyboard(),
     )
     return categories
@@ -197,13 +214,15 @@ async def _render_byt_rules_settings(
 ) -> dict:
     db.ensure_user_settings(user_id)
     settings_row = db.get_user_settings(user_id)
+    db.ensure_byt_timer_defaults(user_id)
+    times = db.list_active_byt_timer_times(user_id)
     chat_id, message_id = await _get_settings_message_ids(state, message)
     await _edit_settings_page(
         bot=message.bot,
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text=_format_byt_rules_text(settings_row, error_message),
+        text=_format_byt_rules_text(settings_row, times, error_message),
         reply_markup=byt_rules_inline_keyboard(),
     )
     return settings_row
@@ -226,7 +245,7 @@ async def _render_byt_timer_settings(
         chat_id=chat_id,
         message_id=message_id,
         text=_format_byt_timer_text(times, error_message),
-        reply_markup=byt_timer_inline_keyboard(),
+        reply_markup=byt_timer_inline_keyboard(back_callback="st:byt_rules"),
     )
     return times
 
@@ -238,6 +257,10 @@ async def open_settings(message: Message, state: FSMContext) -> None:
     await state.clear()
     sent = await message.answer(
         "⚙️ НАСТРОЙКИ", reply_markup=settings_home_inline_keyboard()
+    )
+    await message.answer(
+        "Режим настроек. Используй кнопку \"Назад\" чтобы выйти.",
+        reply_markup=settings_back_reply_keyboard(),
     )
     await _store_settings_message(state, sent.chat.id, sent.message_id)
 
@@ -259,7 +282,18 @@ async def open_income_settings(callback: CallbackQuery, state: FSMContext) -> No
     )
 
 
-@router.callback_query(F.data.in_({"st:wishlist", "st:byt_rules", "st:byt_timer"}))
+@router.message(F.text == "Назад")
+async def settings_exit_via_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("in_settings"):
+        return
+    await state.clear()
+    await message.answer(
+        "Главное меню", reply_markup=await build_main_menu_for_user(message.from_user.id)
+    )
+
+
+@router.callback_query(F.data.in_({"st:wishlist", "st:byt_rules"}))
 async def settings_stubs(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
@@ -269,12 +303,7 @@ async def settings_stubs(callback: CallbackQuery, state: FSMContext) -> None:
             state=state, message=callback.message, db=db, user_id=callback.from_user.id
         )
         return
-    if callback.data == "st:byt_rules":
-        await _render_byt_rules_settings(
-            state=state, message=callback.message, db=db, user_id=callback.from_user.id
-        )
-        return
-    await _render_byt_timer_settings(
+    await _render_byt_rules_settings(
         state=state, message=callback.message, db=db, user_id=callback.from_user.id
     )
 
@@ -373,7 +402,7 @@ async def byt_timer_delete_menu(callback: CallbackQuery, state: FSMContext) -> N
         message_id=message_id,
         text="Что удалить?",
         reply_markup=byt_timer_times_select_keyboard(
-            times, "bt:del_time", back_callback="st:byt_timer"
+            times, "bt:del_time", back_callback="byt:timer_menu"
         ),
     )
 
@@ -409,6 +438,16 @@ async def byt_timer_reset(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     db = FinanceDatabase()
     db.reset_byt_timer_times(callback.from_user.id)
+    await _render_byt_timer_settings(
+        state=state, message=callback.message, db=db, user_id=callback.from_user.id
+    )
+
+
+@router.callback_query(F.data == "byt:timer_menu")
+async def open_byt_timer_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(None)
+    db = FinanceDatabase()
     await _render_byt_timer_settings(
         state=state, message=callback.message, db=db, user_id=callback.from_user.id
     )
@@ -637,20 +676,104 @@ async def category_percent_prompt(callback: CallbackQuery, state: FSMContext) ->
     )
 
 
-@router.callback_query(F.data == "wl:edit_purchased_days")
-async def wishlist_edit_purchased_days(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data == "wl:purchased_select_category")
+async def wishlist_purchased_select_category(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await state.set_state(WishlistSettingsState.waiting_for_purchased_days)
+    await state.set_state(None)
     db = FinanceDatabase()
-    settings_row = db.get_user_settings(callback.from_user.id)
-    await state.update_data(purchased_days_str="0", previous_purchased_days=settings_row.get("purchased_keep_days", 30))
+    categories = db.list_active_wishlist_categories(callback.from_user.id)
     chat_id, message_id = await _get_settings_message_ids(state, callback.message)
     await _edit_settings_page(
         bot=callback.message.bot,
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text='На сколько дней показывать "Купленное"?',
+        text="У какой категории меняем срок купленного?",
+        reply_markup=wishlist_categories_select_keyboard(
+            categories, "wl:purchased_cat", back_callback="st:wishlist"
+        ),
+    )
+
+
+@router.callback_query(F.data.startswith("wl:purchased_cat:"))
+async def wishlist_purchased_category(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    try:
+        category_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        return
+
+    db = FinanceDatabase()
+    category = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
+    if not category or not category.get("is_active", 1):
+        await _render_wishlist_settings(
+            state=state, message=callback.message, db=db, user_id=callback.from_user.id
+        )
+        return
+
+    await state.update_data(editing_wl_category_id=category_id)
+    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
+    await _edit_settings_page(
+        bot=callback.message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=f'Как показывать купленное для "{category.get("title", "")}"?',
+        reply_markup=wishlist_purchased_mode_keyboard("wl:purchased_select_category"),
+    )
+
+
+@router.callback_query(F.data == "wl:purchased_mode:always")
+async def wishlist_set_purchased_always(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    data = await state.get_data()
+    category_id = data.get("editing_wl_category_id")
+    if category_id is None:
+        await _render_wishlist_settings(
+            state=state,
+            message=callback.message,
+            db=FinanceDatabase(),
+            user_id=callback.from_user.id,
+        )
+        return
+    db = FinanceDatabase()
+    db.update_wishlist_category_purchased_mode(callback.from_user.id, int(category_id), "always")
+    await state.set_state(None)
+    await _render_wishlist_settings(
+        state=state, message=callback.message, db=db, user_id=callback.from_user.id
+    )
+
+
+@router.callback_query(F.data == "wl:purchased_mode:days")
+async def wishlist_set_purchased_days(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    data = await state.get_data()
+    category_id = data.get("editing_wl_category_id")
+    if category_id is None:
+        await _render_wishlist_settings(
+            state=state,
+            message=callback.message,
+            db=FinanceDatabase(),
+            user_id=callback.from_user.id,
+        )
+        return
+    db = FinanceDatabase()
+    category = db.get_wishlist_category_by_id(callback.from_user.id, int(category_id))
+    await state.set_state(WishlistSettingsState.waiting_for_purchased_days)
+    await state.update_data(
+        purchased_days_str="0",
+        purchased_display_chat_id=None,
+        purchased_display_message_id=None,
+        editing_wl_category_id=int(category_id),
+    )
+    db.update_wishlist_category_purchased_mode(callback.from_user.id, int(category_id), "days")
+    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
+    await _edit_settings_page(
+        bot=callback.message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=f'На сколько дней показывать купленное для "{category.get("title", "")}"?',
         reply_markup=None,
     )
     prompt = await callback.message.answer(": 0", reply_markup=income_calculator_keyboard())
@@ -779,7 +902,7 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
             await message.delete()
         except Exception:
             pass
-        await message.answer("Готово", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Готово", reply_markup=settings_back_reply_keyboard())
         await state.set_state(None)
         await _render_income_settings(
             state=state, message=message, db=db, user_id=message.from_user.id
@@ -849,12 +972,21 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
         except ValueError:
             await message.answer("Нужно ввести число дней.")
             return
-        if days < 1 or days > 365:
-            await message.answer("Количество дней должно быть от 1 до 365.")
+        if days < 1 or days > 3650:
+            await message.answer("Количество дней должно быть от 1 до 3650.")
             return
 
         db = FinanceDatabase()
-        db.update_purchased_keep_days(message.from_user.id, days)
+        category_id = data.get("editing_wl_category_id")
+        if category_id is None:
+            await state.set_state(None)
+            await _render_wishlist_settings(
+                state=state, message=message, db=db, user_id=message.from_user.id
+            )
+            return
+        db.update_wishlist_category_purchased_days(
+            message.from_user.id, int(category_id), days
+        )
         display_message_id = data.get("purchased_display_message_id")
         if display_message_id:
             try:
@@ -868,7 +1000,7 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
             await message.delete()
         except Exception:
             pass
-        await message.answer("Готово", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Готово", reply_markup=settings_back_reply_keyboard())
         await state.set_state(None)
     await _render_wishlist_settings(
         state=state, message=message, db=db, user_id=message.from_user.id
@@ -957,7 +1089,7 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             await message.delete()
         except Exception:
             pass
-        await message.answer("Готово", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Готово", reply_markup=settings_back_reply_keyboard())
         await state.set_state(None)
         await _render_byt_rules_settings(
             state=state, message=message, db=db, user_id=message.from_user.id
@@ -1128,7 +1260,7 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
             await message.delete()
         except Exception:
             pass
-        await message.answer("Готово", reply_markup=ReplyKeyboardRemove())
+        await message.answer("Готово", reply_markup=settings_back_reply_keyboard())
         await state.set_state(None)
         await _render_byt_timer_settings(
             state=state, message=message, db=db, user_id=message.from_user.id

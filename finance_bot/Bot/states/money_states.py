@@ -21,3 +21,10 @@ class HouseholdSettingsState(StatesGroup):
 
     waiting_for_title = State()
     waiting_for_amount = State()
+
+
+class IncomeSettingsState(StatesGroup):
+    """State machine for income settings."""
+
+    waiting_for_category_title = State()
+    waiting_for_percent = State()

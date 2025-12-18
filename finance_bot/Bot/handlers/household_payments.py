@@ -88,21 +88,6 @@ async def _send_household_settings_overview(
     )
 
 
-@router.message(F.text == "⚙️")
-async def open_settings(message: Message, state: FSMContext) -> None:
-    """Open settings menu."""
-
-    if message.from_user.id != settings.ADMIN_ID:
-        await message.answer(
-            "Что-то пошло не так. Вернёмся в главное меню.",
-            reply_markup=await build_main_menu_for_user(message.from_user.id),
-        )
-        return
-
-    await state.clear()
-    await message.answer("Настройки", reply_markup=settings_menu_keyboard())
-
-
 @router.message(F.text == "⚙️ Бытовые платежи ⚙️")
 async def open_household_settings(message: Message, state: FSMContext) -> None:
     """Open household payments settings menu."""

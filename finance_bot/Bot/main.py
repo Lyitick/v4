@@ -19,7 +19,15 @@ from aiogram.client.default import DefaultBotProperties
 
 from Bot.config.settings import get_settings
 from Bot.database.crud import FinanceDatabase
-from Bot.handlers import callbacks, common, finances, household_payments, start, wishlist
+from Bot.handlers import (
+    callbacks,
+    common,
+    finances,
+    household_payments,
+    settings,
+    start,
+    wishlist,
+)
 from Bot.handlers.wishlist import run_byt_wishlist_reminders
 from Bot.utils.logging import init_logging
 
@@ -30,6 +38,7 @@ def register_routers(dispatcher: Dispatcher) -> None:
     dispatcher.include_router(start.router)
     dispatcher.include_router(finances.router)
     dispatcher.include_router(household_payments.router)
+    dispatcher.include_router(settings.router)
     dispatcher.include_router(wishlist.router)
     dispatcher.include_router(callbacks.router)
     dispatcher.include_router(common.router)

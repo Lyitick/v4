@@ -3,13 +3,17 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 
 
 def main_menu_keyboard(
-    show_household: bool = False, show_test_button: bool = False
+    show_household: bool = False,
+    show_test_button: bool = False,
+    show_settings: bool = True,
 ) -> ReplyKeyboardMarkup:
     """Create main menu keyboard."""
 
     buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
     if show_household:
         buttons.append([KeyboardButton(text="Бытовые платежи")])
+    if show_settings:
+        buttons.append([KeyboardButton(text="⚙️")])
     if show_test_button:
         buttons.append([KeyboardButton(text="12:00")])  # TODO: удалить после тестов
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -58,16 +62,24 @@ def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
-def wishlist_categories_keyboard() -> InlineKeyboardMarkup:
+def wishlist_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
     """Inline keyboard for wishlist categories."""
 
-    buttons = [
-        [InlineKeyboardButton(text="🛠 инвестиции в работу", callback_data="wishlist_cat_tools")],
-        [InlineKeyboardButton(text="💸 вклад в себя", callback_data="wishlist_cat_currency")],
-        [InlineKeyboardButton(text="✨ кайфы", callback_data="wishlist_cat_magic")],
-        [InlineKeyboardButton(text="БЫТ", callback_data="wishlist_cat_byt")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        row.append(
+            InlineKeyboardButton(
+                text=category.get("title", ""),
+                callback_data=f"wlcat:{category.get('id')}",
+            )
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
 def wishlist_url_keyboard() -> InlineKeyboardMarkup:
@@ -89,15 +101,3 @@ def income_confirm_keyboard() -> InlineKeyboardMarkup:
 
     buttons = [[InlineKeyboardButton(text="✅ Получено", callback_data="income_confirm")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def income_calculator_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for income calculator input."""
-
-    buttons = [
-        [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
-        [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
-        [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
-        [KeyboardButton(text="0"), KeyboardButton(text="Очистить")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)

@@ -3,7 +3,8 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
@@ -14,14 +15,50 @@ from Bot.utils.datetime_utils import add_one_month, now_tz
 
 LOGGER = logging.getLogger(__name__)
 DB_PATH = Path(__file__).resolve().parents[2] / "finance.db"
-HOUSEHOLD_QUESTION_CODES = [
-    "phone",
-    "internet",
-    "vpn",
-    "gpt",
-    "yandex_sub",
-    "rent",
-    "training_495",
+DEFAULT_HOUSEHOLD_ITEMS = [
+    {"code": "phone", "text": "Телефон 600р?", "amount": 600},
+    {"code": "internet", "text": "Интернет 700р?", "amount": 700},
+    {"code": "vpn", "text": "VPN 100р?", "amount": 100},
+    {"code": "gpt", "text": "GPT 2000р?", "amount": 2000},
+    {"code": "yandex_sub", "text": "Яндекс подписка 400р?", "amount": 400},
+    {"code": "rent", "text": "Квартплата 4000р? Папе скинул?", "amount": 4000},
+    {"code": "training_495", "text": "Оплатил тренировки 495 - 5000р?", "amount": 5000},
+]
+
+DEFAULT_INCOME_CATEGORIES = [
+    {"code": "долги", "title": "Убил боль?", "percent": 30, "position": 1},
+    {
+        "code": "быт",
+        "title": "бытовые расходы на Тиньк",
+        "percent": 20,
+        "position": 2,
+    },
+    {
+        "code": "инвестиции",
+        "title": "Инвестиции на Альфу",
+        "percent": 20,
+        "position": 3,
+    },
+    {
+        "code": "сбережения",
+        "title": "Сбережения на Сбер",
+        "percent": 20,
+        "position": 4,
+    },
+    {
+        "code": "спонтанные траты",
+        "title": "спонтанные траты на Яндекс",
+        "percent": 10,
+        "position": 5,
+    },
+]
+
+DEFAULT_EXPENSE_CATEGORIES = [
+    {"code": "базовые", "title": "Базовые расходы", "percent": 40, "position": 1},
+    {"code": "жилье", "title": "Жилье и ЖКУ", "percent": 20, "position": 2},
+    {"code": "транспорт", "title": "Транспорт", "percent": 15, "position": 3},
+    {"code": "еда", "title": "Еда", "percent": 15, "position": 4},
+    {"code": "другое", "title": "Другое", "percent": 10, "position": 5},
 ]
 
 
@@ -84,7 +121,8 @@ class FinanceDatabase:
                 category TEXT,
                 is_purchased INTEGER,
                 saved_amount REAL DEFAULT 0,
-                purchased_at TEXT
+                purchased_at TEXT,
+                deferred_until TEXT
             )
             """
         )
@@ -100,6 +138,7 @@ class FinanceDatabase:
             )
             """
         )
+        self._add_column_if_missing(cursor, "wishes", "deferred_until", "TEXT")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS household_payments (
@@ -112,8 +151,548 @@ class FinanceDatabase:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS household_payment_items (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER,
+                code TEXT,
+                text TEXT,
+                amount INTEGER,
+                position INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT,
+                UNIQUE(user_id, code)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS income_categories (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                title TEXT NOT NULL,
+                percent INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(user_id, code)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS expense_categories (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                title TEXT NOT NULL,
+                percent INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(user_id, code)
+            )
+            """
+        )
         self._add_column_if_missing(cursor, "wishes", "purchased_at", "TEXT")
         self.connection.commit()
+
+    def ensure_household_items_seeded(self, user_id: int) -> None:
+        """Seed default household payment items if missing for user."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT 1 FROM household_payment_items WHERE user_id = ? LIMIT 1",
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return
+
+            now_iso = now_tz().isoformat()
+            for position, item in enumerate(DEFAULT_HOUSEHOLD_ITEMS, start=1):
+                cursor.execute(
+                    """
+                    INSERT INTO household_payment_items (
+                        user_id, code, text, amount, position, is_active, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1, ?)
+                    """,
+                    (
+                        user_id,
+                        item["code"],
+                        item["text"],
+                        item["amount"],
+                        position,
+                        now_iso,
+                    ),
+                )
+            self.connection.commit()
+            LOGGER.info("Seeded default household items for user %s", user_id)
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to seed household items for user %s: %s", user_id, error
+            )
+
+    def list_active_household_items(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return active household payment items for user ordered by position."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT code, text, amount, position
+                FROM household_payment_items
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY position, id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to list active household items for user %s: %s",
+                user_id,
+                error,
+            )
+            return []
+
+    def get_household_item_by_code(
+        self, user_id: int, code: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return household payment item by code."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT code, text, amount, position
+                FROM household_payment_items
+                WHERE user_id = ? AND code = ? AND is_active = 1
+                LIMIT 1
+                """,
+                (user_id, code),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch household item %s for user %s: %s",
+                code,
+                user_id,
+                error,
+            )
+            return None
+
+    def get_next_household_position(self, user_id: int) -> int:
+        """Return next position value for household items."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT MAX(position) FROM household_payment_items WHERE user_id = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            max_pos = row[0] if row and row[0] is not None else 0
+            return int(max_pos) + 1
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to get next household position for user %s: %s", user_id, error
+            )
+            return 1
+
+    def add_household_payment_item(
+        self, user_id: int, code: str, text: str, amount: int, position: int
+    ) -> None:
+        """Add new household payment item."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO household_payment_items (
+                    user_id, code, text, amount, position, is_active, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, 1, ?)
+                """,
+                (user_id, code, text, amount, position, now_tz().isoformat()),
+            )
+            self.connection.commit()
+            LOGGER.info("Added household payment item %s for user %s", code, user_id)
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to add household item %s for user %s: %s",
+                code,
+                user_id,
+                error,
+            )
+
+    def deactivate_household_payment_item(self, user_id: int, code: str) -> None:
+        """Deactivate household payment item."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE household_payment_items
+                SET is_active = 0
+                WHERE user_id = ? AND code = ?
+                """,
+                (user_id, code),
+            )
+            self.connection.commit()
+            LOGGER.info("Deactivated household payment item %s for user %s", code, user_id)
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to deactivate household item %s for user %s: %s",
+                code,
+                user_id,
+                error,
+            )
+
+    def ensure_income_categories_seeded(self, user_id: int) -> None:
+        """Seed default income categories if user has none."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT 1 FROM income_categories WHERE user_id = ? AND is_active = 1 LIMIT 1",
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return
+
+            for item in DEFAULT_INCOME_CATEGORIES:
+                cursor.execute(
+                    """
+                    INSERT INTO income_categories (
+                        user_id, code, title, percent, position, is_active
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        user_id,
+                        item["code"],
+                        item["title"],
+                        item["percent"],
+                        item["position"],
+                    ),
+                )
+            self.connection.commit()
+            LOGGER.info("Seeded default income categories for user %s", user_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to seed income categories for user %s: %s", user_id, error)
+
+    def list_active_income_categories(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return active income categories ordered by position."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, code, title, percent, position
+                FROM income_categories
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY position, id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to list income categories for user %s: %s",
+                user_id,
+                error,
+            )
+            return []
+
+    def ensure_expense_categories_seeded(self, user_id: int) -> None:
+        """Seed default expense categories if user has none."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT 1 FROM expense_categories WHERE user_id = ? AND is_active = 1 LIMIT 1",
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return
+
+            for item in DEFAULT_EXPENSE_CATEGORIES:
+                cursor.execute(
+                    """
+                    INSERT INTO expense_categories (
+                        user_id, code, title, percent, position, is_active
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        user_id,
+                        item["code"],
+                        item["title"],
+                        item["percent"],
+                        item["position"],
+                    ),
+                )
+            self.connection.commit()
+            LOGGER.info("Seeded default expense categories for user %s", user_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to seed expense categories for user %s: %s", user_id, error)
+
+    def list_active_expense_categories(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return active expense categories ordered by position."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, code, title, percent, position
+                FROM expense_categories
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY position, id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to list expense categories for user %s: %s",
+                user_id,
+                error,
+            )
+            return []
+
+    def create_income_category(self, user_id: int, title: str) -> Optional[int]:
+        """Create a new income category with zero percent."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT COALESCE(MAX(position), 0) FROM income_categories WHERE user_id = ?",
+                (user_id,),
+            )
+            current_position = cursor.fetchone()[0] or 0
+            code = f"custom_{time.time_ns()}"
+            cursor.execute(
+                """
+                INSERT INTO income_categories (user_id, code, title, percent, position)
+                VALUES (?, ?, ?, 0, ?)
+                """,
+                (user_id, code, title, current_position + 1),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to create income category for user %s: %s", user_id, error)
+            return None
+
+    def create_expense_category(self, user_id: int, title: str) -> Optional[int]:
+        """Create a new expense category with zero percent."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT COALESCE(MAX(position), 0) FROM expense_categories WHERE user_id = ?",
+                (user_id,),
+            )
+            current_position = cursor.fetchone()[0] or 0
+            code = f"custom_{time.time_ns()}"
+            cursor.execute(
+                """
+                INSERT INTO expense_categories (user_id, code, title, percent, position)
+                VALUES (?, ?, ?, 0, ?)
+                """,
+                (user_id, code, title, current_position + 1),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to create expense category for user %s: %s", user_id, error)
+            return None
+
+    def deactivate_income_category(self, user_id: int, category_id: int) -> None:
+        """Deactivate income category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE income_categories
+                SET is_active = 0
+                WHERE user_id = ? AND id = ?
+                """,
+                (user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to deactivate income category %s for user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
+    def deactivate_expense_category(self, user_id: int, category_id: int) -> None:
+        """Deactivate expense category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE expense_categories
+                SET is_active = 0
+                WHERE user_id = ? AND id = ?
+                """,
+                (user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to deactivate expense category %s for user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
+    def update_income_category_percent(self, user_id: int, category_id: int, percent: int) -> None:
+        """Update percent for income category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE income_categories
+                SET percent = ?
+                WHERE user_id = ? AND id = ?
+                """,
+                (percent, user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update percent for income category %s of user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
+    def update_expense_category_percent(
+        self, user_id: int, category_id: int, percent: int
+    ) -> None:
+        """Update percent for expense category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE expense_categories
+                SET percent = ?
+                WHERE user_id = ? AND id = ?
+                """,
+                (percent, user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update percent for expense category %s of user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
+    def sum_income_category_percents(self, user_id: int) -> int:
+        """Return sum of percents for active income categories."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT COALESCE(SUM(percent), 0) FROM income_categories WHERE user_id = ? AND is_active = 1",
+                (user_id,),
+            )
+            result = cursor.fetchone()
+            return int(result[0]) if result and result[0] is not None else 0
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to calculate percent sum for user %s: %s",
+                user_id,
+                error,
+            )
+            return 0
+
+    def sum_expense_category_percents(self, user_id: int) -> int:
+        """Return sum of percents for active expense categories."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT COALESCE(SUM(percent), 0) FROM expense_categories WHERE user_id = ? AND is_active = 1",
+                (user_id,),
+            )
+            result = cursor.fetchone()
+            return int(result[0]) if result and result[0] is not None else 0
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to calculate expense percent sum for user %s: %s",
+                user_id,
+                error,
+            )
+            return 0
+
+    def get_income_category_by_id(self, user_id: int, category_id: int) -> Optional[Dict[str, Any]]:
+        """Return income category by id."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, code, title, percent, position
+                FROM income_categories
+                WHERE user_id = ? AND id = ? AND is_active = 1
+                LIMIT 1
+                """,
+                (user_id, category_id),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch income category %s for user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+            return None
+
+    def get_expense_category_by_id(
+        self, user_id: int, category_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Return expense category by id."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, code, title, percent, position
+                FROM expense_categories
+                WHERE user_id = ? AND id = ? AND is_active = 1
+                LIMIT 1
+                """,
+                (user_id, category_id),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch expense category %s for user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+            return None
 
     @staticmethod
     def _column_exists(cursor: sqlite3.Cursor, table: str, column: str) -> bool:
@@ -296,7 +875,11 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at FROM wishes WHERE user_id = ?",
+                """
+                SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                FROM wishes
+                WHERE user_id = ?
+                """,
                 (user_id,),
             )
             rows = cursor.fetchall()
@@ -312,7 +895,11 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at FROM wishes WHERE id = ?",
+                """
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                FROM wishes
+                WHERE id = ?
+                """,
                 (wish_id,),
             )
             row = cursor.fetchone()
@@ -329,7 +916,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
                 FROM wishes
                 WHERE user_id = ? AND category = 'byt' AND (is_purchased = 0 OR is_purchased IS NULL)
                 ORDER BY id
@@ -343,6 +930,63 @@ class FinanceDatabase:
             LOGGER.error("Failed to fetch BYT wishes for user %s: %s", user_id, error)
             return []
 
+    def list_active_byt_items_for_reminder(
+        self, user_id: int, now_dt: datetime
+    ) -> List[Dict[str, Any]]:
+        """Return BYT wishlist items available for reminders at given time."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                FROM wishes
+                WHERE user_id = ?
+                  AND category = 'byt'
+                  AND (is_purchased = 0 OR is_purchased IS NULL)
+                  AND (deferred_until IS NULL OR deferred_until <= ?)
+                ORDER BY id
+                """,
+                (user_id, now_dt.isoformat()),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch BYT reminder wishes for user %s: %s", user_id, error
+            )
+            return []
+
+    def set_wishlist_item_deferred_until(
+        self, user_id: int, item_id: int, deferred_until_iso: Optional[str]
+    ) -> None:
+        """Set deferred_until for wishlist item."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE wishes
+                SET deferred_until = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (deferred_until_iso, item_id, user_id),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Set deferred_until for wish %s user %s to %s",
+                item_id,
+                user_id,
+                deferred_until_iso,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to set deferred_until for wish %s user %s: %s",
+                item_id,
+                user_id,
+                error,
+            )
+
     def mark_wish_purchased(self, wish_id: int, purchased_at: Optional[datetime] = None) -> None:
         """Mark wish as purchased with timestamp."""
 
@@ -350,7 +994,11 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             purchased_value = (purchased_at or now_tz()).isoformat()
             cursor.execute(
-                "UPDATE wishes SET is_purchased = 1, purchased_at = ? WHERE id = ?",
+                """
+                UPDATE wishes
+                SET is_purchased = 1, purchased_at = ?, deferred_until = NULL
+                WHERE id = ?
+                """,
                 (purchased_value, wish_id),
             )
             self.connection.commit()
@@ -404,7 +1052,19 @@ class FinanceDatabase:
 
         try:
             cursor = self.connection.cursor()
-            for code in HOUSEHOLD_QUESTION_CODES:
+            self.ensure_household_items_seeded(user_id)
+            cursor.execute(
+                """
+                SELECT code
+                FROM household_payment_items
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY position, id
+                """,
+                (user_id,),
+            )
+            active_codes_rows = cursor.fetchall()
+            active_codes = [row["code"] for row in active_codes_rows]
+            for code in active_codes:
                 cursor.execute(
                     """
                     INSERT OR IGNORE INTO household_payments (user_id, month, question_code, is_paid)
@@ -412,14 +1072,23 @@ class FinanceDatabase:
                     """,
                     (user_id, month, code),
                 )
-            placeholders = ",".join(["?"] * len(HOUSEHOLD_QUESTION_CODES))
-            cursor.execute(
-                f"""
-                DELETE FROM household_payments
-                WHERE user_id = ? AND month = ? AND question_code NOT IN ({placeholders})
-                """,
-                (user_id, month, *HOUSEHOLD_QUESTION_CODES),
-            )
+            if active_codes:
+                placeholders = ",".join(["?"] * len(active_codes))
+                cursor.execute(
+                    f"""
+                    DELETE FROM household_payments
+                    WHERE user_id = ? AND month = ? AND question_code NOT IN ({placeholders})
+                    """,
+                    (user_id, month, *active_codes),
+                )
+            else:
+                cursor.execute(
+                    """
+                    DELETE FROM household_payments
+                    WHERE user_id = ? AND month = ?
+                    """,
+                    (user_id, month),
+                )
             self.connection.commit()
             LOGGER.info(
                 "Initialized household questions for user %s month %s", user_id, month

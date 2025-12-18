@@ -3,13 +3,17 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 
 
 def main_menu_keyboard(
-    show_household: bool = False, show_test_button: bool = False
+    show_household: bool = False,
+    show_test_button: bool = False,
+    show_settings: bool = True,
 ) -> ReplyKeyboardMarkup:
     """Create main menu keyboard."""
 
     buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
     if show_household:
         buttons.append([KeyboardButton(text="Бытовые платежи")])
+    if show_settings:
+        buttons.append([KeyboardButton(text="⚙️")])
     if show_test_button:
         buttons.append([KeyboardButton(text="12:00")])  # TODO: удалить после тестов
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -89,15 +93,3 @@ def income_confirm_keyboard() -> InlineKeyboardMarkup:
 
     buttons = [[InlineKeyboardButton(text="✅ Получено", callback_data="income_confirm")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def income_calculator_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for income calculator input."""
-
-    buttons = [
-        [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
-        [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
-        [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
-        [KeyboardButton(text="0"), KeyboardButton(text="Очистить")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)

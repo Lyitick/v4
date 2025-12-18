@@ -21,6 +21,7 @@ class HouseholdSettingsState(StatesGroup):
 
     waiting_for_title = State()
     waiting_for_amount = State()
+    waiting_for_removal = State()
 
 
 class IncomeSettingsState(StatesGroup):

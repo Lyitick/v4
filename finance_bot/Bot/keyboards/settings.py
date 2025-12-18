@@ -43,6 +43,38 @@ def household_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for household payments settings actions."""
+
+    buttons = [
+        [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
+        [KeyboardButton(text="🔄 Обнулить")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def household_payments_remove_reply_keyboard(
+    items: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for removing household payments in settings."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for item in items:
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        label = f"{title} — {amount}" if amount is not None else title
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
 def household_payments_inline_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for household payments settings."""
 

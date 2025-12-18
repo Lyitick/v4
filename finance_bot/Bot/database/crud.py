@@ -53,6 +53,14 @@ DEFAULT_INCOME_CATEGORIES = [
     },
 ]
 
+DEFAULT_EXPENSE_CATEGORIES = [
+    {"code": "базовые", "title": "Базовые расходы", "percent": 40, "position": 1},
+    {"code": "жилье", "title": "Жилье и ЖКУ", "percent": 20, "position": 2},
+    {"code": "транспорт", "title": "Транспорт", "percent": 15, "position": 3},
+    {"code": "еда", "title": "Еда", "percent": 15, "position": 4},
+    {"code": "другое", "title": "Другое", "percent": 10, "position": 5},
+]
+
 
 class FinanceDatabase:
     """Singleton class handling all database interactions."""
@@ -161,6 +169,20 @@ class FinanceDatabase:
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS income_categories (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                code TEXT NOT NULL,
+                title TEXT NOT NULL,
+                percent INTEGER NOT NULL,
+                position INTEGER NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(user_id, code)
+            )
+            """
+        )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS expense_categories (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 code TEXT NOT NULL,
@@ -387,6 +409,63 @@ class FinanceDatabase:
             )
             return []
 
+    def ensure_expense_categories_seeded(self, user_id: int) -> None:
+        """Seed default expense categories if user has none."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT 1 FROM expense_categories WHERE user_id = ? AND is_active = 1 LIMIT 1",
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return
+
+            for item in DEFAULT_EXPENSE_CATEGORIES:
+                cursor.execute(
+                    """
+                    INSERT INTO expense_categories (
+                        user_id, code, title, percent, position, is_active
+                    )
+                    VALUES (?, ?, ?, ?, ?, 1)
+                    """,
+                    (
+                        user_id,
+                        item["code"],
+                        item["title"],
+                        item["percent"],
+                        item["position"],
+                    ),
+                )
+            self.connection.commit()
+            LOGGER.info("Seeded default expense categories for user %s", user_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to seed expense categories for user %s: %s", user_id, error)
+
+    def list_active_expense_categories(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return active expense categories ordered by position."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, code, title, percent, position
+                FROM expense_categories
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY position, id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to list expense categories for user %s: %s",
+                user_id,
+                error,
+            )
+            return []
+
     def create_income_category(self, user_id: int, title: str) -> Optional[int]:
         """Create a new income category with zero percent."""
 
@@ -411,6 +490,30 @@ class FinanceDatabase:
             LOGGER.error("Failed to create income category for user %s: %s", user_id, error)
             return None
 
+    def create_expense_category(self, user_id: int, title: str) -> Optional[int]:
+        """Create a new expense category with zero percent."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT COALESCE(MAX(position), 0) FROM expense_categories WHERE user_id = ?",
+                (user_id,),
+            )
+            current_position = cursor.fetchone()[0] or 0
+            code = f"custom_{time.time_ns()}"
+            cursor.execute(
+                """
+                INSERT INTO expense_categories (user_id, code, title, percent, position)
+                VALUES (?, ?, ?, 0, ?)
+                """,
+                (user_id, code, title, current_position + 1),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to create expense category for user %s: %s", user_id, error)
+            return None
+
     def deactivate_income_category(self, user_id: int, category_id: int) -> None:
         """Deactivate income category."""
 
@@ -428,6 +531,28 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error(
                 "Failed to deactivate income category %s for user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
+    def deactivate_expense_category(self, user_id: int, category_id: int) -> None:
+        """Deactivate expense category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE expense_categories
+                SET is_active = 0
+                WHERE user_id = ? AND id = ?
+                """,
+                (user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to deactivate expense category %s for user %s: %s",
                 category_id,
                 user_id,
                 error,
@@ -455,6 +580,30 @@ class FinanceDatabase:
                 error,
             )
 
+    def update_expense_category_percent(
+        self, user_id: int, category_id: int, percent: int
+    ) -> None:
+        """Update percent for expense category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE expense_categories
+                SET percent = ?
+                WHERE user_id = ? AND id = ?
+                """,
+                (percent, user_id, category_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update percent for expense category %s of user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+
     def sum_income_category_percents(self, user_id: int) -> int:
         """Return sum of percents for active income categories."""
 
@@ -469,6 +618,25 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error(
                 "Failed to calculate percent sum for user %s: %s",
+                user_id,
+                error,
+            )
+            return 0
+
+    def sum_expense_category_percents(self, user_id: int) -> int:
+        """Return sum of percents for active expense categories."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT COALESCE(SUM(percent), 0) FROM expense_categories WHERE user_id = ? AND is_active = 1",
+                (user_id,),
+            )
+            result = cursor.fetchone()
+            return int(result[0]) if result and result[0] is not None else 0
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to calculate expense percent sum for user %s: %s",
                 user_id,
                 error,
             )
@@ -493,6 +661,33 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error(
                 "Failed to fetch income category %s for user %s: %s",
+                category_id,
+                user_id,
+                error,
+            )
+            return None
+
+    def get_expense_category_by_id(
+        self, user_id: int, category_id: int
+    ) -> Optional[Dict[str, Any]]:
+        """Return expense category by id."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT id, code, title, percent, position
+                FROM expense_categories
+                WHERE user_id = ? AND id = ? AND is_active = 1
+                LIMIT 1
+                """,
+                (user_id, category_id),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch expense category %s for user %s: %s",
                 category_id,
                 user_id,
                 error,

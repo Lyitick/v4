@@ -26,7 +26,9 @@ async def build_main_menu_for_user(user_id: int) -> ReplyKeyboardMarkup:
     show_household = await db.has_unpaid_household_questions(user_id, month)
     show_test_button = user_id == settings.ADMIN_ID
     return main_menu_keyboard(
-        show_household=show_household, show_test_button=show_test_button
+        show_household=show_household,
+        show_test_button=show_test_button,
+        show_settings=True,
     )
 
 

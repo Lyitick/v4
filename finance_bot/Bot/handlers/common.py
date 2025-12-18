@@ -9,6 +9,7 @@ from Bot.config import settings
 from Bot.database.crud import FinanceDatabase
 from Bot.keyboards.main import main_menu_keyboard
 from Bot.utils.datetime_utils import current_month_str
+from Bot.utils.ui_cleanup import ui_register_message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +27,9 @@ async def build_main_menu_for_user(user_id: int) -> ReplyKeyboardMarkup:
     show_household = await db.has_unpaid_household_questions(user_id, month)
     show_test_button = user_id == settings.ADMIN_ID
     return main_menu_keyboard(
-        show_household=show_household, show_test_button=show_test_button
+        show_household=show_household,
+        show_test_button=show_test_button,
+        show_settings=True,
     )
 
 
@@ -43,7 +46,8 @@ async def fallback_handler(message: Message, state: FSMContext) -> None:
     await delete_welcome_message_if_exists(message, state)
     current_state = await state.get_state()
     LOGGER.debug("Fallback triggered. User: %s State: %s Text: %s", message.from_user.id, current_state, message.text)
-    await message.answer(
+    sent = await message.answer(
         "Не понял сообщение. Пожалуйста, пользуйся кнопками или командами.",
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
+    await ui_register_message(state, sent.chat.id, sent.message_id)

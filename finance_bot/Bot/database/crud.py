@@ -15,6 +15,19 @@ from Bot.utils.datetime_utils import add_one_month, now_tz
 
 LOGGER = logging.getLogger(__name__)
 DB_PATH = Path(__file__).resolve().parents[2] / "finance.db"
+
+
+def _get_bot_user_id() -> int | None:
+    try:
+        token = getattr(settings, "BOT_TOKEN", None)
+        if not token:
+            return None
+        return int(str(token).split(":")[0])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None
+
+
+BOT_USER_ID = _get_bot_user_id()
 DEFAULT_HOUSEHOLD_ITEMS = [
     {"code": "phone", "text": "Телефон 600р?", "amount": 600},
     {"code": "internet", "text": "Интернет 700р?", "amount": 700},
@@ -245,6 +258,11 @@ class FinanceDatabase:
         """Seed default household payment items if missing for user."""
 
         try:
+            if BOT_USER_ID is not None and user_id == BOT_USER_ID:
+                LOGGER.warning(
+                    "Skipping household seeding for bot user %s", user_id
+                )
+                return
             cursor = self.connection.cursor()
             cursor.execute(
                 "SELECT 1 FROM household_payment_items WHERE user_id = ? LIMIT 1",
@@ -1429,6 +1447,11 @@ class FinanceDatabase:
         """Initialize household payment questions for month."""
 
         try:
+            if BOT_USER_ID is not None and user_id == BOT_USER_ID:
+                LOGGER.warning(
+                    "Skipping household questions init for bot user %s", user_id
+                )
+                return
             cursor = self.connection.cursor()
             self.ensure_household_items_seeded(user_id)
             cursor.execute(

@@ -1314,7 +1314,7 @@ class FinanceDatabase:
                 """
                 SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
                 FROM wishes
-                WHERE user_id = ? AND category = 'byt' AND (is_purchased = 0 OR is_purchased IS NULL)
+                WHERE user_id = ? AND category IN ('byt', 'БЫТ') AND (is_purchased = 0 OR is_purchased IS NULL)
                 ORDER BY id
                 """,
                 (user_id,),
@@ -1338,7 +1338,7 @@ class FinanceDatabase:
                 SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
                 FROM wishes
                 WHERE user_id = ?
-                  AND category = 'byt'
+                  AND category IN ('byt', 'БЫТ')
                   AND (is_purchased = 0 OR is_purchased IS NULL)
                   AND (deferred_until IS NULL OR deferred_until <= ?)
                 ORDER BY id
@@ -1816,7 +1816,7 @@ class FinanceDatabase:
                 """
                 SELECT DISTINCT user_id
                 FROM wishes
-                WHERE category = 'byt' AND (is_purchased = 0 OR is_purchased IS NULL)
+                WHERE category IN ('byt', 'БЫТ') AND (is_purchased = 0 OR is_purchased IS NULL)
                 """
             )
             rows = cursor.fetchall()
@@ -1832,7 +1832,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, purchased_at FROM purchases WHERE category = 'byt'"
+                "SELECT id, purchased_at FROM purchases WHERE category IN ('byt', 'БЫТ')"
             )
             purchases = cursor.fetchall()
             ids_to_delete: list[int] = []
@@ -1858,7 +1858,7 @@ class FinanceDatabase:
                 )
 
             cursor.execute(
-                "SELECT id, purchased_at FROM wishes WHERE category = 'byt' AND is_purchased = 1"
+                "SELECT id, purchased_at FROM wishes WHERE category IN ('byt', 'БЫТ') AND is_purchased = 1"
             )
             wish_rows = cursor.fetchall()
             wish_ids: list[int] = []

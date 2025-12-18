@@ -42,11 +42,12 @@ async def handle_category_selection(callback: CallbackQuery, state: FSMContext) 
 
     category_code = category_row.get("title", "")
     category = humanize_wishlist_category(category_code)
+    category_code_norm = "byt" if category == "БЫТ" else category_code
     data = await state.get_data()
     current_state = await state.get_state()
 
     if current_state == WishlistState.waiting_for_category.state:
-        await _finalize_wish(callback, state, category_code, category)
+        await _finalize_wish(callback, state, category_code_norm, category)
         return
 
     await _send_wishes_list(callback, category)
@@ -73,7 +74,10 @@ async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
 
 
 async def _finalize_wish(
-    callback: CallbackQuery, state: FSMContext, category_code: str, humanized_category: str
+    callback: CallbackQuery,
+    state: FSMContext,
+    category_code: str,
+    humanized_category: str,
 ) -> None:
     """Finalize wish creation after category selection."""
 

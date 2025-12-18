@@ -15,6 +15,19 @@ from Bot.utils.datetime_utils import add_one_month, now_tz
 
 LOGGER = logging.getLogger(__name__)
 DB_PATH = Path(__file__).resolve().parents[2] / "finance.db"
+
+
+def _get_bot_user_id() -> int | None:
+    try:
+        token = getattr(settings, "BOT_TOKEN", None)
+        if not token:
+            return None
+        return int(str(token).split(":")[0])
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return None
+
+
+BOT_USER_ID = _get_bot_user_id()
 DEFAULT_HOUSEHOLD_ITEMS = [
     {"code": "phone", "text": "Телефон 600р?", "amount": 600},
     {"code": "internet", "text": "Интернет 700р?", "amount": 700},
@@ -245,6 +258,11 @@ class FinanceDatabase:
         """Seed default household payment items if missing for user."""
 
         try:
+            if BOT_USER_ID is not None and user_id == BOT_USER_ID:
+                LOGGER.warning(
+                    "Skipping household seeding for bot user %s", user_id
+                )
+                return
             cursor = self.connection.cursor()
             cursor.execute(
                 "SELECT 1 FROM household_payment_items WHERE user_id = ? LIMIT 1",
@@ -1018,6 +1036,11 @@ class FinanceDatabase:
                 "Failed to update byt_defer_max_days for user %s: %s", user_id, error
             )
 
+    def update_byt_defer_max_days(self, user_id: int, days: int) -> None:
+        """Alias for set_byt_defer_max_days for compatibility."""
+
+        self.set_byt_defer_max_days(user_id, days)
+
     def get_wishlist_category_by_id(
         self, user_id: int, category_id: int
     ) -> Optional[Dict[str, Any]]:
@@ -1424,6 +1447,11 @@ class FinanceDatabase:
         """Initialize household payment questions for month."""
 
         try:
+            if BOT_USER_ID is not None and user_id == BOT_USER_ID:
+                LOGGER.warning(
+                    "Skipping household questions init for bot user %s", user_id
+                )
+                return
             cursor = self.connection.cursor()
             self.ensure_household_items_seeded(user_id)
             cursor.execute(
@@ -1553,6 +1581,65 @@ class FinanceDatabase:
                 error,
             )
             return False
+
+    async def should_show_household_payments_button(
+        self, user_id: int, month: str
+    ) -> bool:
+        """Return True if any active household payment is unpaid for the month."""
+
+        try:
+            self.ensure_household_items_seeded(user_id)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT 1
+                FROM household_payment_items i
+                LEFT JOIN household_payments p
+                    ON p.user_id = i.user_id
+                    AND p.month = ?
+                    AND p.question_code = i.code
+                WHERE i.user_id = ?
+                  AND i.is_active = 1
+                  AND (p.is_paid IS NULL OR p.is_paid = 0)
+                LIMIT 1
+                """,
+                (month, user_id),
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to decide household payments button for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return False
+
+    async def reset_household_questions_for_month(self, user_id: int, month: str) -> None:
+        """Reset household payment progress for a specific month."""
+
+        try:
+            await self.init_household_questions_for_month(user_id, month)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE household_payments
+                SET is_paid = 0
+                WHERE user_id = ? AND month = ?
+                """,
+                (user_id, month),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Reset household questions for user %s month %s", user_id, month
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to reset household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
 
     def get_purchases_by_user(self, user_id: int) -> List[Dict[str, Any]]:
         """Get purchases for user honoring retention settings."""

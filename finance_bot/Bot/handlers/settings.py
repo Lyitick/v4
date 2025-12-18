@@ -1,10 +1,11 @@
 """Inline settings handlers for a single-page experience."""
 import logging
+import time
 
 from aiogram import F, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from Bot.database.crud import FinanceDatabase
 from Bot.handlers.common import build_main_menu_for_user
@@ -12,6 +13,8 @@ from Bot.keyboards.settings import (
     byt_rules_inline_keyboard,
     byt_timer_inline_keyboard,
     byt_timer_times_select_keyboard,
+    household_payments_inline_keyboard,
+    household_payments_remove_keyboard,
     income_categories_select_keyboard,
     income_settings_inline_keyboard,
     settings_home_inline_keyboard,
@@ -21,14 +24,19 @@ from Bot.keyboards.settings import (
     wishlist_settings_inline_keyboard,
 )
 from Bot.keyboards.calculator import income_calculator_keyboard
-from Bot.states.money_states import IncomeSettingsState
+from Bot.states.money_states import HouseholdSettingsState, IncomeSettingsState
 from Bot.states.wishlist_states import (
     BytSettingsState,
     BytTimerState,
     WishlistSettingsState,
 )
+from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
-from Bot.utils.ui_cleanup import ui_cleanup_messages, ui_register_message
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_messages,
+    ui_register_message,
+    ui_register_user_message,
+)
 
 router = Router()
 LOGGER = logging.getLogger(__name__)
@@ -36,10 +44,88 @@ PERCENT_DIGITS = {str(i) for i in range(10)}
 PERCENT_INPUT_BUTTONS = PERCENT_DIGITS | {"Очистить", "✅ Газ"}
 
 
+async def _register_user_message(state: FSMContext, message: Message) -> None:
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+
+
+async def _delete_message_safely(bot, chat_id: int | None, message_id: int | None) -> None:
+    if chat_id is None or message_id is None:
+        return
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=int(message_id))
+    except Exception:
+        pass
+
+
+async def _delete_user_message(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+
+async def _remove_calculator_keyboard(message: Message) -> None:
+    try:
+        temp = await message.answer(" ", reply_markup=ReplyKeyboardRemove())
+        try:
+            await temp.delete()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
+async def _cleanup_input_ui(
+    bot,
+    data: dict,
+    *,
+    display_chat_key: str | None = None,
+    display_message_key: str | None = None,
+    prompt_chat_key: str | None = None,
+    prompt_message_key: str | None = None,
+) -> None:
+    if display_chat_key and display_message_key:
+        await _delete_message_safely(
+            bot, data.get(display_chat_key), data.get(display_message_key)
+        )
+    if prompt_chat_key and prompt_message_key:
+        await _delete_message_safely(
+            bot, data.get(prompt_chat_key), data.get(prompt_message_key)
+        )
+
+
 async def _store_settings_message(state: FSMContext, chat_id: int, message_id: int) -> None:
     await state.update_data(
         settings_chat_id=chat_id, settings_message_id=message_id, in_settings=True
     )
+
+
+async def _set_current_screen(state: FSMContext, screen_id: str) -> None:
+    await state.update_data(settings_current_screen=screen_id, in_settings=True)
+
+
+async def _reset_navigation(state: FSMContext, current_screen: str = "st:home") -> None:
+    await state.update_data(settings_nav_stack=[], settings_current_screen=current_screen)
+
+
+async def _push_current_screen(state: FSMContext, next_screen: str) -> None:
+    data = await state.get_data()
+    current_screen = data.get("settings_current_screen")
+    stack = list(data.get("settings_nav_stack") or [])
+    if current_screen and current_screen != next_screen:
+        if not stack or stack[-1] != current_screen:
+            stack.append(current_screen)
+    await state.update_data(settings_nav_stack=stack, settings_current_screen=next_screen)
+
+
+async def _pop_previous_screen(state: FSMContext) -> str | None:
+    data = await state.get_data()
+    stack = list(data.get("settings_nav_stack") or [])
+    if not stack:
+        return None
+    previous = stack.pop()
+    await state.update_data(settings_nav_stack=stack, settings_current_screen=previous)
+    return previous
 
 
 async def _send_and_register(
@@ -114,6 +200,74 @@ async def _render_settings_home(message: Message, state: FSMContext) -> None:
         message_id=message_id,
         text="⚙️ НАСТРОЙКИ",
         reply_markup=settings_home_inline_keyboard(),
+    )
+
+
+def _format_household_payments_text(
+    items: list[dict], *, has_unpaid: bool, error_message: str | None = None
+) -> str:
+    lines: list[str] = ["Бытовые платежи", ""]
+    if not items:
+        lines.append("Список платежей пуст.")
+    else:
+        lines.append("Текущий список платежей:")
+        for index, item in enumerate(items, start=1):
+            title = str(item.get("text", "")).rstrip("?")
+            amount = item.get("amount")
+            if amount is not None:
+                lines.append(f"{index}) {title} — {amount}")
+            else:
+                lines.append(f"{index}) {title}")
+    status_line = (
+        "Вопросы за этот месяц: нужно пройти."
+        if has_unpaid
+        else "Вопросы за этот месяц: всё пройдено."
+    )
+    lines.extend(["", status_line])
+    if error_message:
+        lines.extend(["", error_message])
+    return "\n".join(lines)
+
+
+async def _render_household_payments_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db: FinanceDatabase,
+    user_id: int,
+    error_message: str | None = None,
+) -> None:
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+    month = current_month_str()
+    await db.init_household_questions_for_month(user_id, month)
+    has_unpaid = await db.should_show_household_payments_button(user_id, month)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=_format_household_payments_text(
+            items, has_unpaid=has_unpaid, error_message=error_message
+        ),
+        reply_markup=household_payments_inline_keyboard(),
+    )
+
+
+async def _render_household_delete_menu(
+    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+) -> None:
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Что удалить?" if items else "Активных платежей нет.",
+        reply_markup=household_payments_remove_keyboard(items) if items else None,
     )
 
 
@@ -278,9 +432,279 @@ async def _render_byt_timer_settings(
         chat_id=chat_id,
         message_id=message_id,
         text=_format_byt_timer_text(times, error_message),
-        reply_markup=byt_timer_inline_keyboard(back_callback="st:byt_rules"),
+        reply_markup=byt_timer_inline_keyboard(),
     )
     return times
+
+
+async def _render_income_delete_menu(
+    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+) -> None:
+    categories = db.list_active_income_categories(user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Что удалить?",
+        reply_markup=income_categories_select_keyboard(categories, "inc:del"),
+    )
+
+
+async def _render_income_percent_menu(
+    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+) -> None:
+    categories = db.list_active_income_categories(user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Какой категории меняем процент?",
+        reply_markup=income_categories_select_keyboard(categories, "inc:pct"),
+    )
+
+
+async def _render_wishlist_delete_menu(
+    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+) -> None:
+    categories = db.list_active_wishlist_categories(user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Что удалить?",
+        reply_markup=wishlist_categories_select_keyboard(categories, "wl:del_cat"),
+    )
+
+
+async def _render_wishlist_purchased_select_menu(
+    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+) -> None:
+    categories = db.list_active_wishlist_categories(user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="У какой категории меняем срок купленного?",
+        reply_markup=wishlist_categories_select_keyboard(categories, "wl:purchased_cat"),
+    )
+
+
+async def _render_wishlist_purchased_mode(
+    *,
+    state: FSMContext,
+    message: Message,
+    db: FinanceDatabase,
+    user_id: int,
+    category_id: int,
+) -> None:
+    category = db.get_wishlist_category_by_id(user_id, category_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=(
+            f'⏳ Купленное — "{category.get("title", "")}"\nКак показывать купленное?'
+        ),
+        reply_markup=wishlist_purchased_mode_keyboard(),
+    )
+
+
+async def _render_byt_timer_delete_menu(
+    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+) -> None:
+    times = db.list_active_byt_timer_times(user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Что удалить?",
+        reply_markup=byt_timer_times_select_keyboard(times, "bt:del_time"),
+    )
+
+
+async def render_settings_screen(
+    screen_id: str,
+    *,
+    message: Message,
+    state: FSMContext,
+    error_message: str | None = None,
+) -> None:
+    db = FinanceDatabase()
+    user_id = message.from_user.id
+    if screen_id == "st:home":
+        await _render_settings_home(message, state)
+    elif screen_id == "st:income":
+        await _render_income_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "inc:del_menu":
+        await _render_income_delete_menu(
+            state=state, message=message, db=db, user_id=user_id
+        )
+    elif screen_id == "inc:pct_menu":
+        await _render_income_percent_menu(
+            state=state, message=message, db=db, user_id=user_id
+        )
+    elif screen_id == "st:wishlist":
+        await _render_wishlist_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "st:household_payments":
+        await _render_household_payments_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "wl:del_cat_menu":
+        await _render_wishlist_delete_menu(
+            state=state, message=message, db=db, user_id=user_id
+        )
+    elif screen_id == "wl:purchased_select_category":
+        await _render_wishlist_purchased_select_menu(
+            state=state, message=message, db=db, user_id=user_id
+        )
+    elif screen_id == "wl:purchased_mode":
+        data = await state.get_data()
+        category_id = data.get("editing_wl_category_id")
+        if category_id is not None:
+            await _render_wishlist_purchased_mode(
+                state=state,
+                message=message,
+                db=db,
+                user_id=user_id,
+                category_id=int(category_id),
+            )
+        else:
+            await _render_wishlist_settings(
+                state=state,
+                message=message,
+                db=db,
+                user_id=user_id,
+            )
+    elif screen_id == "st:byt_rules":
+        await _render_byt_rules_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "byt:timer_menu":
+        await _render_byt_timer_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "bt:del_time_menu":
+        await _render_byt_timer_delete_menu(
+            state=state, message=message, db=db, user_id=user_id
+        )
+    elif screen_id == "hp:del_payment_menu":
+        await _render_household_delete_menu(
+            state=state, message=message, db=db, user_id=user_id
+        )
+    else:
+        await _render_settings_home(message, state)
+    await _set_current_screen(state, screen_id)
+
+
+async def _navigate_to_screen(
+    screen_id: str,
+    *,
+    message: Message,
+    state: FSMContext,
+    error_message: str | None = None,
+) -> None:
+    await _push_current_screen(state, screen_id)
+    await render_settings_screen(
+        screen_id, message=message, state=state, error_message=error_message
+    )
+
+
+async def _render_previous_screen_or_exit(
+    message: Message, state: FSMContext
+) -> None:
+    previous = await _pop_previous_screen(state)
+    if previous:
+        await render_settings_screen(previous, message=message, state=state)
+    else:
+        await _exit_settings_to_main(
+            bot=message.bot,
+            state=state,
+            chat_id=message.chat.id,
+            user_id=message.from_user.id,
+        )
+
+
+async def handle_settings_back_action(message: Message, state: FSMContext) -> None:
+    current_state = await state.get_state()
+    data = await state.get_data()
+
+    await _register_user_message(state, message)
+
+    numeric_cleanup_map = {
+        IncomeSettingsState.waiting_for_percent.state: {
+            "display_chat_key": "percent_display_chat_id",
+            "display_message_key": "percent_display_message_id",
+        },
+        WishlistSettingsState.waiting_for_purchased_days.state: {
+            "display_chat_key": "purchased_display_chat_id",
+            "display_message_key": "purchased_display_message_id",
+        },
+        HouseholdSettingsState.waiting_for_amount.state: {
+            "display_chat_key": "hp_amount_display_chat_id",
+            "display_message_key": "hp_amount_display_message_id",
+        },
+        BytSettingsState.waiting_for_max_defer_days.state: {
+            "display_chat_key": "byt_max_display_chat_id",
+            "display_message_key": "byt_max_display_message_id",
+        },
+        BytTimerState.waiting_for_hour.state: {
+            "display_chat_key": "bt_hour_display_chat_id",
+            "display_message_key": "bt_hour_display_message_id",
+        },
+        BytTimerState.waiting_for_minute.state: {
+            "display_chat_key": "bt_min_display_chat_id",
+            "display_message_key": "bt_min_display_message_id",
+            "prompt_chat_key": "bt_min_prompt_chat_id",
+            "prompt_message_key": "bt_min_prompt_message_id",
+        },
+    }
+
+    cleanup_params = numeric_cleanup_map.get(current_state)
+    if cleanup_params:
+        await _cleanup_input_ui(message.bot, data, **cleanup_params)
+        await _remove_calculator_keyboard(message)
+        await state.set_state(None)
+        await _render_previous_screen_or_exit(message, state)
+        return
+
+    await state.set_state(None)
+    await _render_previous_screen_or_exit(message, state)
 
 
 @router.message(F.text == "⚙️")
@@ -289,46 +713,38 @@ async def open_settings(message: Message, state: FSMContext) -> None:
 
     await ui_cleanup_messages(message.bot, state)
     await state.clear()
+    await _register_user_message(state, message)
 
-    back_prompt = await _send_and_register(
+    mode_message = await _send_and_register(
         message=message,
         state=state,
         text="Режим настроек. Используй кнопку \"Назад\" чтобы выйти.",
         reply_markup=settings_back_reply_keyboard(),
     )
-    sent = await _send_and_register(
+    settings_message = await _send_and_register(
         message=message,
         state=state,
         text="⚙️ НАСТРОЙКИ",
         reply_markup=settings_home_inline_keyboard(),
     )
-    try:
-        await back_prompt.delete()
-        data = await state.get_data()
-        ids = list(data.get("ui_message_ids") or [])
-        if back_prompt.message_id in ids:
-            ids.remove(back_prompt.message_id)
-            await state.update_data(ui_message_ids=ids)
-    except Exception:
-        pass
-    await _store_settings_message(state, sent.chat.id, sent.message_id)
+    await state.update_data(settings_mode_message_id=mode_message.message_id)
+    await _store_settings_message(state, settings_message.chat.id, settings_message.message_id)
+    await _reset_navigation(state)
 
 
 @router.callback_query(F.data == "st:home")
 async def back_to_settings_home(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    await _render_settings_home(callback.message, state)
+    await _reset_navigation(state)
+    await render_settings_screen("st:home", message=callback.message, state=state)
 
 
 @router.callback_query(F.data == "st:income")
 async def open_income_settings(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    db = FinanceDatabase()
-    await _render_income_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
-    )
+    await _navigate_to_screen("st:income", message=callback.message, state=state)
 
 
 @router.message(F.text == "Назад")
@@ -336,67 +752,62 @@ async def settings_exit_via_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
         return
-    await _exit_settings_to_main(
-        bot=message.bot,
-        state=state,
-        chat_id=message.chat.id,
-        user_id=message.from_user.id,
-    )
+    await handle_settings_back_action(message, state)
 
 
-@router.callback_query(F.data.in_({"st:wishlist", "st:byt_rules"}))
-async def settings_stubs(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data == "st:wishlist")
+async def open_wishlist(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    db = FinanceDatabase()
-    if callback.data == "st:wishlist":
-        await _render_wishlist_settings(
-            state=state, message=callback.message, db=db, user_id=callback.from_user.id
-        )
-        return
-    await _render_byt_rules_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
-    )
+    await _navigate_to_screen("st:wishlist", message=callback.message, state=state)
 
 
-@router.callback_query(F.data == "st:back_main")
-async def settings_back_to_main(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data == "st:household_payments")
+async def open_household_payments(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await _exit_settings_to_main(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=callback.message.chat.id,
-        user_id=callback.from_user.id,
+    await state.set_state(None)
+    await _navigate_to_screen(
+        "st:household_payments", message=callback.message, state=state
     )
+
+
+@router.callback_query(F.data == "st:byt_rules")
+async def open_byt_rules(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(None)
+    await _navigate_to_screen("st:byt_rules", message=callback.message, state=state)
 
 
 @router.callback_query(F.data == "byt:toggle_enabled")
 async def toggle_byt_enabled(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await state.set_state(None)
     db = FinanceDatabase()
     settings_row = db.get_user_settings(callback.from_user.id)
     current = bool(settings_row.get("byt_reminders_enabled", 1))
     db.set_byt_reminders_enabled(callback.from_user.id, not current)
-    await _render_byt_rules_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
+    await render_settings_screen(
+        "st:byt_rules", message=callback.message, state=state
     )
 
 
 @router.callback_query(F.data == "byt:toggle_defer")
 async def toggle_byt_defer(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await state.set_state(None)
     db = FinanceDatabase()
     settings_row = db.get_user_settings(callback.from_user.id)
     current = bool(settings_row.get("byt_defer_enabled", 1))
     db.set_byt_defer_enabled(callback.from_user.id, not current)
-    await _render_byt_rules_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
+    await render_settings_screen(
+        "st:byt_rules", message=callback.message, state=state
     )
 
 
 @router.callback_query(F.data == "byt:edit_max_defer_days")
 async def edit_byt_max_defer_days(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await _push_current_screen(state, "byt:edit_max_defer_days")
     await state.set_state(BytSettingsState.waiting_for_max_defer_days)
     db = FinanceDatabase()
     settings_row = db.get_user_settings(callback.from_user.id)
@@ -427,6 +838,7 @@ async def edit_byt_max_defer_days(callback: CallbackQuery, state: FSMContext) ->
 @router.callback_query(F.data == "bt:add_time_hour")
 async def byt_timer_add_hour(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await _push_current_screen(state, "bt:add_time_hour")
     await state.set_state(BytTimerState.waiting_for_hour)
     await state.update_data(bt_hour_str="0")
     chat_id, message_id = await _get_settings_message_ids(state, callback.message)
@@ -454,19 +866,7 @@ async def byt_timer_add_hour(callback: CallbackQuery, state: FSMContext) -> None
 async def byt_timer_delete_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    db = FinanceDatabase()
-    times = db.list_active_byt_timer_times(callback.from_user.id)
-    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
-    await _edit_settings_page(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="Что удалить?",
-        reply_markup=byt_timer_times_select_keyboard(
-            times, "bt:del_time", back_callback="byt:timer_menu"
-        ),
-    )
+    await _navigate_to_screen("bt:del_time_menu", message=callback.message, state=state)
 
 
 @router.callback_query(F.data.startswith("bt:del_time:"))
@@ -500,8 +900,8 @@ async def byt_timer_reset(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     db = FinanceDatabase()
     db.reset_byt_timer_times(callback.from_user.id)
-    await _render_byt_timer_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
+    await render_settings_screen(
+        "byt:timer_menu", message=callback.message, state=state
     )
 
 
@@ -509,15 +909,67 @@ async def byt_timer_reset(callback: CallbackQuery, state: FSMContext) -> None:
 async def open_byt_timer_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
+    await _navigate_to_screen("byt:timer_menu", message=callback.message, state=state)
+
+
+@router.callback_query(F.data == "hp:add_payment")
+async def household_payment_add(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await _push_current_screen(state, "hp:add_payment")
+    await state.set_state(HouseholdSettingsState.waiting_for_title)
+    await state.update_data(hp_amount_str="0", hp_new_title=None)
+    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
+    await _edit_settings_page(
+        bot=callback.message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Введи название платежа",
+        reply_markup=None,
+    )
+
+
+@router.callback_query(F.data == "hp:del_payment_menu")
+async def household_payment_delete_menu(
+    callback: CallbackQuery, state: FSMContext
+) -> None:
+    await callback.answer()
+    await state.set_state(None)
+    await _navigate_to_screen("hp:del_payment_menu", message=callback.message, state=state)
+
+
+@router.callback_query(F.data.startswith("hp:del_payment:"))
+async def household_payment_delete(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    parts = callback.data.split(":") if callback.data else []
+    if len(parts) != 3:
+        return
+    code = parts[2]
     db = FinanceDatabase()
-    await _render_byt_timer_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
+    db.deactivate_household_payment_item(callback.from_user.id, code)
+    await db.init_household_questions_for_month(
+        callback.from_user.id, current_month_str()
+    )
+    previous_screen = await _pop_previous_screen(state) or "st:household_payments"
+    await render_settings_screen(previous_screen, message=callback.message, state=state)
+
+
+@router.callback_query(F.data == "hp:reset_questions")
+async def household_reset_questions(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer("Сброшено")
+    db = FinanceDatabase()
+    await db.reset_household_questions_for_month(
+        callback.from_user.id, current_month_str()
+    )
+    await render_settings_screen(
+        "st:household_payments", message=callback.message, state=state
     )
 
 
 @router.callback_query(F.data == "inc:add")
 async def category_add(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await _push_current_screen(state, "inc:add_category")
     await state.set_state(IncomeSettingsState.waiting_for_category_title)
     await state.update_data(category_scope="income")
     chat_id, message_id = await _get_settings_message_ids(state, callback.message)
@@ -534,6 +986,7 @@ async def category_add(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "wl:add_cat")
 async def wishlist_category_add(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
+    await _push_current_screen(state, "wl:add_category")
     await state.set_state(WishlistSettingsState.waiting_for_category_title)
     chat_id, message_id = await _get_settings_message_ids(state, callback.message)
     await _edit_settings_page(
@@ -548,6 +1001,7 @@ async def wishlist_category_add(callback: CallbackQuery, state: FSMContext) -> N
 
 @router.message(IncomeSettingsState.waiting_for_category_title)
 async def income_add_category_title(message: Message, state: FSMContext) -> None:
+    await _register_user_message(state, message)
     title = (message.text or "").strip()
     if not title or len(title) > 32:
         await _send_and_register(
@@ -558,16 +1012,15 @@ async def income_add_category_title(message: Message, state: FSMContext) -> None
         return
 
     db = FinanceDatabase()
-    data = await state.get_data()
     db.create_income_category(message.from_user.id, title)
-    await _render_income_settings(
-        state=state, message=message, db=db, user_id=message.from_user.id
-    )
     await state.set_state(None)
+    previous_screen = await _pop_previous_screen(state) or "st:income"
+    await render_settings_screen(previous_screen, message=message, state=state)
 
 
 @router.message(WishlistSettingsState.waiting_for_category_title)
 async def wishlist_add_category_title(message: Message, state: FSMContext) -> None:
+    await _register_user_message(state, message)
     title = (message.text or "").strip()
     if not title or len(title) > 32:
         await _send_and_register(
@@ -579,49 +1032,156 @@ async def wishlist_add_category_title(message: Message, state: FSMContext) -> No
 
     db = FinanceDatabase()
     db.create_wishlist_category(message.from_user.id, title)
-    await _render_wishlist_settings(
-        state=state, message=message, db=db, user_id=message.from_user.id
-    )
     await state.set_state(None)
+    previous_screen = await _pop_previous_screen(state) or "st:wishlist"
+    await render_settings_screen(previous_screen, message=message, state=state)
+
+
+@router.message(HouseholdSettingsState.waiting_for_title)
+async def household_payment_title(message: Message, state: FSMContext) -> None:
+    await _register_user_message(state, message)
+    title = (message.text or "").strip()
+    if not title:
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Нужно ввести название платежа.",
+        )
+        return
+
+    await state.update_data(hp_new_title=title, hp_amount_str="0")
+    await state.set_state(HouseholdSettingsState.waiting_for_amount)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=f'Сколько платить за "{title}"?',
+        reply_markup=None,
+    )
+    prompt = await _send_and_register(
+        message=message,
+        state=state,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
+    )
+    await state.update_data(
+        hp_amount_display_chat_id=prompt.chat.id,
+        hp_amount_display_message_id=prompt.message_id,
+    )
+
+
+@router.message(
+    HouseholdSettingsState.waiting_for_amount, F.text.in_(PERCENT_INPUT_BUTTONS)
+)
+async def household_payment_amount(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    amount_str = data.get("hp_amount_str", "0")
+    display_chat_id = data.get("hp_amount_display_chat_id", message.chat.id)
+    display_message_id = data.get("hp_amount_display_message_id")
+
+    if text in PERCENT_DIGITS:
+        amount_str = amount_str.lstrip("0") if amount_str != "0" else ""
+        amount_str = f"{amount_str}{text}" or "0"
+        try:
+            await message.bot.edit_message_text(
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {amount_str}",
+            )
+        except Exception:
+            fallback = await message.bot.send_message(
+                chat_id=display_chat_id, text=f": {amount_str}"
+            )
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            hp_amount_str=amount_str,
+            hp_amount_display_chat_id=display_chat_id,
+            hp_amount_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "Очистить":
+        amount_str = "0"
+        try:
+            await message.bot.edit_message_text(
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=": 0",
+            )
+        except Exception:
+            fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            hp_amount_str=amount_str,
+            hp_amount_display_chat_id=display_chat_id,
+            hp_amount_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "✅ Газ":
+        error_message = None
+        try:
+            amount = int(amount_str or "0")
+        except ValueError:
+            error_message = "Нужно ввести число."
+            amount = 0
+        else:
+            if amount <= 0:
+                error_message = "Сумма должна быть больше нуля."
+
+        title = (data.get("hp_new_title") or "").strip()
+        db = FinanceDatabase()
+
+        if not title:
+            error_message = error_message or "Название платежа не задано."
+
+        if error_message is None:
+            position = db.get_next_household_position(message.from_user.id)
+            code = f"custom_{time.time_ns()}"
+            text_value = f"{title} {amount}р?"
+            db.add_household_payment_item(
+                message.from_user.id, code, text_value, amount, position
+            )
+            await db.init_household_questions_for_month(
+                message.from_user.id, current_month_str()
+            )
+
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="hp_amount_display_chat_id",
+            display_message_key="hp_amount_display_message_id",
+        )
+        await _remove_calculator_keyboard(message)
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "st:household_payments"
+        await render_settings_screen(
+            previous_screen,
+            message=message,
+            state=state,
+            error_message=error_message,
+        )
 
 
 @router.callback_query(F.data == "inc:del_menu")
 async def category_delete_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    scope = "income"
-    db = FinanceDatabase()
-    categories = db.list_active_income_categories(callback.from_user.id)
-    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
-    keyboard_builder = income_categories_select_keyboard
-    back_callback = "st:income"
-    await _edit_settings_page(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="Что удалить?",
-        reply_markup=keyboard_builder(categories, f"{scope[:3]}:del", back_callback=back_callback),
-    )
+    await _navigate_to_screen("inc:del_menu", message=callback.message, state=state)
 
 
 @router.callback_query(F.data == "wl:del_cat_menu")
 async def wishlist_delete_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    db = FinanceDatabase()
-    categories = db.list_active_wishlist_categories(callback.from_user.id)
-    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
-    await _edit_settings_page(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="Что удалить?",
-        reply_markup=wishlist_categories_select_keyboard(
-            categories, "wl:del_cat", back_callback="st:wishlist"
-        ),
-    )
+    await _navigate_to_screen("wl:del_cat_menu", message=callback.message, state=state)
 
 
 @router.callback_query(F.data.startswith("inc:del:"))
@@ -636,19 +1196,17 @@ async def category_delete(callback: CallbackQuery, state: FSMContext) -> None:
     scope = "income"
     categories = db.list_active_income_categories(callback.from_user.id)
     if len([cat for cat in categories if cat.get("is_active", 1)]) <= 1:
-        await _render_income_settings(
-            state=state,
+        await render_settings_screen(
+            "st:income",
             message=callback.message,
-            db=db,
-            user_id=callback.from_user.id,
+            state=state,
             error_message="Нельзя удалить последнюю категорию.",
         )
         return
 
     db.deactivate_income_category(callback.from_user.id, category_id)
-    await _render_income_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
-    )
+    previous_screen = await _pop_previous_screen(state) or "st:income"
+    await render_settings_screen(previous_screen, message=callback.message, state=state)
 
 
 @router.callback_query(F.data.startswith("wl:del_cat:"))
@@ -662,39 +1220,24 @@ async def wishlist_category_delete(callback: CallbackQuery, state: FSMContext) -
     db = FinanceDatabase()
     categories = db.list_active_wishlist_categories(callback.from_user.id)
     if len(categories) <= 1:
-        await _render_wishlist_settings(
-            state=state,
+        await render_settings_screen(
+            "st:wishlist",
             message=callback.message,
-            db=db,
-            user_id=callback.from_user.id,
+            state=state,
             error_message="Нельзя удалить последнюю категорию.",
         )
         return
 
     db.deactivate_wishlist_category(callback.from_user.id, category_id)
-    await _render_wishlist_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
-    )
+    previous_screen = await _pop_previous_screen(state) or "st:wishlist"
+    await render_settings_screen(previous_screen, message=callback.message, state=state)
 
 
 @router.callback_query(F.data == "inc:pct_menu")
 async def category_percent_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    scope = "income"
-    db = FinanceDatabase()
-    categories = db.list_active_income_categories(callback.from_user.id)
-    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
-    keyboard_builder = income_categories_select_keyboard
-    back_callback = "st:income"
-    await _edit_settings_page(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="Какой категории меняем процент?",
-        reply_markup=keyboard_builder(categories, f"{scope[:3]}:pct", back_callback=back_callback),
-    )
+    await _navigate_to_screen("inc:pct_menu", message=callback.message, state=state)
 
 
 @router.callback_query(F.data.startswith("inc:pct:"))
@@ -714,6 +1257,7 @@ async def category_percent_prompt(callback: CallbackQuery, state: FSMContext) ->
         )
         return
 
+    await _push_current_screen(state, "inc:pct_input")
     await state.update_data(
         edit_scope=scope,
         editing_category_id=category_id,
@@ -753,18 +1297,8 @@ async def category_percent_prompt(callback: CallbackQuery, state: FSMContext) ->
 async def wishlist_purchased_select_category(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    db = FinanceDatabase()
-    categories = db.list_active_wishlist_categories(callback.from_user.id)
-    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
-    await _edit_settings_page(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="У какой категории меняем срок купленного?",
-        reply_markup=wishlist_categories_select_keyboard(
-            categories, "wl:purchased_cat", back_callback="st:wishlist"
-        ),
+    await _navigate_to_screen(
+        "wl:purchased_select_category", message=callback.message, state=state
     )
 
 
@@ -779,20 +1313,14 @@ async def wishlist_purchased_category(callback: CallbackQuery, state: FSMContext
     db = FinanceDatabase()
     category = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
     if not category or not category.get("is_active", 1):
-        await _render_wishlist_settings(
-            state=state, message=callback.message, db=db, user_id=callback.from_user.id
+        await render_settings_screen(
+            "st:wishlist", message=callback.message, state=state
         )
         return
 
     await state.update_data(editing_wl_category_id=category_id)
-    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
-    await _edit_settings_page(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text=f'Как показывать купленное для "{category.get("title", "")}"?',
-        reply_markup=wishlist_purchased_mode_keyboard("wl:purchased_select_category"),
+    await _navigate_to_screen(
+        "wl:purchased_mode", message=callback.message, state=state
     )
 
 
@@ -802,19 +1330,13 @@ async def wishlist_set_purchased_always(callback: CallbackQuery, state: FSMConte
     data = await state.get_data()
     category_id = data.get("editing_wl_category_id")
     if category_id is None:
-        await _render_wishlist_settings(
-            state=state,
-            message=callback.message,
-            db=FinanceDatabase(),
-            user_id=callback.from_user.id,
-        )
+        await render_settings_screen("st:wishlist", message=callback.message, state=state)
         return
     db = FinanceDatabase()
     db.update_wishlist_category_purchased_mode(callback.from_user.id, int(category_id), "always")
     await state.set_state(None)
-    await _render_wishlist_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
-    )
+    await _reset_navigation(state, "st:wishlist")
+    await render_settings_screen("st:wishlist", message=callback.message, state=state)
 
 
 @router.callback_query(F.data == "wl:purchased_mode:days")
@@ -823,15 +1345,15 @@ async def wishlist_set_purchased_days(callback: CallbackQuery, state: FSMContext
     data = await state.get_data()
     category_id = data.get("editing_wl_category_id")
     if category_id is None:
-        await _render_wishlist_settings(
-            state=state,
-            message=callback.message,
-            db=FinanceDatabase(),
-            user_id=callback.from_user.id,
-        )
+        await render_settings_screen("st:wishlist", message=callback.message, state=state)
         return
     db = FinanceDatabase()
     category = db.get_wishlist_category_by_id(callback.from_user.id, int(category_id))
+    if not category:
+        await _reset_navigation(state, "st:wishlist")
+        await render_settings_screen("st:wishlist", message=callback.message, state=state)
+        return
+    await _push_current_screen(state, "wl:purchased_days")
     await state.set_state(WishlistSettingsState.waiting_for_purchased_days)
     await state.update_data(
         purchased_days_str="0",
@@ -846,7 +1368,9 @@ async def wishlist_set_purchased_days(callback: CallbackQuery, state: FSMContext
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text=f'На сколько дней показывать купленное для "{category.get("title", "")}"?',
+        text=(
+            f'На сколько дней показывать купленное для "{category.get("title", "")}"?'
+        ),
         reply_markup=None,
     )
     prompt = await _send_and_register(
@@ -865,6 +1389,8 @@ async def wishlist_set_purchased_days(callback: CallbackQuery, state: FSMContext
 async def income_percent_value(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
     if text not in PERCENT_INPUT_BUTTONS:
         await _send_and_register(
             message=message,
@@ -903,10 +1429,6 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
             percent_display_chat_id=display_chat_id,
             percent_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "Очистить":
@@ -926,83 +1448,67 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
             percent_display_chat_id=display_chat_id,
             percent_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "✅ Газ":
+        error_message = None
         try:
             percent = int(percent_str or "0")
         except ValueError:
-            await _send_and_register(
-                message=message,
-                state=state,
-                text="Процент должен быть числом.",
-            )
-            return
-        if percent < 0 or percent > 100:
-            await _send_and_register(
-                message=message,
-                state=state,
-                text="Процент должен быть в диапазоне 0–100.",
-            )
-            return
+            error_message = "Процент должен быть числом."
+        else:
+            if percent < 0 or percent > 100:
+                error_message = "Процент должен быть в диапазоне 0–100."
 
         category_id = data.get("editing_category_id")
         previous_percent = int(data.get("previous_percent", 0))
         if category_id is None:
             await state.set_state(None)
+            await _cleanup_input_ui(
+                message.bot,
+                data,
+                display_chat_key="percent_display_chat_id",
+                display_message_key="percent_display_message_id",
+            )
+            await _remove_calculator_keyboard(message)
+            await _render_previous_screen_or_exit(message, state)
             return
 
-        db = FinanceDatabase()
-        db.update_income_category_percent(message.from_user.id, category_id, percent)
-        total = db.sum_income_category_percents(message.from_user.id)
+        if error_message is None:
+            db = FinanceDatabase()
+            db.update_income_category_percent(message.from_user.id, category_id, percent)
+            total = db.sum_income_category_percents(message.from_user.id)
 
-        if total != 100:
-            db.update_income_category_percent(
-                message.from_user.id, category_id, previous_percent
-            )
-            await state.set_state(None)
-            await _render_income_settings(
-                state=state,
-                message=message,
-                db=db,
-                user_id=message.from_user.id,
-                error_message=f"Сумма процентов должна быть 100%. Сейчас: {total}%",
-            )
-            return
-
-        LOGGER.info(
-            "Percent saved: user=%s scope=%s category_id=%s value=%s",
-            message.from_user.id,
-            "income",
-            category_id,
-            percent,
-        )
-        display_message_id = data.get("percent_display_message_id")
-        if display_message_id:
-            try:
-                await message.bot.delete_message(
-                    chat_id=data.get("percent_display_chat_id", message.chat.id),
-                    message_id=int(display_message_id),
+            if total != 100:
+                db.update_income_category_percent(
+                    message.from_user.id, category_id, previous_percent
                 )
-            except Exception:
-                pass
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await _send_and_register(
+                error_message = (
+                    f"Сумма процентов должна быть 100%. Сейчас: {total}%"
+                )
+            else:
+                LOGGER.info(
+                    "Percent saved: user=%s scope=%s category_id=%s value=%s",
+                    message.from_user.id,
+                    "income",
+                    category_id,
+                    percent,
+                )
+
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="percent_display_chat_id",
+            display_message_key="percent_display_message_id",
+        )
+        await _remove_calculator_keyboard(message)
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "st:income"
+        await render_settings_screen(
+            previous_screen,
             message=message,
             state=state,
-            text="Готово",
-            reply_markup=settings_back_reply_keyboard(),
-        )
-        await state.set_state(None)
-        await _render_income_settings(
-            state=state, message=message, db=db, user_id=message.from_user.id
+            error_message=error_message,
         )
 
 
@@ -1010,6 +1516,8 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
 async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
     if text not in PERCENT_INPUT_BUTTONS:
         await _send_and_register(
             message=message,
@@ -1035,16 +1543,11 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
             fallback = await message.bot.send_message(chat_id=display_chat_id, text=f": {days_str}")
             display_message_id = fallback.message_id
             await ui_register_message(state, display_chat_id, display_message_id)
-            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             purchased_days_str=days_str,
             purchased_display_chat_id=display_chat_id,
             purchased_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "Очистить":
@@ -1059,16 +1562,11 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
             fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
             display_message_id = fallback.message_id
             await ui_register_message(state, display_chat_id, display_message_id)
-            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             purchased_days_str=days_str,
             purchased_display_chat_id=display_chat_id,
             purchased_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "✅ Газ":
@@ -1091,44 +1589,31 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
 
         db = FinanceDatabase()
         category_id = data.get("editing_wl_category_id")
-        if category_id is None:
-            await state.set_state(None)
-            await _render_wishlist_settings(
-                state=state, message=message, db=db, user_id=message.from_user.id
+        if category_id is not None:
+            db.update_wishlist_category_purchased_days(
+                message.from_user.id, int(category_id), days
             )
-            return
-        db.update_wishlist_category_purchased_days(
-            message.from_user.id, int(category_id), days
+
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="purchased_display_chat_id",
+            display_message_key="purchased_display_message_id",
         )
-        display_message_id = data.get("purchased_display_message_id")
-        if display_message_id:
-            try:
-                await message.bot.delete_message(
-                    chat_id=data.get("purchased_display_chat_id", message.chat.id),
-                    message_id=int(display_message_id),
-                )
-            except Exception:
-                pass
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await _send_and_register(
-            message=message,
-            state=state,
-            text="Готово",
-            reply_markup=settings_back_reply_keyboard(),
-        )
+        await _remove_calculator_keyboard(message)
         await state.set_state(None)
-    await _render_wishlist_settings(
-        state=state, message=message, db=db, user_id=message.from_user.id
-    )
+        await _reset_navigation(state, "st:wishlist")
+        await render_settings_screen(
+            "st:wishlist", message=message, state=state
+        )
 
 
 @router.message(BytSettingsState.waiting_for_max_defer_days)
 async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
     if text not in PERCENT_INPUT_BUTTONS:
         await _send_and_register(
             message=message,
@@ -1158,10 +1643,6 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             byt_max_display_chat_id=display_chat_id,
             byt_max_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "Очистить":
@@ -1180,10 +1661,6 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             byt_max_display_chat_id=display_chat_id,
             byt_max_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "✅ Газ":
@@ -1205,36 +1682,42 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             return
 
         db = FinanceDatabase()
+        settings_row = db.get_user_settings(message.from_user.id)
+        previous_days = settings_row.get("byt_defer_max_days")
         db.set_byt_defer_max_days(message.from_user.id, days)
-        display_message_id = data.get("byt_max_display_message_id")
-        if display_message_id:
-            try:
-                await message.bot.delete_message(
-                    chat_id=data.get("byt_max_display_chat_id", message.chat.id),
-                    message_id=int(display_message_id),
-                )
-            except Exception:
-                pass
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await _send_and_register(
+        LOGGER.info(
+            "Updated BYT defer max days for user %s: %s", message.from_user.id, days
+        )
+        previous_max = data.get("previous_byt_max_days")
+        if previous_max is not None and previous_max != days:
+            LOGGER.info(
+                "Max defer days changed: user=%s from=%s to=%s",
+                message.from_user.id,
+                previous_max,
+                days,
+            )
+
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="byt_max_display_chat_id",
+            display_message_key="byt_max_display_message_id",
+        )
+        await _remove_calculator_keyboard(message)
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
+        await render_settings_screen(
+            previous_screen,
             message=message,
             state=state,
-            text="Готово",
-            reply_markup=settings_back_reply_keyboard(),
         )
-        await state.set_state(None)
-        await _render_byt_rules_settings(
-            state=state, message=message, db=db, user_id=message.from_user.id
-        )
-
 
 @router.message(BytTimerState.waiting_for_hour, F.text.in_(PERCENT_INPUT_BUTTONS))
 async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
     hour_str = data.get("bt_hour_str", "0")
     display_chat_id = data.get("bt_hour_display_chat_id", message.chat.id)
     display_message_id = data.get("bt_hour_display_message_id")
@@ -1257,10 +1740,6 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
             bt_hour_display_chat_id=display_chat_id,
             bt_hour_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "Очистить":
@@ -1280,10 +1759,6 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
             bt_hour_display_chat_id=display_chat_id,
             bt_hour_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "✅ Газ":
@@ -1303,19 +1778,16 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
                 text="Часы должны быть 0–23.",
             )
             return
-        db = FinanceDatabase()
-        display_message_id = data.get("bt_hour_display_message_id")
-        if display_message_id:
-            try:
-                await message.bot.delete_message(
-                    chat_id=data.get("bt_hour_display_chat_id", message.chat.id),
-                    message_id=int(display_message_id),
-                )
-            except Exception:
-                pass
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="bt_hour_display_chat_id",
+            display_message_key="bt_hour_display_message_id",
+        )
         await state.set_state(BytTimerState.waiting_for_minute)
         await state.update_data(selected_hour=hour, bt_minute_str="0")
-        await _send_and_register(
+        await _set_current_screen(state, "bt:add_time_minute")
+        prompt_message = await _send_and_register(
             message=message,
             state=state,
             text="Введи МИНУТЫ (0–59)",
@@ -1327,19 +1799,18 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
             reply_markup=income_calculator_keyboard(),
         )
         await state.update_data(
+            bt_min_prompt_chat_id=prompt_message.chat.id,
+            bt_min_prompt_message_id=prompt_message.message_id,
             bt_min_display_chat_id=prompt.chat.id,
             bt_min_display_message_id=prompt.message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
-
 
 @router.message(BytTimerState.waiting_for_minute, F.text.in_(PERCENT_INPUT_BUTTONS))
 async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
     minute_str = data.get("bt_minute_str", "0")
     display_chat_id = data.get("bt_min_display_chat_id", message.chat.id)
     display_message_id = data.get("bt_min_display_message_id")
@@ -1362,10 +1833,6 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
             bt_min_display_chat_id=display_chat_id,
             bt_min_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "Очистить":
@@ -1385,10 +1852,6 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
             bt_min_display_chat_id=display_chat_id,
             bt_min_display_message_id=display_message_id,
         )
-        try:
-            await message.delete()
-        except Exception:
-            pass
         return
 
     if text == "✅ Газ":
@@ -1411,26 +1874,15 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
         db = FinanceDatabase()
         selected_hour = int(data.get("selected_hour", 0))
         db.add_byt_timer_time(message.from_user.id, selected_hour, minute)
-        display_message_id = data.get("bt_min_display_message_id")
-        if display_message_id:
-            try:
-                await message.bot.delete_message(
-                    chat_id=data.get("bt_min_display_chat_id", message.chat.id),
-                    message_id=int(display_message_id),
-                )
-            except Exception:
-                pass
-        try:
-            await message.delete()
-        except Exception:
-            pass
-        await _send_and_register(
-            message=message,
-            state=state,
-            text="Готово",
-            reply_markup=settings_back_reply_keyboard(),
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="bt_min_display_chat_id",
+            display_message_key="bt_min_display_message_id",
+            prompt_chat_key="bt_min_prompt_chat_id",
+            prompt_message_key="bt_min_prompt_message_id",
         )
+        await _remove_calculator_keyboard(message)
         await state.set_state(None)
-        await _render_byt_timer_settings(
-            state=state, message=message, db=db, user_id=message.from_user.id
-        )
+        previous_screen = await _pop_previous_screen(state) or "byt:timer_menu"
+        await render_settings_screen(previous_screen, message=message, state=state)

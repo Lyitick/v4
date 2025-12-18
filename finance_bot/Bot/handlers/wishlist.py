@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Optional
 
 from aiogram import Bot, F, Router
@@ -423,6 +423,80 @@ async def _start_byt_defer_flow(
             pass
 
 
+async def run_byt_timer_check(
+    bot: Bot,
+    db: FinanceDatabase,
+    user_id: int | None = None,
+    simulated_time: time | None = None,
+    run_time: datetime | None = None,
+) -> None:
+    """Run BYT reminders using timer configuration for the user."""
+
+    await asyncio.sleep(0)
+    trigger_dt = run_time or now_tz()
+    if simulated_time:
+        trigger_dt = trigger_dt.replace(
+            hour=simulated_time.hour,
+            minute=simulated_time.minute,
+            second=0,
+            microsecond=0,
+        )
+
+    db.cleanup_old_byt_purchases(trigger_dt)
+    user_ids = (
+        [user_id]
+        if user_id is not None
+        else list(
+            set(db.get_users_with_active_byt_wishes())
+            | set(db.get_users_with_byt_timer_times())
+        )
+    )
+    if not user_ids:
+        return
+
+    for uid in user_ids:
+        db.ensure_byt_timer_defaults(uid)
+        settings_row = db.get_user_settings(uid)
+        if not bool(settings_row.get("byt_reminders_enabled", 1)):
+            continue
+
+        times = db.list_active_byt_timer_times(uid)
+        simulated = simulated_time is not None
+        trigger_label = trigger_dt.strftime("%H:%M")
+        LOGGER.info(
+            "BYT timer check triggered (user_id=%s, simulated=%s, time=%s)",
+            uid,
+            simulated,
+            trigger_label,
+        )
+        if not times:
+            LOGGER.info(
+                "BYT timer check: no active times (user_id=%s)",
+                uid,
+            )
+            continue
+
+        should_run = any(
+            int(timer.get("hour", -1)) == trigger_dt.hour
+            and int(timer.get("minute", -1)) == trigger_dt.minute
+            for timer in times
+        )
+        if not should_run:
+            continue
+
+        items = db.list_active_byt_items_for_reminder(uid, trigger_dt)
+        if not items:
+            LOGGER.info("BYT timer: no items, skip (user_id=%s)", uid)
+            continue
+
+        allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
+        keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
+        await bot.send_message(uid, "Что ты купил?", reply_markup=keyboard)
+        LOGGER.info(
+            "BYT timer: sending checklist, items=%s, user_id=%s", len(items), uid
+        )
+
+
 async def run_byt_wishlist_reminders(
     bot: Bot,
     db: FinanceDatabase,
@@ -430,28 +504,15 @@ async def run_byt_wishlist_reminders(
     forced: bool = False,
     run_time=None,
 ) -> None:
-    """Run BYT reminders for users with active BYT wishes."""
+    """Backward-compatible wrapper for BYT reminders."""
 
-    await asyncio.sleep(0)
-    now_dt = run_time or now_tz()
-    db.cleanup_old_byt_purchases(now_dt)
-    user_ids = [user_id] if user_id else db.get_users_with_active_byt_wishes()
-    if not user_ids:
-        return
-
-    is_evening = now_dt.hour == 18
-
-    for uid in user_ids:
-        settings_row = db.get_user_settings(uid)
-        if not bool(settings_row.get("byt_reminders_enabled", 1)):
-            continue
-        items = db.list_active_byt_items_for_reminder(uid, now_dt)
-        if not items:
-            continue
-
-        allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
-        keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
-        await bot.send_message(uid, "Что ты купил?", reply_markup=keyboard)
+    await run_byt_timer_check(
+        bot,
+        db,
+        user_id=user_id,
+        simulated_time=None,
+        run_time=run_time,
+    )
 
 
 @router.callback_query(F.data.startswith("byt_buy:"))

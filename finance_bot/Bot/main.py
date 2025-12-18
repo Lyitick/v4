@@ -28,7 +28,7 @@ from Bot.handlers import (
     start,
     wishlist,
 )
-from Bot.handlers.wishlist import run_byt_wishlist_reminders
+from Bot.handlers.wishlist import run_byt_timer_check
 from Bot.utils.logging import init_logging
 
 
@@ -49,22 +49,11 @@ async def _run_byt_scheduler(bot: Bot, db: FinanceDatabase, timezone: ZoneInfo) 
 
     while True:
         now = datetime.now(tz=timezone)
-        current_hour, current_minute = now.hour, now.minute
         user_ids = set(db.get_users_with_byt_timer_times()) | set(
             db.get_users_with_active_byt_wishes()
         )
         for uid in user_ids:
-            db.ensure_byt_timer_defaults(uid)
-            settings_row = db.get_user_settings(uid)
-            if not bool(settings_row.get("byt_reminders_enabled", 1)):
-                continue
-            times = db.list_active_byt_timer_times(uid)
-            if any(
-                int(timer.get("hour", -1)) == current_hour
-                and int(timer.get("minute", -1)) == current_minute
-                for timer in times
-            ):
-                await run_byt_wishlist_reminders(bot, db, user_id=uid, run_time=now)
+            await run_byt_timer_check(bot, db, user_id=uid, run_time=now)
         sleep_for = 60 - now.second - now.microsecond / 1_000_000
         await asyncio.sleep(max(sleep_for, 1))
 

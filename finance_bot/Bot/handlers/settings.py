@@ -1318,6 +1318,7 @@ async def wishlist_purchased_category(callback: CallbackQuery, state: FSMContext
         )
         return
 
+    await _push_current_screen(state, "wl:purchased_mode")
     await state.update_data(editing_wl_category_id=category_id)
     await _navigate_to_screen(
         "wl:purchased_mode", message=callback.message, state=state

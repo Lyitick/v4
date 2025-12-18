@@ -22,6 +22,7 @@ from Bot.keyboards.settings import (
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
+from Bot.utils.ui_cleanup import ui_register_message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -93,17 +94,19 @@ async def open_household_settings(message: Message, state: FSMContext) -> None:
     """Open household payments settings menu."""
 
     if message.from_user.id != settings.ADMIN_ID:
-        await message.answer(
+        sent = await message.answer(
             "Что-то пошло не так. Вернёмся в главное меню.",
             reply_markup=await build_main_menu_for_user(message.from_user.id),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
         return
 
     await state.clear()
     db = FinanceDatabase()
-    await message.answer(
+    sent = await message.answer(
         "⚙️ Бытовые платежи ⚙️", reply_markup=settings_menu_keyboard()
     )
+    await ui_register_message(state, sent.chat.id, sent.message_id)
     await _send_household_settings_overview(message, db, message.from_user.id)
 
 
@@ -288,10 +291,11 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
 
     if first_item is None:
         await state.clear()
-        await message.answer(
+        sent = await message.answer(
             "Все бытовые платежи на этот месяц уже учтены.",
             reply_markup=await build_main_menu_for_user(user_id),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
         LOGGER.info("User %s has no unpaid household questions for month %s", user_id, month)
         return
 
@@ -336,10 +340,11 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
 
     if not month or question is None:
         await state.clear()
-        await callback.message.answer(
+        sent = await callback.message.answer(
             "Что-то пошло не так. Вернёмся в главное меню.",
             reply_markup=await build_main_menu_for_user(user_id),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
         return
 
     if answer == "yes":
@@ -358,10 +363,11 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         await state.clear()
         savings = db.get_user_savings(user_id)
         summary = format_savings_summary(savings)
-        await callback.message.answer(
+        sent = await callback.message.answer(
             f"Текущие накопления:\n{summary}",
             reply_markup=await build_main_menu_for_user(user_id),
         )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
         LOGGER.info(
             "User %s completed household payments for month %s", user_id, month
         )

@@ -27,6 +27,8 @@ from Bot.states.wishlist_states import (
     BytTimerState,
     WishlistSettingsState,
 )
+from Bot.utils.savings import format_savings_summary
+from Bot.utils.ui_cleanup import ui_cleanup_messages, ui_register_message
 
 router = Router()
 LOGGER = logging.getLogger(__name__)
@@ -37,6 +39,36 @@ PERCENT_INPUT_BUTTONS = PERCENT_DIGITS | {"Очистить", "✅ Газ"}
 async def _store_settings_message(state: FSMContext, chat_id: int, message_id: int) -> None:
     await state.update_data(
         settings_chat_id=chat_id, settings_message_id=message_id, in_settings=True
+    )
+
+
+async def _send_and_register(
+    *, message: Message, state: FSMContext, text: str, reply_markup=None
+) -> Message:
+    sent = await message.answer(text, reply_markup=reply_markup)
+    await ui_register_message(state, sent.chat.id, sent.message_id)
+    return sent
+
+
+async def _send_main_menu_summary(
+    *, bot, state: FSMContext, chat_id: int, user_id: int
+) -> None:
+    db = FinanceDatabase()
+    savings = db.get_user_savings(user_id)
+    summary = format_savings_summary(savings)
+    text = f"Текущие накопления:\n{summary}"
+    menu = await build_main_menu_for_user(user_id)
+    sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=menu)
+    await ui_register_message(state, sent.chat.id, sent.message_id)
+
+
+async def _exit_settings_to_main(
+    *, bot, state: FSMContext, chat_id: int, user_id: int
+) -> None:
+    await ui_cleanup_messages(bot, state)
+    await state.clear()
+    await _send_main_menu_summary(
+        bot=bot, state=state, chat_id=chat_id, user_id=user_id
     )
 
 
@@ -68,6 +100,7 @@ async def _edit_settings_page(
             chat_id=chat_id, text=text, reply_markup=reply_markup
         )
         new_message_id = new_message.message_id
+        await ui_register_message(state, chat_id, new_message_id)
     await _store_settings_message(state, chat_id, new_message_id)
     return new_message_id
 
@@ -254,14 +287,30 @@ async def _render_byt_timer_settings(
 async def open_settings(message: Message, state: FSMContext) -> None:
     """Open settings entry point with inline navigation."""
 
+    await ui_cleanup_messages(message.bot, state)
     await state.clear()
-    sent = await message.answer(
-        "⚙️ НАСТРОЙКИ", reply_markup=settings_home_inline_keyboard()
-    )
-    await message.answer(
-        "Режим настроек. Используй кнопку \"Назад\" чтобы выйти.",
+
+    back_prompt = await _send_and_register(
+        message=message,
+        state=state,
+        text="Режим настроек. Используй кнопку \"Назад\" чтобы выйти.",
         reply_markup=settings_back_reply_keyboard(),
     )
+    sent = await _send_and_register(
+        message=message,
+        state=state,
+        text="⚙️ НАСТРОЙКИ",
+        reply_markup=settings_home_inline_keyboard(),
+    )
+    try:
+        await back_prompt.delete()
+        data = await state.get_data()
+        ids = list(data.get("ui_message_ids") or [])
+        if back_prompt.message_id in ids:
+            ids.remove(back_prompt.message_id)
+            await state.update_data(ui_message_ids=ids)
+    except Exception:
+        pass
     await _store_settings_message(state, sent.chat.id, sent.message_id)
 
 
@@ -287,9 +336,11 @@ async def settings_exit_via_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
         return
-    await state.clear()
-    await message.answer(
-        "Главное меню", reply_markup=await build_main_menu_for_user(message.from_user.id)
+    await _exit_settings_to_main(
+        bot=message.bot,
+        state=state,
+        chat_id=message.chat.id,
+        user_id=message.from_user.id,
     )
 
 
@@ -311,10 +362,11 @@ async def settings_stubs(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "st:back_main")
 async def settings_back_to_main(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await state.clear()
-    await callback.message.answer(
-        "Главное меню",
-        reply_markup=await build_main_menu_for_user(callback.from_user.id),
+    await _exit_settings_to_main(
+        bot=callback.message.bot,
+        state=state,
+        chat_id=callback.message.chat.id,
+        user_id=callback.from_user.id,
     )
 
 
@@ -360,7 +412,12 @@ async def edit_byt_max_defer_days(callback: CallbackQuery, state: FSMContext) ->
         text="Максимум дней отложки?",
         reply_markup=None,
     )
-    prompt = await callback.message.answer(": 0", reply_markup=income_calculator_keyboard())
+    prompt = await _send_and_register(
+        message=callback.message,
+        state=state,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
+    )
     await state.update_data(
         byt_max_display_chat_id=prompt.chat.id,
         byt_max_display_message_id=prompt.message_id,
@@ -381,7 +438,12 @@ async def byt_timer_add_hour(callback: CallbackQuery, state: FSMContext) -> None
         text="Введи ЧАС (0–23)",
         reply_markup=None,
     )
-    prompt = await callback.message.answer(": 0", reply_markup=income_calculator_keyboard())
+    prompt = await _send_and_register(
+        message=callback.message,
+        state=state,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
+    )
     await state.update_data(
         bt_hour_display_chat_id=prompt.chat.id,
         bt_hour_display_message_id=prompt.message_id,
@@ -488,7 +550,11 @@ async def wishlist_category_add(callback: CallbackQuery, state: FSMContext) -> N
 async def income_add_category_title(message: Message, state: FSMContext) -> None:
     title = (message.text or "").strip()
     if not title or len(title) > 32:
-        await message.answer("Название должно быть от 1 до 32 символов.")
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Название должно быть от 1 до 32 символов.",
+        )
         return
 
     db = FinanceDatabase()
@@ -504,7 +570,11 @@ async def income_add_category_title(message: Message, state: FSMContext) -> None
 async def wishlist_add_category_title(message: Message, state: FSMContext) -> None:
     title = (message.text or "").strip()
     if not title or len(title) > 32:
-        await message.answer("Название должно быть от 1 до 32 символов.")
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Название должно быть от 1 до 32 символов.",
+        )
         return
 
     db = FinanceDatabase()
@@ -661,8 +731,11 @@ async def category_percent_prompt(callback: CallbackQuery, state: FSMContext) ->
         reply_markup=None,
     )
 
-    percent_message = await callback.message.answer(
-        ": 0", reply_markup=income_calculator_keyboard()
+    percent_message = await _send_and_register(
+        message=callback.message,
+        state=state,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
     )
     await state.update_data(
         percent_display_chat_id=percent_message.chat.id,
@@ -776,7 +849,12 @@ async def wishlist_set_purchased_days(callback: CallbackQuery, state: FSMContext
         text=f'На сколько дней показывать купленное для "{category.get("title", "")}"?',
         reply_markup=None,
     )
-    prompt = await callback.message.answer(": 0", reply_markup=income_calculator_keyboard())
+    prompt = await _send_and_register(
+        message=callback.message,
+        state=state,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
+    )
     await state.update_data(
         purchased_display_chat_id=prompt.chat.id,
         purchased_display_message_id=prompt.message_id,
@@ -788,7 +866,11 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
     if text not in PERCENT_INPUT_BUTTONS:
-        await message.answer("Используй кнопки калькулятора.")
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Используй кнопки калькулятора.",
+        )
         return
 
     percent_str = data.get("percent_str", "0")
@@ -815,6 +897,7 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
                 chat_id=display_chat_id, text=f": {percent_str}"
             )
             display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             percent_str=percent_str,
             percent_display_chat_id=display_chat_id,
@@ -837,6 +920,7 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
         except Exception:
             fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
             display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             percent_str=percent_str,
             percent_display_chat_id=display_chat_id,
@@ -852,10 +936,18 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
         try:
             percent = int(percent_str or "0")
         except ValueError:
-            await message.answer("Процент должен быть числом.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Процент должен быть числом.",
+            )
             return
         if percent < 0 or percent > 100:
-            await message.answer("Процент должен быть в диапазоне 0–100.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Процент должен быть в диапазоне 0–100.",
+            )
             return
 
         category_id = data.get("editing_category_id")
@@ -902,7 +994,12 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
             await message.delete()
         except Exception:
             pass
-        await message.answer("Готово", reply_markup=settings_back_reply_keyboard())
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Готово",
+            reply_markup=settings_back_reply_keyboard(),
+        )
         await state.set_state(None)
         await _render_income_settings(
             state=state, message=message, db=db, user_id=message.from_user.id
@@ -914,7 +1011,11 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
     data = await state.get_data()
     text = (message.text or "").strip()
     if text not in PERCENT_INPUT_BUTTONS:
-        await message.answer("Используй кнопки калькулятора.")
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Используй кнопки калькулятора.",
+        )
         return
 
     days_str = data.get("purchased_days_str", "0")
@@ -933,6 +1034,8 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
         except Exception:
             fallback = await message.bot.send_message(chat_id=display_chat_id, text=f": {days_str}")
             display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             purchased_days_str=days_str,
             purchased_display_chat_id=display_chat_id,
@@ -955,6 +1058,8 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
         except Exception:
             fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
             display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             purchased_days_str=days_str,
             purchased_display_chat_id=display_chat_id,
@@ -970,10 +1075,18 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
         try:
             days = int(days_str or "0")
         except ValueError:
-            await message.answer("Нужно ввести число дней.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Нужно ввести число дней.",
+            )
             return
         if days < 1 or days > 3650:
-            await message.answer("Количество дней должно быть от 1 до 3650.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Количество дней должно быть от 1 до 3650.",
+            )
             return
 
         db = FinanceDatabase()
@@ -1000,7 +1113,12 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
             await message.delete()
         except Exception:
             pass
-        await message.answer("Готово", reply_markup=settings_back_reply_keyboard())
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Готово",
+            reply_markup=settings_back_reply_keyboard(),
+        )
         await state.set_state(None)
     await _render_wishlist_settings(
         state=state, message=message, db=db, user_id=message.from_user.id
@@ -1012,7 +1130,11 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
     if text not in PERCENT_INPUT_BUTTONS:
-        await message.answer("Используй кнопки калькулятора.")
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Используй кнопки калькулятора.",
+        )
         return
 
     days_str = data.get("byt_max_days_str", "0")
@@ -1068,10 +1190,18 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
         try:
             days = int(days_str or "0")
         except ValueError:
-            await message.answer("Нужно ввести число дней.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Нужно ввести число дней.",
+            )
             return
         if days < 1 or days > 3650:
-            await message.answer("Количество дней должно быть от 1 до 3650.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Количество дней должно быть от 1 до 3650.",
+            )
             return
 
         db = FinanceDatabase()
@@ -1089,7 +1219,12 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             await message.delete()
         except Exception:
             pass
-        await message.answer("Готово", reply_markup=settings_back_reply_keyboard())
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Готово",
+            reply_markup=settings_back_reply_keyboard(),
+        )
         await state.set_state(None)
         await _render_byt_rules_settings(
             state=state, message=message, db=db, user_id=message.from_user.id
@@ -1116,6 +1251,7 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
         except Exception:
             prompt = await message.bot.send_message(chat_id=display_chat_id, text=f": {hour_str}")
             display_message_id = prompt.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             bt_hour_str=hour_str,
             bt_hour_display_chat_id=display_chat_id,
@@ -1138,6 +1274,7 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
         except Exception:
             prompt = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
             display_message_id = prompt.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             bt_hour_str=hour_str,
             bt_hour_display_chat_id=display_chat_id,
@@ -1153,10 +1290,18 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
         try:
             hour = int(hour_str or "0")
         except ValueError:
-            await message.answer("Нужно ввести число.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Нужно ввести число.",
+            )
             return
         if hour < 0 or hour > 23:
-            await message.answer("Часы должны быть 0–23.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Часы должны быть 0–23.",
+            )
             return
         db = FinanceDatabase()
         display_message_id = data.get("bt_hour_display_message_id")
@@ -1170,8 +1315,17 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
                 pass
         await state.set_state(BytTimerState.waiting_for_minute)
         await state.update_data(selected_hour=hour, bt_minute_str="0")
-        await message.answer("Введи МИНУТЫ (0–59)")
-        prompt = await message.answer(": 0", reply_markup=income_calculator_keyboard())
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Введи МИНУТЫ (0–59)",
+        )
+        prompt = await _send_and_register(
+            message=message,
+            state=state,
+            text=": 0",
+            reply_markup=income_calculator_keyboard(),
+        )
         await state.update_data(
             bt_min_display_chat_id=prompt.chat.id,
             bt_min_display_message_id=prompt.message_id,
@@ -1202,6 +1356,7 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
         except Exception:
             prompt = await message.bot.send_message(chat_id=display_chat_id, text=f": {minute_str}")
             display_message_id = prompt.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             bt_minute_str=minute_str,
             bt_min_display_chat_id=display_chat_id,
@@ -1224,6 +1379,7 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
         except Exception:
             prompt = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
             display_message_id = prompt.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             bt_minute_str=minute_str,
             bt_min_display_chat_id=display_chat_id,
@@ -1239,10 +1395,18 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
         try:
             minute = int(minute_str or "0")
         except ValueError:
-            await message.answer("Нужно ввести число.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Нужно ввести число.",
+            )
             return
         if minute < 0 or minute > 59:
-            await message.answer("Минуты должны быть 0–59.")
+            await _send_and_register(
+                message=message,
+                state=state,
+                text="Минуты должны быть 0–59.",
+            )
             return
         db = FinanceDatabase()
         selected_hour = int(data.get("selected_hour", 0))
@@ -1260,7 +1424,12 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
             await message.delete()
         except Exception:
             pass
-        await message.answer("Готово", reply_markup=settings_back_reply_keyboard())
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Готово",
+            reply_markup=settings_back_reply_keyboard(),
+        )
         await state.set_state(None)
         await _render_byt_timer_settings(
             state=state, message=message, db=db, user_id=message.from_user.id

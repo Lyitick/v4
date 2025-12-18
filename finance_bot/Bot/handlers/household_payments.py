@@ -321,6 +321,7 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     user_id = message.from_user.id
     db = FinanceDatabase()
 
+    db.ensure_byt_timer_defaults(user_id)
     try:
         await message.delete()
     except TelegramBadRequest:

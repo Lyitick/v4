@@ -12,8 +12,6 @@ from Bot.keyboards.settings import (
     byt_rules_inline_keyboard,
     byt_timer_inline_keyboard,
     byt_timer_times_select_keyboard,
-    expense_categories_select_keyboard,
-    expense_settings_inline_keyboard,
     income_categories_select_keyboard,
     income_settings_inline_keyboard,
     settings_home_inline_keyboard,
@@ -164,30 +162,6 @@ async def _render_income_settings(
     return categories
 
 
-async def _render_expense_settings(
-    *,
-    state: FSMContext,
-    message: Message,
-    db: FinanceDatabase,
-    user_id: int,
-    error_message: str | None = None,
-) -> list[dict]:
-    db.ensure_expense_categories_seeded(user_id)
-    categories = db.list_active_expense_categories(user_id)
-    chat_id, message_id = await _get_settings_message_ids(state, message)
-    await _edit_settings_page(
-        bot=message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text=_format_category_text(
-            "💸 РАСХОД — категории и проценты", categories, error_message
-        ),
-        reply_markup=expense_settings_inline_keyboard(),
-    )
-    return categories
-
-
 async def _render_wishlist_settings(
     *,
     state: FSMContext,
@@ -281,16 +255,6 @@ async def open_income_settings(callback: CallbackQuery, state: FSMContext) -> No
     await state.set_state(None)
     db = FinanceDatabase()
     await _render_income_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
-    )
-
-
-@router.callback_query(F.data == "st:expense")
-async def open_expense_settings(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    await state.set_state(None)
-    db = FinanceDatabase()
-    await _render_expense_settings(
         state=state, message=callback.message, db=db, user_id=callback.from_user.id
     )
 
@@ -450,12 +414,11 @@ async def byt_timer_reset(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.in_({"inc:add", "exp:add"}))
+@router.callback_query(F.data == "inc:add")
 async def category_add(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    scope = "income" if callback.data == "inc:add" else "expense"
     await state.set_state(IncomeSettingsState.waiting_for_category_title)
-    await state.update_data(category_scope=scope)
+    await state.update_data(category_scope="income")
     chat_id, message_id = await _get_settings_message_ids(state, callback.message)
     await _edit_settings_page(
         bot=callback.message.bot,
@@ -491,17 +454,10 @@ async def income_add_category_title(message: Message, state: FSMContext) -> None
 
     db = FinanceDatabase()
     data = await state.get_data()
-    scope = data.get("category_scope", "income")
-    if scope == "expense":
-        db.create_expense_category(message.from_user.id, title)
-        await _render_expense_settings(
-            state=state, message=message, db=db, user_id=message.from_user.id
-        )
-    else:
-        db.create_income_category(message.from_user.id, title)
-        await _render_income_settings(
-            state=state, message=message, db=db, user_id=message.from_user.id
-        )
+    db.create_income_category(message.from_user.id, title)
+    await _render_income_settings(
+        state=state, message=message, db=db, user_id=message.from_user.id
+    )
     await state.set_state(None)
 
 
@@ -520,23 +476,16 @@ async def wishlist_add_category_title(message: Message, state: FSMContext) -> No
     await state.set_state(None)
 
 
-@router.callback_query(F.data.in_({"inc:del_menu", "exp:del_menu"}))
+@router.callback_query(F.data == "inc:del_menu")
 async def category_delete_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    scope = "income" if callback.data == "inc:del_menu" else "expense"
+    scope = "income"
     db = FinanceDatabase()
-    categories = (
-        db.list_active_income_categories(callback.from_user.id)
-        if scope == "income"
-        else db.list_active_expense_categories(callback.from_user.id)
-    )
+    categories = db.list_active_income_categories(callback.from_user.id)
     chat_id, message_id = await _get_settings_message_ids(state, callback.message)
     keyboard_builder = income_categories_select_keyboard
     back_callback = "st:income"
-    if scope == "expense":
-        keyboard_builder = expense_categories_select_keyboard
-        back_callback = "st:expense"
     await _edit_settings_page(
         bot=callback.message.bot,
         state=state,
@@ -566,7 +515,7 @@ async def wishlist_delete_menu(callback: CallbackQuery, state: FSMContext) -> No
     )
 
 
-@router.callback_query(F.data.startswith("inc:del:") | F.data.startswith("exp:del:"))
+@router.callback_query(F.data.startswith("inc:del:"))
 async def category_delete(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     try:
@@ -575,15 +524,10 @@ async def category_delete(callback: CallbackQuery, state: FSMContext) -> None:
         return
 
     db = FinanceDatabase()
-    scope = "income" if callback.data.startswith("inc:") else "expense"
-    categories = (
-        db.list_active_income_categories(callback.from_user.id)
-        if scope == "income"
-        else db.list_active_expense_categories(callback.from_user.id)
-    )
+    scope = "income"
+    categories = db.list_active_income_categories(callback.from_user.id)
     if len([cat for cat in categories if cat.get("is_active", 1)]) <= 1:
-        render_func = _render_income_settings if scope == "income" else _render_expense_settings
-        await render_func(
+        await _render_income_settings(
             state=state,
             message=callback.message,
             db=db,
@@ -592,16 +536,10 @@ async def category_delete(callback: CallbackQuery, state: FSMContext) -> None:
         )
         return
 
-    if scope == "income":
-        db.deactivate_income_category(callback.from_user.id, category_id)
-        await _render_income_settings(
-            state=state, message=callback.message, db=db, user_id=callback.from_user.id
-        )
-    else:
-        db.deactivate_expense_category(callback.from_user.id, category_id)
-        await _render_expense_settings(
-            state=state, message=callback.message, db=db, user_id=callback.from_user.id
-        )
+    db.deactivate_income_category(callback.from_user.id, category_id)
+    await _render_income_settings(
+        state=state, message=callback.message, db=db, user_id=callback.from_user.id
+    )
 
 
 @router.callback_query(F.data.startswith("wl:del_cat:"))
@@ -630,23 +568,16 @@ async def wishlist_category_delete(callback: CallbackQuery, state: FSMContext) -
     )
 
 
-@router.callback_query(F.data.in_({"inc:pct_menu", "exp:pct_menu"}))
+@router.callback_query(F.data == "inc:pct_menu")
 async def category_percent_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    scope = "income" if callback.data == "inc:pct_menu" else "expense"
+    scope = "income"
     db = FinanceDatabase()
-    categories = (
-        db.list_active_income_categories(callback.from_user.id)
-        if scope == "income"
-        else db.list_active_expense_categories(callback.from_user.id)
-    )
+    categories = db.list_active_income_categories(callback.from_user.id)
     chat_id, message_id = await _get_settings_message_ids(state, callback.message)
     keyboard_builder = income_categories_select_keyboard
     back_callback = "st:income"
-    if scope == "expense":
-        keyboard_builder = expense_categories_select_keyboard
-        back_callback = "st:expense"
     await _edit_settings_page(
         bot=callback.message.bot,
         state=state,
@@ -657,7 +588,7 @@ async def category_percent_menu(callback: CallbackQuery, state: FSMContext) -> N
     )
 
 
-@router.callback_query(F.data.startswith("inc:pct:") | F.data.startswith("exp:pct:"))
+@router.callback_query(F.data.startswith("inc:pct:"))
 async def category_percent_prompt(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     try:
@@ -666,15 +597,10 @@ async def category_percent_prompt(callback: CallbackQuery, state: FSMContext) ->
         return
 
     db = FinanceDatabase()
-    scope = "income" if callback.data.startswith("inc:") else "expense"
-    category = (
-        db.get_income_category_by_id(callback.from_user.id, category_id)
-        if scope == "income"
-        else db.get_expense_category_by_id(callback.from_user.id, category_id)
-    )
+    scope = "income"
+    category = db.get_income_category_by_id(callback.from_user.id, category_id)
     if not category:
-        render_func = _render_income_settings if scope == "income" else _render_expense_settings
-        await render_func(
+        await _render_income_settings(
             state=state, message=callback.message, db=db, user_id=callback.from_user.id
         )
         return
@@ -811,33 +737,20 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
 
         category_id = data.get("editing_category_id")
         previous_percent = int(data.get("previous_percent", 0))
-        scope = data.get("edit_scope", "income")
         if category_id is None:
             await state.set_state(None)
             return
 
         db = FinanceDatabase()
-        if scope == "expense":
-            db.update_expense_category_percent(message.from_user.id, category_id, percent)
-            total = db.sum_expense_category_percents(message.from_user.id)
-        else:
-            db.update_income_category_percent(message.from_user.id, category_id, percent)
-            total = db.sum_income_category_percents(message.from_user.id)
+        db.update_income_category_percent(message.from_user.id, category_id, percent)
+        total = db.sum_income_category_percents(message.from_user.id)
 
         if total != 100:
-            if scope == "expense":
-                db.update_expense_category_percent(
-                    message.from_user.id, category_id, previous_percent
-                )
-            else:
-                db.update_income_category_percent(
-                    message.from_user.id, category_id, previous_percent
-                )
-            await state.set_state(None)
-            render_func = (
-                _render_expense_settings if scope == "expense" else _render_income_settings
+            db.update_income_category_percent(
+                message.from_user.id, category_id, previous_percent
             )
-            await render_func(
+            await state.set_state(None)
+            await _render_income_settings(
                 state=state,
                 message=message,
                 db=db,
@@ -849,7 +762,7 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
         LOGGER.info(
             "Percent saved: user=%s scope=%s category_id=%s value=%s",
             message.from_user.id,
-            scope,
+            "income",
             category_id,
             percent,
         )
@@ -868,10 +781,7 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
             pass
         await message.answer("Готово", reply_markup=ReplyKeyboardRemove())
         await state.set_state(None)
-        render_func = (
-            _render_expense_settings if scope == "expense" else _render_income_settings
-        )
-        await render_func(
+        await _render_income_settings(
             state=state, message=message, db=db, user_id=message.from_user.id
         )
 

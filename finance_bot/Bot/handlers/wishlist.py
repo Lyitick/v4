@@ -3,7 +3,7 @@
 import asyncio
 import logging
 from collections import defaultdict
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Optional
 
 from aiogram import Bot, F, Router
@@ -311,8 +311,16 @@ def _build_byt_items_keyboard(items: list[dict], allow_defer: bool = True) -> In
             )
         rows.append(row)
     if allow_defer:
+        defer_callback = "byt_defer_menu"
+        if len(items) == 1:
+            try:
+                defer_id = int(items[0].get("id"))
+            except (TypeError, ValueError):
+                defer_id = None
+            else:
+                defer_callback = f"byt_defer_menu:{defer_id}"
         rows.append(
-            [InlineKeyboardButton(text="ОТЛОЖИТЬ", callback_data="byt_defer_menu")]
+            [InlineKeyboardButton(text="ОТЛОЖИТЬ", callback_data=defer_callback)]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -359,6 +367,45 @@ async def _refresh_byt_reminder_message(
                 pass
         return
 
+
+async def _start_byt_defer_flow(
+    callback: CallbackQuery, state: FSMContext, wish_id: int
+) -> bool:
+    """Validate and start BYT defer input flow for specific item."""
+
+    db = FinanceDatabase()
+    wish = db.get_wish(wish_id)
+    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+        await callback.answer("Элемент не найден.", show_alert=True)
+        return False
+
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        await callback.answer("Отключено в настройках", show_alert=True)
+        await state.clear()
+        return False
+
+    await state.set_state(BytDeferState.waiting_for_days)
+    await state.update_data(
+        defer_item_id=wish_id,
+        defer_days_str="0",
+        reminder_message_id=callback.message.message_id if callback.message else None,
+    )
+
+    await callback.answer()
+    target_chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+    question_message = await callback.bot.send_message(
+        target_chat_id, "На сколько дней отложить?"
+    )
+    prompt = await callback.bot.send_message(
+        target_chat_id, ": 0", reply_markup=income_calculator_keyboard()
+    )
+    await state.update_data(
+        defer_display_chat_id=question_message.chat.id,
+        defer_display_message_id=prompt.message_id,
+    )
+    return True
+
     keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
     try:
         await bot.edit_message_text(
@@ -376,6 +423,80 @@ async def _refresh_byt_reminder_message(
             pass
 
 
+async def run_byt_timer_check(
+    bot: Bot,
+    db: FinanceDatabase,
+    user_id: int | None = None,
+    simulated_time: time | None = None,
+    run_time: datetime | None = None,
+) -> None:
+    """Run BYT reminders using timer configuration for the user."""
+
+    await asyncio.sleep(0)
+    trigger_dt = run_time or now_tz()
+    if simulated_time:
+        trigger_dt = trigger_dt.replace(
+            hour=simulated_time.hour,
+            minute=simulated_time.minute,
+            second=0,
+            microsecond=0,
+        )
+
+    db.cleanup_old_byt_purchases(trigger_dt)
+    user_ids = (
+        [user_id]
+        if user_id is not None
+        else list(
+            set(db.get_users_with_active_byt_wishes())
+            | set(db.get_users_with_byt_timer_times())
+        )
+    )
+    if not user_ids:
+        return
+
+    for uid in user_ids:
+        db.ensure_byt_timer_defaults(uid)
+        settings_row = db.get_user_settings(uid)
+        if not bool(settings_row.get("byt_reminders_enabled", 1)):
+            continue
+
+        times = db.list_active_byt_timer_times(uid)
+        simulated = simulated_time is not None
+        trigger_label = trigger_dt.strftime("%H:%M")
+        LOGGER.info(
+            "BYT timer check triggered (user_id=%s, simulated=%s, time=%s)",
+            uid,
+            simulated,
+            trigger_label,
+        )
+        if not times:
+            LOGGER.info(
+                "BYT timer check: no active times (user_id=%s)",
+                uid,
+            )
+            continue
+
+        should_run = any(
+            int(timer.get("hour", -1)) == trigger_dt.hour
+            and int(timer.get("minute", -1)) == trigger_dt.minute
+            for timer in times
+        )
+        if not should_run:
+            continue
+
+        items = db.list_active_byt_items_for_reminder(uid, trigger_dt)
+        if not items:
+            LOGGER.info("BYT timer: no items, skip (user_id=%s)", uid)
+            continue
+
+        allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
+        keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
+        await bot.send_message(uid, "Что ты купил?", reply_markup=keyboard)
+        LOGGER.info(
+            "BYT timer: sending checklist, items=%s, user_id=%s", len(items), uid
+        )
+
+
 async def run_byt_wishlist_reminders(
     bot: Bot,
     db: FinanceDatabase,
@@ -383,37 +504,14 @@ async def run_byt_wishlist_reminders(
     forced: bool = False,
     run_time=None,
 ) -> None:
-    """Run BYT reminders for users with active BYT wishes."""
+    """Backward-compatible wrapper for BYT reminders."""
 
-    await asyncio.sleep(0)
-    now_dt = run_time or now_tz()
-    db.cleanup_old_byt_purchases(now_dt)
-    user_ids = [user_id] if user_id else db.get_users_with_active_byt_wishes()
-    if not user_ids:
-        return
-
-    is_evening = now_dt.hour == 18
-
-    for uid in user_ids:
-        settings_row = db.get_user_settings(uid)
-        if not bool(settings_row.get("byt_reminders_enabled", 1)):
-            continue
-        items = db.list_active_byt_items_for_reminder(uid, now_dt)
-        if not items:
-            continue
-
-        allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
-        keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
-        await bot.send_message(uid, "Что ты купил?", reply_markup=keyboard)
-
-
-@router.message(F.text == "12:00")
-async def trigger_byt_reminder_test(message: Message) -> None:
-    """Trigger BYT reminder sequence for current user (test button)."""
-
-    db = FinanceDatabase()
-    await run_byt_wishlist_reminders(
-        message.bot, db, user_id=message.from_user.id, forced=True, run_time=now_tz()
+    await run_byt_timer_check(
+        bot,
+        db,
+        user_id=user_id,
+        simulated_time=None,
+        run_time=run_time,
     )
 
 
@@ -460,9 +558,25 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
         )
 
 
-@router.callback_query(F.data == "byt_defer_menu")
+@router.callback_query(F.data.startswith("byt_defer_menu"))
 async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
     """Show BYT items to choose which to defer."""
+
+    wish_id: int | None = None
+    if callback.data and ":" in callback.data:
+        parts = callback.data.split(":", maxsplit=1)
+        if len(parts) == 2:
+            try:
+                wish_id = int(parts[1])
+            except ValueError:
+                wish_id = None
+    if wish_id is None:
+        data = await state.get_data()
+        stored_id = data.get("current_byt_item_id")
+        try:
+            wish_id = int(stored_id) if stored_id is not None else None
+        except (TypeError, ValueError):
+            wish_id = None
 
     db = FinanceDatabase()
     settings_row = db.get_user_settings(callback.from_user.id)
@@ -471,6 +585,12 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
         return
     now_dt = now_tz()
     items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
+    if wish_id is not None:
+        await state.update_data(current_byt_item_id=wish_id)
+        started = await _start_byt_defer_flow(callback, state, wish_id)
+        if not started:
+            await state.clear()
+        return
     if not items:
         await state.clear()
         if callback.message:
@@ -499,43 +619,29 @@ async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> N
     """Start deferring selected BYT item."""
 
     data = callback.data.split(":", maxsplit=1)
-    if len(data) != 2:
-        await callback.answer("Некорректный выбор.", show_alert=True)
+    wish_id: int | None = None
+    if len(data) == 2:
+        try:
+            wish_id = int(data[1])
+        except ValueError:
+            wish_id = None
+    if wish_id is None:
+        state_data = await state.get_data()
+        try:
+            wish_id = (
+                int(state_data.get("defer_item_id"))
+                if state_data.get("defer_item_id") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            wish_id = None
+    if wish_id is None:
+        await callback.answer("Ошибка: не найден item_id", show_alert=True)
         return
 
-    try:
-        item_id = int(data[1])
-    except ValueError:
-        await callback.answer("Некорректный выбор.", show_alert=True)
-        return
-
-    db = FinanceDatabase()
-    wish = db.get_wish(item_id)
-    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
-        await callback.answer("Элемент не найден.", show_alert=True)
-        return
-    settings_row = db.get_user_settings(callback.from_user.id)
-    if not bool(settings_row.get("byt_defer_enabled", 1)):
-        await callback.answer("Отключено в настройках", show_alert=True)
+    started = await _start_byt_defer_flow(callback, state, wish_id)
+    if not started:
         await state.clear()
-        return
-
-    await state.set_state(BytDeferState.waiting_for_days)
-    await state.update_data(
-        defer_item_id=item_id,
-        defer_days_str="0",
-        reminder_message_id=callback.message.message_id if callback.message else None,
-    )
-
-    await callback.answer()
-    await callback.message.answer("На сколько дней отложить?")
-    prompt = await callback.message.answer(": 0", reply_markup=income_calculator_keyboard())
-    await state.update_data(
-        defer_display_chat_id=callback.message.chat.id
-        if callback.message
-        else callback.from_user.id,
-        defer_display_message_id=prompt.message_id,
-    )
 
 
 @router.message(

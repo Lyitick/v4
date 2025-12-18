@@ -1,10 +1,11 @@
 """Handlers for household payments scenario."""
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import logging
 import time
 from typing import Dict, List, Optional
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
@@ -23,6 +24,7 @@ from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsSta
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.ui_cleanup import ui_register_message
+from Bot.handlers.wishlist import run_byt_timer_check
 
 LOGGER = logging.getLogger(__name__)
 
@@ -310,6 +312,36 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
         reply_markup=household_yes_no_keyboard(str(first_item.get("code", ""))),
     )
     LOGGER.info("User %s started household payments for month %s", user_id, month)
+
+
+@router.message(F.text == "Проверить быт")
+async def trigger_household_notifications(message: Message, state: FSMContext) -> None:
+    """Trigger BYT purchases check (household wishlist) as if timer fired."""
+
+    user_id = message.from_user.id
+    db = FinanceDatabase()
+
+    db.ensure_byt_timer_defaults(user_id)
+    try:
+        await message.delete()
+    except TelegramBadRequest:
+        pass
+
+    times = db.list_active_byt_timer_times(user_id)
+    simulated_time = None
+    if times:
+        first_time = times[0]
+        try:
+            simulated_time = dt_time(
+                hour=int(first_time.get("hour", 0)),
+                minute=int(first_time.get("minute", 0)),
+            )
+        except Exception:
+            simulated_time = None
+
+    await run_byt_timer_check(
+        message.bot, db, user_id=user_id, simulated_time=simulated_time
+    )
 
 
 @router.callback_query(F.data.startswith("household:"))

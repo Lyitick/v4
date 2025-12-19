@@ -11,7 +11,7 @@ from Bot.handlers.finances import (
     _format_savings_summary,
     show_affordable_wishes,
 )
-from Bot.keyboards.main import wishlist_categories_keyboard
+from Bot.keyboards.main import back_only_keyboard, wishlist_categories_keyboard
 from Bot.states.wishlist_states import WishlistState
 from Bot.handlers.wishlist import (
     WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY,
@@ -70,6 +70,7 @@ async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
             _get_user_wishlist_categories(FinanceDatabase(), callback.from_user.id)
         ),
     )
+    await callback.message.answer(" ", reply_markup=back_only_keyboard())
     await callback.answer()
 
 

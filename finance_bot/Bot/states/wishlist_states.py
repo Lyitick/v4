@@ -43,5 +43,6 @@ class BytTimerState(StatesGroup):
     """States for BYT timer settings inputs."""
 
     waiting_for_removal = State()
+    waiting_for_time_add = State()
     waiting_for_hour = State()
     waiting_for_minute = State()

@@ -231,7 +231,8 @@ def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
             KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
         ],
-        [KeyboardButton(text="⏳ Макс. дни отложить"), KeyboardButton(text="⏰ Таймер")],
+        [KeyboardButton(text="⏳ Макс. дни отложить")],
+        [KeyboardButton(text="⏱ Таймер"), KeyboardButton(text="⚙ Условия")],
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -261,6 +262,7 @@ def byt_timer_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="➖ Удалить время"),
         ],
         [KeyboardButton(text="🔁 Сбросить по умолчанию")],
+        [KeyboardButton(text="⚙ Условия")],
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)

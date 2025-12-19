@@ -670,14 +670,31 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
     current_sum = str(data.get("defer_days_str", "0"))
     display_chat_id = data.get("defer_display_chat_id", message.chat.id)
     display_message_id = data.get("defer_display_message_id")
+    db = FinanceDatabase()
 
     if message.text == "Очистить":
         new_sum = "0"
     elif message.text == "✅ Газ":
         amount_str = current_sum.strip()
+        if not amount_str:
+            LOGGER.warning(
+                "BYT defer submit missing entered_days user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Нужно ввести число дней. Попробуй снова.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
         try:
             days = int(amount_str)
         except (TypeError, ValueError):
+            LOGGER.warning(
+                "BYT defer submit invalid days user_id=%s value=%s",
+                message.from_user.id if message.from_user else "unknown",
+                amount_str,
+            )
             await message.answer("Нужно ввести число. Попробуй снова.")
             try:
                 await message.delete()
@@ -685,7 +702,33 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 pass
             return
 
-        settings_row = db.get_user_settings(message.from_user.id)
+        if days <= 0:
+            LOGGER.warning(
+                "BYT defer submit non-positive days user_id=%s value=%s",
+                message.from_user.id if message.from_user else "unknown",
+                days,
+            )
+            await message.answer("Нужно ввести число дней. Попробуй снова.")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        try:
+            settings_row = db.get_user_settings(message.from_user.id)
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to load user settings for BYT defer user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+                exc_info=exc,
+            )
+            await message.answer("Ошибка БД")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
         max_days = int(settings_row.get("byt_defer_max_days", 365) or 365)
         if days < 1 or days > max_days:
             await message.answer(f"Количество дней должно быть от 1 до {max_days}.")
@@ -695,13 +738,50 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 pass
             return
 
-        defer_item_id = data.get("defer_item_id")
+        raw_defer_item_id = data.get("defer_item_id")
+        try:
+            defer_item_id = int(raw_defer_item_id) if raw_defer_item_id is not None else None
+        except (TypeError, ValueError):
+            defer_item_id = None
+        if defer_item_id is None:
+            LOGGER.warning(
+                "BYT defer submit missing item_id user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Не выбран товар для отсрочки.")
+            await state.clear()
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
         reminder_message_id = data.get("reminder_message_id")
         deferred_until = now_tz() + timedelta(days=days)
 
-        db = FinanceDatabase()
-        db.set_wishlist_item_deferred_until(
-            message.from_user.id, int(defer_item_id), deferred_until.isoformat()
+        try:
+            db.set_wishlist_item_deferred_until(
+                message.from_user.id, defer_item_id, deferred_until.isoformat()
+            )
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to set BYT defer days user_id=%s item_id=%s days=%s",
+                message.from_user.id if message.from_user else "unknown",
+                defer_item_id,
+                days,
+                exc_info=exc,
+            )
+            await message.answer("Ошибка БД")
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+
+        LOGGER.info(
+            "BYT defer days submit user_id=%s item_id=%s days=%s",
+            message.from_user.id if message.from_user else "unknown",
+            defer_item_id,
+            days,
         )
 
         await state.clear()

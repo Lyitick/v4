@@ -13,7 +13,6 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
-    ReplyKeyboardRemove,
 )
 
 from Bot.database.crud import FinanceDatabase
@@ -32,6 +31,18 @@ from Bot.utils.ui_cleanup import ui_register_message
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+
+
+async def _push_wl_step(state: FSMContext, step: str) -> None:
+    data = await state.get_data()
+    stack = list(data.get("wl_add_step_stack") or [])
+    if not stack or stack[-1] != step:
+        stack.append(step)
+    await state.update_data(wl_add_step_stack=stack)
+
+
+async def _set_wl_steps(state: FSMContext, steps: list[str]) -> None:
+    await state.update_data(wl_add_step_stack=steps)
 
 
 async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
@@ -104,26 +115,19 @@ async def add_wish_start(message: Message, state: FSMContext) -> None:
     """Start adding wish."""
 
     await state.set_state(WishlistState.waiting_for_name)
+    await _set_wl_steps(state, ["name"])
     await message.answer(
         "Введи название желания.",
         reply_markup=back_only_keyboard(),
     )
 
-
-@router.message(WishlistState.waiting_for_name, F.text == "⬅️ Назад")
-async def add_wish_back_from_name(message: Message, state: FSMContext) -> None:
-    """Cancel wishlist add from name step."""
-
-    await state.clear()
-    await open_wishlist(message, state)
-
-
-@router.message(WishlistState.waiting_for_name)
+@router.message(WishlistState.waiting_for_name, F.text != "⬅️ Назад")
 async def add_wish_name(message: Message, state: FSMContext) -> None:
     """Save wish name and request price."""
 
     await state.update_data(name=message.text)
     await state.set_state(WishlistState.waiting_for_price)
+    await _push_wl_step(state, "amount")
 
     question = await message.answer(
         "Введи цену (используй кнопки ниже).",
@@ -197,7 +201,9 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
 
         await state.update_data(price=price)
         await state.set_state(WishlistState.waiting_for_url)
-        await message.answer("дай", reply_markup=ReplyKeyboardRemove())
+        await _push_wl_step(state, "pre_url")
+        await message.answer("дай", reply_markup=back_only_keyboard())
+        await _push_wl_step(state, "url")
         await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
 
         try:
@@ -229,7 +235,7 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
         pass
 
 
-@router.message(WishlistState.waiting_for_url)
+@router.message(WishlistState.waiting_for_url, F.text != "⬅️ Назад")
 async def add_wish_url(message: Message, state: FSMContext) -> None:
     """Save URL and request category selection."""
 
@@ -237,6 +243,7 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
     url: Optional[str] = None if text in {"-", ""} else text
     await state.update_data(url=url)
     await state.set_state(WishlistState.waiting_for_category)
+    await _push_wl_step(state, "category")
     db = FinanceDatabase()
     categories = _get_user_wishlist_categories(db, message.from_user.id)
     await message.answer(
@@ -283,6 +290,79 @@ async def show_purchases(message: Message, state: FSMContext | None = None) -> N
     )
     if state:
         await ui_register_message(state, sent.chat.id, sent.message_id)
+
+
+@router.message(
+    F.text == "⬅️ Назад",
+    WishlistState.waiting_for_name
+    | WishlistState.waiting_for_price
+    | WishlistState.waiting_for_url
+    | WishlistState.waiting_for_category,
+)
+async def wishlist_add_back(message: Message, state: FSMContext) -> None:
+    """Handle back navigation in wishlist add flow."""
+
+    data = await state.get_data()
+    stack = list(data.get("wl_add_step_stack") or [])
+    current = stack[-1] if stack else None
+
+    if current == "name":
+        await state.clear()
+        await open_wishlist(message, state)
+        return
+
+    if current == "amount":
+        await state.update_data(
+            price=None,
+            price_sum=None,
+            price_question_message_id=None,
+            price_message_id=None,
+        )
+        await state.set_state(WishlistState.waiting_for_name)
+        await _set_wl_steps(state, ["name"])
+        await message.answer(
+            "Введи название желания.",
+            reply_markup=back_only_keyboard(),
+        )
+        return
+
+    if current == "url":
+        stack.pop()
+        await state.update_data(url=None, wl_add_step_stack=stack)
+        await message.answer("дай", reply_markup=back_only_keyboard())
+        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
+        return
+
+    if current == "pre_url":
+        stack.pop()
+        await state.update_data(
+            price=None,
+            price_sum=None,
+            price_question_message_id=None,
+            price_message_id=None,
+            wl_add_step_stack=stack,
+        )
+        await state.set_state(WishlistState.waiting_for_price)
+        question = await message.answer(
+            "Введи цену (используй кнопки ниже).",
+            reply_markup=income_calculator_keyboard(),
+        )
+        prompt = await message.answer(": 0")
+        await state.update_data(
+            price_sum="0",
+            price_question_message_id=question.message_id,
+            price_message_id=prompt.message_id,
+        )
+        await _push_wl_step(state, "amount")
+        return
+
+    if current == "category":
+        stack.pop()
+        await state.update_data(wl_add_step_stack=stack)
+        await state.set_state(WishlistState.waiting_for_url)
+        await message.answer("дай", reply_markup=back_only_keyboard())
+        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
+        return
 
 
 @router.message(WishlistState.waiting_for_price)

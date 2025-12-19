@@ -64,6 +64,11 @@ async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
 
     await state.update_data(url=None)
     await state.set_state(WishlistState.waiting_for_category)
+    data = await state.get_data()
+    stack = list(data.get("wl_add_step_stack") or [])
+    if not stack or stack[-1] != "category":
+        stack.append("category")
+    await state.update_data(wl_add_step_stack=stack)
     try:
         await callback.message.delete()
     except Exception:

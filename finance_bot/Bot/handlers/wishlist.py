@@ -19,9 +19,9 @@ from aiogram.types import (
 from Bot.database.crud import FinanceDatabase
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import (
+    back_only_keyboard,
     wishlist_categories_keyboard,
     wishlist_reply_keyboard,
-    wishlist_reply_keyboard_no_add,
     wishlist_url_keyboard,
 )
 from Bot.keyboards.calculator import income_calculator_keyboard
@@ -99,15 +99,23 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
     LOGGER.info("User %s opened wishlist", message.from_user.id if message.from_user else "unknown")
 
 
-@router.message(F.text == "➕")
+@router.message(F.text.in_({"➕", "+"}))
 async def add_wish_start(message: Message, state: FSMContext) -> None:
     """Start adding wish."""
 
     await state.set_state(WishlistState.waiting_for_name)
     await message.answer(
         "Введи название желания.",
-        reply_markup=wishlist_reply_keyboard_no_add(),
+        reply_markup=back_only_keyboard(),
     )
+
+
+@router.message(WishlistState.waiting_for_name, F.text == "⬅️ Назад")
+async def add_wish_back_from_name(message: Message, state: FSMContext) -> None:
+    """Cancel wishlist add from name step."""
+
+    await state.clear()
+    await open_wishlist(message, state)
 
 
 @router.message(WishlistState.waiting_for_name)
@@ -234,6 +242,7 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Выбери категорию желания.", reply_markup=wishlist_categories_keyboard(categories)
     )
+    await message.answer(" ", reply_markup=back_only_keyboard())
 
 
 @router.message(F.text == "Купленное")
@@ -283,6 +292,18 @@ async def invalid_price(message: Message) -> None:
     await message.answer("Используй кнопки калькулятора ниже для ввода цены.")
 
 
+@router.message(WishlistState.waiting_for_category, F.text == "⬅️ Назад")
+async def add_wish_back_from_category(message: Message, state: FSMContext) -> None:
+    """Return to name step from category selection."""
+
+    await state.update_data(name=None, price=None, price_sum=None, url=None)
+    await state.set_state(WishlistState.waiting_for_name)
+    await message.answer(
+        "Введи название желания.",
+        reply_markup=back_only_keyboard(),
+    )
+
+
 @router.message(WishlistState.waiting_for_category)
 async def waiting_category_text(message: Message) -> None:
     """Prompt to use inline keyboard for category."""
@@ -293,6 +314,7 @@ async def waiting_category_text(message: Message) -> None:
         "Выбери категорию через кнопки ниже.",
         reply_markup=wishlist_categories_keyboard(categories),
     )
+    await message.answer(" ", reply_markup=back_only_keyboard())
 
 
 def _build_byt_items_keyboard(items: list[dict], allow_defer: bool = True) -> InlineKeyboardMarkup:

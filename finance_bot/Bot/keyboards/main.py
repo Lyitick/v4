@@ -45,6 +45,13 @@ def back_to_main_keyboard() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
+def back_only_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with a single back button."""
+
+    buttons = [[KeyboardButton(text="⬅️ Назад")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
 def wishlist_reply_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard for wishlist actions."""
 

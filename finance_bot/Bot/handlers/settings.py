@@ -3,7 +3,8 @@ import logging
 import time
 
 from aiogram import F, Router
-from aiogram.exceptions import SkipHandler, TelegramBadRequest
+from aiogram.filters import BaseFilter
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
@@ -42,6 +43,12 @@ router = Router()
 LOGGER = logging.getLogger(__name__)
 PERCENT_DIGITS = {str(i) for i in range(10)}
 PERCENT_INPUT_BUTTONS = PERCENT_DIGITS | {"Очистить", "✅ Газ"}
+
+
+class InSettingsFilter(BaseFilter):
+    async def __call__(self, message: Message, state: FSMContext) -> bool:
+        data = await state.get_data()
+        return bool(data.get("in_settings"))
 
 
 async def _register_user_message(state: FSMContext, message: Message) -> None:
@@ -235,21 +242,11 @@ async def _render_reply_settings_page(
 
     if force_new or not chat_id or not message_id or current_screen != screen_id:
         await _delete_message_safely(message.bot, chat_id, message_id)
-        sent = await message.bot.send_message(
-            chat_id=message.chat.id, text=text, reply_markup=reply_markup
-        )
-        await ui_register_message(state, sent.chat.id, sent.message_id)
-        await _store_settings_message(state, sent.chat.id, sent.message_id)
-    else:
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=int(chat_id),
-            message_id=int(message_id),
-            text=text,
-            reply_markup=None,
-        )
-        await _apply_reply_keyboard(message, reply_markup)
+    sent = await message.bot.send_message(
+        chat_id=message.chat.id, text=text, reply_markup=reply_markup
+    )
+    await ui_register_message(state, sent.chat.id, sent.message_id)
+    await _store_settings_message(state, sent.chat.id, sent.message_id)
     await _set_current_screen(state, screen_id)
 
 
@@ -962,7 +959,7 @@ async def household_reset_questions_reply(message: Message, state: FSMContext) -
     )
 
 
-@router.message(F.text == "➕")
+@router.message(InSettingsFilter(), F.text == "➕")
 async def settings_add_action_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
@@ -998,7 +995,7 @@ async def settings_add_action_reply(message: Message, state: FSMContext) -> None
     )
 
 
-@router.message(F.text == "➖")
+@router.message(InSettingsFilter(), F.text == "➖")
 async def settings_delete_action_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):

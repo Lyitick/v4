@@ -15,6 +15,7 @@ def income_calculator_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="0"),
             KeyboardButton(text="✅ Газ"),
         ],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(
         keyboard=keyboard,

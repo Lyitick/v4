@@ -11,9 +11,6 @@ project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from rich.traceback import install
-install()
-
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 

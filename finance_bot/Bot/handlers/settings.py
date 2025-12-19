@@ -1667,6 +1667,42 @@ async def byt_timer_delete_choice(message: Message, state: FSMContext) -> None:
     previous_screen = await _pop_previous_screen(state) or "byt:timer_menu"
     await render_settings_screen(previous_screen, message=message, state=state)
 
+@router.message(HouseholdSettingsState.waiting_for_removal)
+async def household_payment_delete_choice(
+    message: Message, state: FSMContext
+) -> None:
+    data = await state.get_data()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    mapping: dict[str, str] = data.get("hp_delete_map") or {}
+    choice = (message.text or "").strip()
+    if choice == "⬅ Назад":
+        await state.set_state(None)
+        await render_settings_screen(
+            "st:household_payments", message=message, state=state, force_new=False
+        )
+        return
+
+    code = mapping.get(choice)
+    if not code:
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Выбери платеж из списка.",
+        )
+        return
+
+    db = FinanceDatabase()
+    db.deactivate_household_payment_item(message.from_user.id, code)
+    await db.init_household_questions_for_month(
+        message.from_user.id, current_month_str()
+    )
+    await state.set_state(None)
+    await render_settings_screen(
+        "st:household_payments", message=message, state=state, force_new=False
+    )
+
+
 @router.callback_query(F.data == "inc:add")
 async def category_add(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()

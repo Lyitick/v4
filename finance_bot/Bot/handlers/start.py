@@ -9,7 +9,7 @@ from aiogram.types import Message
 
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import back_to_main_keyboard
-from Bot.utils.ui_cleanup import ui_register_protected_message
+from Bot.utils.ui_cleanup import ui_register_message, ui_register_protected_message
 
 LOGGER = logging.getLogger(__name__)
 

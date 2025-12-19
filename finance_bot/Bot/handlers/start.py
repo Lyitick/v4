@@ -9,7 +9,7 @@ from aiogram.types import Message
 
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import back_to_main_keyboard
-from Bot.utils.ui_cleanup import ui_register_message
+from Bot.utils.ui_cleanup import ui_register_message, ui_register_protected_message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     sent = await message.answer(
         greeting, reply_markup=await build_main_menu_for_user(message.from_user.id)
     )
-    await ui_register_message(state, sent.chat.id, sent.message_id)
+    await ui_register_protected_message(state, sent.chat.id, sent.message_id)
     LOGGER.info("User %s started bot", message.from_user.id if message.from_user else "unknown")
 
 

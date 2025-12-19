@@ -3,7 +3,7 @@ import logging
 import time
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import SkipHandler, TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
@@ -965,9 +965,11 @@ async def household_reset_questions_reply(message: Message, state: FSMContext) -
 @router.message(F.text == "➕")
 async def settings_add_action_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    if not data.get("in_settings"):
+        raise SkipHandler
     screen = data.get("settings_current_screen")
     if screen not in {"st:income", "st:wishlist", "st:byt_rules"}:
-        return
+        raise SkipHandler
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
@@ -999,9 +1001,11 @@ async def settings_add_action_reply(message: Message, state: FSMContext) -> None
 @router.message(F.text == "➖")
 async def settings_delete_action_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    if not data.get("in_settings"):
+        raise SkipHandler
     screen = data.get("settings_current_screen")
     if screen not in {"st:income", "st:wishlist", "st:byt_rules"}:
-        return
+        raise SkipHandler
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
@@ -1019,8 +1023,10 @@ async def settings_delete_action_reply(message: Message, state: FSMContext) -> N
 @router.message(F.text == "%")
 async def income_percent_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    if not data.get("in_settings"):
+        raise SkipHandler
     if data.get("settings_current_screen") != "st:income":
-        return
+        raise SkipHandler
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
@@ -1049,8 +1055,10 @@ async def income_percent_menu_reply(message: Message, state: FSMContext) -> None
 @router.message(F.text == "🛒 Купленное")
 async def wishlist_purchased_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    if not data.get("in_settings"):
+        raise SkipHandler
     if data.get("settings_current_screen") != "st:wishlist":
-        return
+        raise SkipHandler
 
     await _register_user_message(state, message)
     await _delete_user_message(message)

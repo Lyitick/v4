@@ -99,7 +99,7 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
     LOGGER.info("User %s opened wishlist", message.from_user.id if message.from_user else "unknown")
 
 
-@router.message(F.text == "➕")
+@router.message(F.text.in_({"➕", "+"}))
 async def add_wish_start(message: Message, state: FSMContext) -> None:
     """Start adding wish."""
 

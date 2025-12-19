@@ -235,21 +235,11 @@ async def _render_reply_settings_page(
 
     if force_new or not chat_id or not message_id or current_screen != screen_id:
         await _delete_message_safely(message.bot, chat_id, message_id)
-        sent = await message.bot.send_message(
-            chat_id=message.chat.id, text=text, reply_markup=reply_markup
-        )
-        await ui_register_message(state, sent.chat.id, sent.message_id)
-        await _store_settings_message(state, sent.chat.id, sent.message_id)
-    else:
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=int(chat_id),
-            message_id=int(message_id),
-            text=text,
-            reply_markup=None,
-        )
-        await _apply_reply_keyboard(message, reply_markup)
+    sent = await message.bot.send_message(
+        chat_id=message.chat.id, text=text, reply_markup=reply_markup
+    )
+    await ui_register_message(state, sent.chat.id, sent.message_id)
+    await _store_settings_message(state, sent.chat.id, sent.message_id)
     await _set_current_screen(state, screen_id)
 
 

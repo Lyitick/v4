@@ -57,21 +57,26 @@ async def handle_category_selection(callback: CallbackQuery, state: FSMContext) 
 async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
     """Skip wishlist URL step via inline button."""
 
+    await callback.answer()
     current_state = await state.get_state()
     if current_state != WishlistState.waiting_for_url.state:
-        await callback.answer()
         return
 
     await state.update_data(url=None)
     await state.set_state(WishlistState.waiting_for_category)
-    await callback.message.edit_text(
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.message.answer(
         "Выбери категорию желания.",
         reply_markup=wishlist_categories_keyboard(
             _get_user_wishlist_categories(FinanceDatabase(), callback.from_user.id)
         ),
     )
-    await callback.message.answer(" ", reply_markup=back_only_keyboard())
-    await callback.answer()
+    await callback.message.answer(
+        "Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard()
+    )
 
 
 async def _finalize_wish(

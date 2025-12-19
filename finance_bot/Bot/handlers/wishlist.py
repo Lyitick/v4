@@ -242,7 +242,7 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Выбери категорию желания.", reply_markup=wishlist_categories_keyboard(categories)
     )
-    await message.answer(" ", reply_markup=back_only_keyboard())
+    await message.answer("Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard())
 
 
 @router.message(F.text == "Купленное")
@@ -314,7 +314,7 @@ async def waiting_category_text(message: Message) -> None:
         "Выбери категорию через кнопки ниже.",
         reply_markup=wishlist_categories_keyboard(categories),
     )
-    await message.answer(" ", reply_markup=back_only_keyboard())
+    await message.answer("Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard())
 
 
 def _build_byt_items_keyboard(items: list[dict], allow_defer: bool = True) -> InlineKeyboardMarkup:

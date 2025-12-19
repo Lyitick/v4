@@ -11,7 +11,7 @@ from Bot.handlers.finances import (
     _format_savings_summary,
     show_affordable_wishes,
 )
-from Bot.keyboards.main import wishlist_categories_keyboard
+from Bot.keyboards.main import back_only_keyboard, wishlist_categories_keyboard
 from Bot.states.wishlist_states import WishlistState
 from Bot.handlers.wishlist import (
     WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY,
@@ -57,20 +57,26 @@ async def handle_category_selection(callback: CallbackQuery, state: FSMContext) 
 async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
     """Skip wishlist URL step via inline button."""
 
+    await callback.answer()
     current_state = await state.get_state()
     if current_state != WishlistState.waiting_for_url.state:
-        await callback.answer()
         return
 
     await state.update_data(url=None)
     await state.set_state(WishlistState.waiting_for_category)
-    await callback.message.edit_text(
+    try:
+        await callback.message.delete()
+    except Exception:
+        pass
+    await callback.message.answer(
         "Выбери категорию желания.",
         reply_markup=wishlist_categories_keyboard(
             _get_user_wishlist_categories(FinanceDatabase(), callback.from_user.id)
         ),
     )
-    await callback.answer()
+    await callback.message.answer(
+        "Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard()
+    )
 
 
 async def _finalize_wish(
@@ -90,9 +96,22 @@ async def _finalize_wish(
         url=data.get("url"),
         category=category_code,
     )
-    await callback.message.edit_text(
-        f"✅ Желание добавлено: {data.get('name')} за {data.get('price')} ({humanized_category}). ID: {wish_id}"
+    lines = [
+        f"Категория: {humanized_category}",
+        f"Название: {data.get('name')}",
+        f"Цена: {data.get('price')}",
+        f"ID: {wish_id}",
+    ]
+    url = data.get("url")
+    if url:
+        lines.insert(3, f"Ссылка: {url}")
+    info = await callback.message.answer("\n".join(lines))
+    await ui_register_message(state, info.chat.id, info.message_id)
+    sent = await callback.message.answer(
+        "✅ Желание добавлено",
+        reply_markup=await build_main_menu_for_user(callback.from_user.id),
     )
+    await ui_register_message(state, sent.chat.id, sent.message_id)
     await state.clear()
     LOGGER.info("User %s added wish %s", callback.from_user.id, wish_id)
 

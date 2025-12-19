@@ -138,8 +138,8 @@ def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard for wishlist settings actions."""
 
     buttons = [
-        [KeyboardButton(text="➕ Категория"), KeyboardButton(text="➖ Категория")],
-        [KeyboardButton(text="⏳ Срок купленного")],
+        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
+        [KeyboardButton(text="🛒 Купленное")],
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -166,7 +166,7 @@ def wishlist_purchased_mode_reply_keyboard() -> ReplyKeyboardMarkup:
 
     buttons = [
         [KeyboardButton(text="Всегда")],
-        [KeyboardButton(text="Несколько дней")],
+        [KeyboardButton(text="Настроить дни")],
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -231,8 +231,8 @@ def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
             KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
         ],
+        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
         [KeyboardButton(text="⏳ Макс. дни отложить")],
-        [KeyboardButton(text="⏱ Таймер"), KeyboardButton(text="⚙ Условия")],
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -262,7 +262,6 @@ def byt_timer_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="➖ Удалить время"),
         ],
         [KeyboardButton(text="🔁 Сбросить по умолчанию")],
-        [KeyboardButton(text="⚙ Условия")],
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -329,8 +328,8 @@ def income_settings_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard for income settings actions."""
 
     buttons = [
-        [KeyboardButton(text="➕ Категория"), KeyboardButton(text="➖ Категория")],
-        [KeyboardButton(text="% Проценты")],
+        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
+        [KeyboardButton(text="%")],
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)

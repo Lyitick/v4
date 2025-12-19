@@ -90,9 +90,22 @@ async def _finalize_wish(
         url=data.get("url"),
         category=category_code,
     )
-    await callback.message.edit_text(
-        f"✅ Желание добавлено: {data.get('name')} за {data.get('price')} ({humanized_category}). ID: {wish_id}"
+    lines = [
+        f"Категория: {humanized_category}",
+        f"Название: {data.get('name')}",
+        f"Цена: {data.get('price')}",
+        f"ID: {wish_id}",
+    ]
+    url = data.get("url")
+    if url:
+        lines.insert(3, f"Ссылка: {url}")
+    info = await callback.message.answer("\n".join(lines))
+    await ui_register_message(state, info.chat.id, info.message_id)
+    sent = await callback.message.answer(
+        "✅ Желание добавлено",
+        reply_markup=await build_main_menu_for_user(callback.from_user.id),
     )
+    await ui_register_message(state, sent.chat.id, sent.message_id)
     await state.clear()
     LOGGER.info("User %s added wish %s", callback.from_user.id, wish_id)
 

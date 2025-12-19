@@ -966,10 +966,10 @@ async def household_reset_questions_reply(message: Message, state: FSMContext) -
 async def settings_add_action_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
-        raise SkipHandler
+        return
     screen = data.get("settings_current_screen")
     if screen not in {"st:income", "st:wishlist", "st:byt_rules"}:
-        raise SkipHandler
+        return
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
@@ -1002,10 +1002,10 @@ async def settings_add_action_reply(message: Message, state: FSMContext) -> None
 async def settings_delete_action_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
-        raise SkipHandler
+        return
     screen = data.get("settings_current_screen")
     if screen not in {"st:income", "st:wishlist", "st:byt_rules"}:
-        raise SkipHandler
+        return
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
@@ -1024,9 +1024,9 @@ async def settings_delete_action_reply(message: Message, state: FSMContext) -> N
 async def income_percent_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
-        raise SkipHandler
+        return
     if data.get("settings_current_screen") != "st:income":
-        raise SkipHandler
+        return
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
@@ -1056,9 +1056,9 @@ async def income_percent_menu_reply(message: Message, state: FSMContext) -> None
 async def wishlist_purchased_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
-        raise SkipHandler
+        return
     if data.get("settings_current_screen") != "st:wishlist":
-        raise SkipHandler
+        return
 
     await _register_user_message(state, message)
     await _delete_user_message(message)

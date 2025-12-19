@@ -7,6 +7,7 @@ from datetime import datetime, time, timedelta
 from typing import Optional
 
 from aiogram import Bot, F, Router
+from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.types import (
     CallbackQuery,
@@ -294,10 +295,12 @@ async def show_purchases(message: Message, state: FSMContext | None = None) -> N
 
 @router.message(
     F.text == "⬅️ Назад",
-    WishlistState.waiting_for_name
-    | WishlistState.waiting_for_price
-    | WishlistState.waiting_for_url
-    | WishlistState.waiting_for_category,
+    StateFilter(
+        WishlistState.waiting_for_name,
+        WishlistState.waiting_for_price,
+        WishlistState.waiting_for_url,
+        WishlistState.waiting_for_category,
+    ),
 )
 async def wishlist_add_back(message: Message, state: FSMContext) -> None:
     """Handle back navigation in wishlist add flow."""

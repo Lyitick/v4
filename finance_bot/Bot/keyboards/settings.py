@@ -43,6 +43,38 @@ def household_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for household payments settings actions."""
+
+    buttons = [
+        [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
+        [KeyboardButton(text="🔄 Обнулить")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def household_payments_remove_reply_keyboard(
+    items: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for removing household payments in settings."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for item in items:
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        label = f"{title} — {amount}" if amount is not None else title
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
 def household_payments_inline_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for household payments settings."""
 
@@ -102,6 +134,44 @@ def wishlist_settings_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for wishlist settings actions."""
+
+    buttons = [
+        [KeyboardButton(text="➕ Категория"), KeyboardButton(text="➖ Категория")],
+        [KeyboardButton(text="⏳ Срок купленного")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_categories_select_reply_keyboard(categories: list[dict]) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def wishlist_purchased_mode_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist purchased mode."""
+
+    buttons = [
+        [KeyboardButton(text="Всегда")],
+        [KeyboardButton(text="Несколько дней")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
 def wishlist_categories_select_keyboard(
     categories: list[dict], action_prefix: str
 ) -> InlineKeyboardMarkup:
@@ -153,6 +223,21 @@ def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for BYT rules settings."""
+
+    buttons = [
+        [
+            KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
+            KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
+        ],
+        [KeyboardButton(text="⏳ Макс. дни отложить")],
+        [KeyboardButton(text="⏱ Таймер"), KeyboardButton(text="⚙ Условия")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
 def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for BYT timer settings."""
 
@@ -166,6 +251,38 @@ def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def byt_timer_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for BYT timer settings."""
+
+    buttons = [
+        [
+            KeyboardButton(text="➕ Добавить время"),
+            KeyboardButton(text="➖ Удалить время"),
+        ],
+        [KeyboardButton(text="🔁 Сбросить по умолчанию")],
+        [KeyboardButton(text="⚙ Условия")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def byt_timer_times_select_reply_keyboard(times: list[dict]) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting BYT timer time."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for timer in times:
+        label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def byt_timer_times_select_keyboard(times: list[dict], action_prefix: str) -> InlineKeyboardMarkup:
@@ -206,6 +323,37 @@ def income_settings_inline_keyboard() -> InlineKeyboardMarkup:
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def income_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for income settings actions."""
+
+    buttons = [
+        [KeyboardButton(text="➕ Категория"), KeyboardButton(text="➖ Категория")],
+        [KeyboardButton(text="% Проценты")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def income_categories_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting income category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        title = category.get("title", "")
+        percent = category.get("percent", 0)
+        row.append(KeyboardButton(text=f"{title} — {percent}%"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def income_categories_select_keyboard(

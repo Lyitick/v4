@@ -19,8 +19,8 @@ from Bot.keyboards.settings import (
     household_settings_reply_keyboard,
     income_categories_select_reply_keyboard,
     income_settings_reply_keyboard,
-    settings_home_inline_keyboard,
     settings_back_reply_keyboard,
+    settings_home_reply_keyboard,
     wishlist_categories_select_reply_keyboard,
     wishlist_purchased_mode_reply_keyboard,
     wishlist_settings_reply_keyboard,
@@ -269,14 +269,13 @@ async def _render_reply_settings_page(
 
 
 async def _render_settings_home(message: Message, state: FSMContext) -> None:
-    chat_id, message_id = await _get_settings_message_ids(state, message)
-    await _edit_settings_page(
-        bot=message.bot,
+    await _render_reply_settings_page(
+        message=message,
         state=state,
-        chat_id=chat_id,
-        message_id=message_id,
         text="⚙️ НАСТРОЙКИ",
-        reply_markup=settings_home_inline_keyboard(),
+        reply_markup=settings_home_reply_keyboard(),
+        screen_id="st:home",
+        force_new=True,
     )
 
 
@@ -884,7 +883,7 @@ async def open_settings(message: Message, state: FSMContext) -> None:
     await state.update_data(settings_user_id=message.from_user.id)
     settings_message = await message.answer(
         "⚙️ НАСТРОЙКИ",
-        reply_markup=settings_home_inline_keyboard(),
+        reply_markup=settings_home_reply_keyboard(),
     )
     await ui_set_screen_message(
         state, settings_message.chat.id, settings_message.message_id
@@ -902,11 +901,34 @@ async def back_to_settings_home(callback: CallbackQuery, state: FSMContext) -> N
     await render_settings_screen("st:home", message=callback.message, state=state)
 
 
+@router.message(F.text == "⚙️ НАСТРОЙКИ")
+async def back_to_settings_home_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("in_settings"):
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    await _reset_navigation(state)
+    await render_settings_screen("st:home", message=message, state=state)
+
+
 @router.callback_query(F.data == "st:income")
 async def open_income_settings(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
     await _navigate_to_screen("st:income", message=callback.message, state=state)
+
+
+@router.message(F.text == "📊 Доход")
+async def open_income_settings_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("in_settings"):
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    await _navigate_to_screen("st:income", message=message, state=state)
 
 
 @router.message(F.text.in_({"Назад", "⬅ Назад", "⬅️ Назад"}))
@@ -924,6 +946,17 @@ async def open_wishlist(callback: CallbackQuery, state: FSMContext) -> None:
     await _navigate_to_screen("st:wishlist", message=callback.message, state=state)
 
 
+@router.message(F.text == "🧾 Вишлист")
+async def open_wishlist_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("in_settings"):
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    await _navigate_to_screen("st:wishlist", message=message, state=state)
+
+
 @router.callback_query(F.data == "st:household_payments")
 async def open_household_payments(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
@@ -931,6 +964,30 @@ async def open_household_payments(callback: CallbackQuery, state: FSMContext) ->
     await _navigate_to_screen(
         "st:household_payments", message=callback.message, state=state, force_new=True
     )
+
+
+@router.message(F.text == "🧾 Бытовые платежи")
+async def open_household_payments_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("in_settings"):
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    await _navigate_to_screen(
+        "st:household_payments", message=message, state=state, force_new=True
+    )
+
+
+@router.message(F.text == "🧺 БЫТ условия")
+async def open_byt_rules_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("in_settings"):
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    await _navigate_to_screen("st:byt_rules", message=message, state=state)
 
 
 @router.message(F.text == "➕ Добавить")

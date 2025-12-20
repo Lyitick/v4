@@ -10,6 +10,7 @@ from Bot.handlers.common import build_main_menu_for_user
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
     ui_register_message,
+    ui_register_protected_message,
     ui_register_user_message,
 )
 
@@ -22,6 +23,10 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     """Shared start logic for /start and "Поехалиии" commands."""
 
     await state.clear()
+    # ПРИВЕТСТВИЕ (PROTECTED)
+    # Это сообщение защищено и НЕ должно удаляться массовыми чистками.
+    # Автоматическое удаление запрещено. Удаление допускается только в отдельной задаче
+    # после явного подтверждения пользователя.
     greeting = "Поработаем бл"
     sent = await message.answer(
         greeting, reply_markup=await build_main_menu_for_user(message.from_user.id)

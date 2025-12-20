@@ -48,6 +48,8 @@ async def ui_cleanup_messages(bot: Bot, state: FSMContext) -> None:
     protected_message_ids: set[int] = {
         int(mid) for mid in list(data.get("ui_protected_message_ids") or [])
     }
+    # protected_message_ids содержит приветствие и другие защищенные сообщения,
+    # которые нельзя удалять массовыми чистками UI.
     if chat_id is None:
         await state.update_data(ui_message_ids=[], user_message_ids=[])
         return

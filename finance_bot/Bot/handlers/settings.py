@@ -34,11 +34,11 @@ from Bot.states.wishlist_states import (
 )
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
-from Bot.utils.ui_cleanup import (
-    ui_cleanup_messages,
-    ui_register_message,
-    ui_register_protected_message,
-    ui_register_user_message,
+from Bot.utils.ui_cleanup import ui_register_message
+from Bot.utils.ui_flow import (
+    ui_get,
+    ui_track,
+    ui_transition,
 )
 
 router = Router()
@@ -54,7 +54,13 @@ class InSettingsFilter(BaseFilter):
 
 
 async def _register_user_message(state: FSMContext, message: Message) -> None:
-    await ui_register_user_message(state, message.chat.id, message.message_id)
+    ui_data = await ui_get(state)
+    await ui_track(
+        state,
+        message.message_id,
+        kind="user",
+        screen=ui_data.get("current_screen"),
+    )
 
 
 async def _delete_message_safely(bot, chat_id: int | None, message_id: int | None) -> None:
@@ -188,10 +194,18 @@ async def _send_main_menu_summary(
 async def _exit_settings_to_main(
     *, bot, state: FSMContext, chat_id: int, user_id: int
 ) -> None:
-    await ui_cleanup_messages(bot, state)
-    await state.clear()
-    await _send_main_menu_summary(
-        bot=bot, state=state, chat_id=chat_id, user_id=user_id
+    async def send_main_menu() -> Message:
+        return await bot.send_message(
+            chat_id=chat_id,
+            text="Главное меню",
+            reply_markup=await build_main_menu_for_user(user_id),
+        )
+
+    await ui_transition(bot, state, chat_id, "main", send_main_menu)
+    await state.update_data(
+        in_settings=False,
+        settings_current_screen=None,
+        settings_nav_stack=[],
     )
 
 
@@ -853,29 +867,24 @@ async def handle_settings_back_action(message: Message, state: FSMContext) -> No
 async def open_settings(message: Message, state: FSMContext) -> None:
     """Open settings entry point with inline navigation."""
 
-    await ui_register_user_message(state, message.chat.id, message.message_id)
-    try:
-        await message.delete()
-    except Exception:  # noqa: BLE001
-        LOGGER.debug("Failed to delete user menu message (⚙️)", exc_info=True)
-    await ui_cleanup_messages(message.bot, state)
-    await state.clear()
+    await ui_track(state, message.message_id, kind="user", screen="main")
 
-    mode_message = await message.answer(
-        "РЕЖИМ НАСТРОЕК",
-        reply_markup=settings_back_reply_keyboard(),
+    async def send_settings_screen() -> Message:
+        sent = await message.answer(
+            "РЕЖИМ НАСТРОЕК\n\n⚙️ НАСТРОЙКИ",
+            reply_markup=settings_home_inline_keyboard(),
+        )
+        await _store_settings_message(state, sent.chat.id, sent.message_id)
+        await _set_current_screen(state, "st:home")
+        return sent
+
+    await ui_transition(
+        message.bot,
+        state,
+        message.chat.id,
+        "settings",
+        send_settings_screen,
     )
-    await ui_register_protected_message(
-        state, mode_message.chat.id, mode_message.message_id
-    )
-    settings_message = await _send_and_register(
-        message=message,
-        state=state,
-        text="⚙️ НАСТРОЙКИ",
-        reply_markup=settings_home_inline_keyboard(),
-    )
-    await state.update_data(settings_mode_message_id=mode_message.message_id)
-    await _store_settings_message(state, settings_message.chat.id, settings_message.message_id)
     await _reset_navigation(state)
 
 

@@ -7,11 +7,10 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from Bot.handlers.common import build_main_menu_for_user
-from Bot.utils.ui_cleanup import (
-    ui_cleanup_messages,
-    ui_register_message,
-    ui_register_protected_message,
-    ui_register_user_message,
+from Bot.utils.ui_flow import (
+    ui_set_greeting,
+    ui_track,
+    ui_transition,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -28,51 +27,58 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     # Автоматическое удаление запрещено. Удаление допускается только в отдельной задаче
     # после явного подтверждения пользователя.
     greeting = "Поработаем бл"
-    sent = await message.answer(
+    greeting_message = await message.answer(
         greeting, reply_markup=await build_main_menu_for_user(message.from_user.id)
     )
-    await ui_register_message(state, sent.chat.id, sent.message_id)
-    LOGGER.info("User %s started bot", message.from_user.id if message.from_user else "unknown")
+    await ui_set_greeting(state, greeting_message.message_id)
+
+    async def send_main_menu() -> Message:
+        return await message.answer(
+            "Главное меню",
+            reply_markup=await build_main_menu_for_user(message.from_user.id),
+        )
+
+    await ui_transition(
+        message.bot,
+        state,
+        message.chat.id,
+        "main",
+        send_main_menu,
+    )
+    LOGGER.info(
+        "User %s started bot", message.from_user.id if message.from_user else "unknown"
+    )
 
 
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext) -> None:
     """Handle /start command."""
 
+    await ui_track(state, message.message_id, kind="user", screen="main")
     await _handle_start_common(message, state)
-    try:
-        await message.delete()
-    except Exception:  # noqa: BLE001
-        LOGGER.warning("Failed to delete /start message", exc_info=True)
 
 
 @router.message(F.text == "Поехалиии")
 async def handle_poehali(message: Message, state: FSMContext) -> None:
     """Handle alternative start phrase."""
 
+    await ui_track(state, message.message_id, kind="user", screen="main")
     await _handle_start_common(message, state)
-    try:
-        await message.delete()
-    except Exception:  # noqa: BLE001
-        LOGGER.warning("Failed to delete 'Поехалиии' message", exc_info=True)
 
 
 @router.message(Command("cancel"))
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     """Handle /cancel command."""
 
-    await ui_register_user_message(state, message.chat.id, message.message_id)
-    try:
-        await message.delete()
-    except Exception:  # noqa: BLE001
-        LOGGER.debug("Failed to delete /cancel message", exc_info=True)
-    await ui_cleanup_messages(message.bot, state)
-    await state.clear()
-    sent = await message.answer(
-        "Операция отменена. Вы в главном меню.",
-        reply_markup=await build_main_menu_for_user(message.from_user.id),
-    )
-    await ui_register_message(state, sent.chat.id, sent.message_id)
+    await ui_track(state, message.message_id, kind="user", screen="main")
+
+    async def send_main_menu() -> Message:
+        return await message.answer(
+            "Операция отменена. Вы в главном меню.",
+            reply_markup=await build_main_menu_for_user(message.from_user.id),
+        )
+
+    await ui_transition(message.bot, state, message.chat.id, "main", send_main_menu)
     LOGGER.info("User %s cancelled current operation", message.from_user.id if message.from_user else "unknown")
 
 
@@ -80,16 +86,13 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def back_to_main(message: Message, state: FSMContext) -> None:
     """Return user to main menu."""
 
-    await ui_register_user_message(state, message.chat.id, message.message_id)
-    try:
-        await message.delete()
-    except Exception:  # noqa: BLE001
-        LOGGER.debug("Failed to delete main menu navigation message", exc_info=True)
-    await ui_cleanup_messages(message.bot, state)
-    await state.clear()
-    sent = await message.answer(
-        "Главное меню",
-        reply_markup=await build_main_menu_for_user(message.from_user.id),
-    )
-    await ui_register_message(state, sent.chat.id, sent.message_id)
+    await ui_track(state, message.message_id, kind="user", screen="main")
+
+    async def send_main_menu() -> Message:
+        return await message.answer(
+            "Главное меню",
+            reply_markup=await build_main_menu_for_user(message.from_user.id),
+        )
+
+    await ui_transition(message.bot, state, message.chat.id, "main", send_main_menu)
     LOGGER.info("User %s returned to main menu", message.from_user.id if message.from_user else "unknown")

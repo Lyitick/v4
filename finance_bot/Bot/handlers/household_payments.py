@@ -109,7 +109,6 @@ def _format_household_items(
 async def _send_household_settings_overview(
     message: Message, db: FinanceDatabase, user_id: int
 ) -> None:
-    db.ensure_household_items_seeded(user_id)
     items = db.list_active_household_items(user_id)
     month = current_month_str()
     unpaid_codes = await db.get_unpaid_household_questions(user_id, month)

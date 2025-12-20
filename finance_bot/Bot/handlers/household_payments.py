@@ -77,11 +77,16 @@ async def _ask_next_household_question(
     month: str,
 ) -> None:
     if not pending_codes:
-        countdown = await message.answer("КРАСАВА (3)", reply_markup=ReplyKeyboardRemove())
+        countdown = await message.answer("КРАСАВА (5)", reply_markup=ReplyKeyboardRemove())
         ui_ids = list((await state.get_data()).get("ui_message_ids") or [])
         ui_ids.append(countdown.message_id)
         await state.update_data(ui_message_ids=ui_ids)
         try:
+            await asyncio.sleep(1)
+            await countdown.edit_text("КРАСАВА (4)")
+            await asyncio.sleep(1)
+            await countdown.edit_text("КРАСАВА (3)")
+            await asyncio.sleep(1)
             await countdown.edit_text("КРАСАВА (2)")
             await asyncio.sleep(1)
             await countdown.edit_text("КРАСАВА (1)")
@@ -438,7 +443,6 @@ async def handle_household_answer(message: Message, state: FSMContext) -> None:
     db.ensure_household_items_seeded(user_id)
 
     await _delete_message_safely(message.bot, message.chat.id, message.message_id)
-    await _delete_message_safely(message.bot, message.chat.id, last_question_message_id)
 
     if not month:
         await state.clear()
@@ -490,6 +494,34 @@ async def handle_household_answer(message: Message, state: FSMContext) -> None:
         LOGGER.info("User %s answered YES for household question %s", user_id, current_code)
     else:
         LOGGER.info("User %s answered NO for household question %s", user_id, current_code)
+
+    question_text = str(question.get("text", "")).rstrip()
+    if question_text.endswith("?"):
+        question_text = question_text[:-1].rstrip()
+    if message.text == "✅ Да":
+        updated_text = f"✅ {question_text}"
+    else:
+        updated_text = f"❌ {question_text} !!!"
+    try:
+        await message.bot.edit_message_text(
+            chat_id=message.chat.id,
+            message_id=last_question_message_id,
+            text=updated_text,
+        )
+    except TelegramBadRequest as exc:
+        LOGGER.warning(
+            "Failed to update household question text (chat_id=%s, message_id=%s): %s",
+            message.chat.id,
+            last_question_message_id,
+            exc,
+        )
+    except Exception:
+        LOGGER.exception(
+            "Unexpected error updating household question text (chat_id=%s, message_id=%s)",
+            message.chat.id,
+            last_question_message_id,
+            exc_info=True,
+        )
 
     await _ask_next_household_question(
         message,

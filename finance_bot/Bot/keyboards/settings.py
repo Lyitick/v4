@@ -305,7 +305,7 @@ def byt_timer_times_select_keyboard(times: list[dict], action_prefix: str) -> In
 def settings_back_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard with a single back button for settings mode."""
 
-    buttons = [[KeyboardButton(text="Назад")]]
+    buttons = [[KeyboardButton(text="⬅ Назад")]]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 

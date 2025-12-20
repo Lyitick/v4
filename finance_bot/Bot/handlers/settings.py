@@ -247,7 +247,16 @@ async def _render_reply_settings_page(
     message_id = data.get("settings_message_id")
     current_screen = data.get("settings_current_screen")
 
-    if force_new or not chat_id or not message_id or current_screen != screen_id:
+    if not force_new and chat_id and message_id and current_screen == screen_id:
+        new_message_id = await _edit_settings_page(
+            bot=message.bot,
+            state=state,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
+    else:
         await _delete_message_safely(message.bot, chat_id, message_id)
     sent = await message.bot.send_message(
         chat_id=message.chat.id, text=text, reply_markup=reply_markup

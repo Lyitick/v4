@@ -1533,6 +1533,37 @@ class FinanceDatabase:
                 error,
             )
 
+    async def mark_household_question_unpaid(
+        self, user_id: int, month: str, question_code: str
+    ) -> None:
+        """Mark household question as unpaid."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE household_payments
+                SET is_paid = 0
+                WHERE user_id = ? AND month = ? AND question_code = ?
+                """,
+                (user_id, month, question_code),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Marked household question %s as unpaid for user %s month %s",
+                question_code,
+                user_id,
+                month,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to mark household question %s unpaid for user %s month %s: %s",
+                question_code,
+                user_id,
+                month,
+                error,
+            )
+
     async def get_unpaid_household_questions(self, user_id: int, month: str) -> List[str]:
         """Get unpaid household question codes for user and month."""
 

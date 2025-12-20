@@ -119,6 +119,17 @@ def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def settings_home_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for settings home screen."""
+
+    buttons = [
+        [KeyboardButton(text="📊 Доход"), KeyboardButton(text="🧾 Вишлист")],
+        [KeyboardButton(text="🧺 БЫТ условия"), KeyboardButton(text="🧾 Бытовые платежи")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
 def wishlist_settings_inline_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for wishlist settings."""
 

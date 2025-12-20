@@ -139,7 +139,9 @@ def _find_reached_goal(
     return find_reached_goal(savings)
 
 
-async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, Any]) -> None:
+async def _ask_allocation_confirmation(
+    message: Message, state: FSMContext, allocation: Dict[str, Any]
+) -> None:
     """Ask user to confirm allocation for a specific category.
 
     Args:
@@ -147,10 +149,26 @@ async def _ask_allocation_confirmation(message: Message, allocation: Dict[str, A
         allocation: Allocation details with label and amount.
     """
 
-    await message.answer(
-        f"На категорию {allocation['label']} можно направить {allocation['amount']:.2f}. Перевести?",
-        reply_markup=yes_no_inline_keyboard(),
+    text = (
+        f"На категорию {allocation['label']} можно направить "
+        f"{allocation['amount']:.2f}. Перевести?"
     )
+    data = await state.get_data()
+    existing_id: Optional[int] = data.get("allocation_question_message_id")
+    if existing_id:
+        try:
+            await message.bot.edit_message_text(
+                chat_id=message.chat.id,
+                message_id=existing_id,
+                text=text,
+                reply_markup=yes_no_inline_keyboard(),
+            )
+            return
+        except Exception:
+            pass
+
+    sent = await message.answer(text, reply_markup=yes_no_inline_keyboard())
+    await state.update_data(allocation_question_message_id=sent.message_id)
 
 
 @router.message(F.text == "Рассчитать доход")
@@ -273,6 +291,7 @@ async def _process_income_amount_value(
     current = allocations[0]
     await _ask_allocation_confirmation(
         message=message,
+        state=state,
         allocation=current,
     )
 
@@ -372,8 +391,6 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
     data = await state.get_data()
     allocations: List[Dict[str, Any]] = data.get("allocations", [])
     index: int = int(data.get("index", 0))
-    life_message_id: Optional[int] = data.get("life_message_id")
-
     # Если категорий нет или индекс вышел за пределы — выходим в главное меню
     if not allocations or index >= len(allocations):
         sent = await query.message.answer(
@@ -386,31 +403,8 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
 
     current = allocations[index]
 
-    # Удаляем сообщение-вопрос с кнопками Да/Нет
-    try:
-        await query.message.delete()
-    except Exception:  # noqa: BLE001
-        LOGGER.warning("Failed to delete category question message", exc_info=True)
-
-    new_life_message_id: Optional[int] = life_message_id
-
     # --- Пользователь нажал "Да" ---
     if query.data == "confirm_yes":
-        # Если было сообщение "Ты что про жизнь забыл?" — удаляем его
-        if life_message_id:
-            try:
-                await query.message.bot.delete_message(
-                    chat_id=query.message.chat.id,
-                    message_id=life_message_id,
-                )
-            except Exception:  # noqa: BLE001
-                LOGGER.warning(
-                    "Failed to delete life message %s",
-                    life_message_id,
-                    exc_info=True,
-                )
-        new_life_message_id = None
-
         # Обновляем накопления
         FinanceDatabase().update_saving(
             user_id=query.from_user.id if query.from_user else None,
@@ -423,42 +417,24 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
 
     # --- Пользователь нажал "Нет" ---
     else:
-        # Перед тем как отправить новое "Ты что про жизнь забыл?" — удаляем старое, если было
-        if life_message_id:
-            try:
-                await query.message.bot.delete_message(
-                    chat_id=query.message.chat.id,
-                    message_id=life_message_id,
-                )
-            except Exception:  # noqa: BLE001
-                LOGGER.warning(
-                    "Failed to delete previous life message %s",
-                    life_message_id,
-                    exc_info=True,
-                )
-
-        life_msg = await query.message.bot.send_message(
-            chat_id=query.message.chat.id,
-            text="Ты что про жизнь забыл?",
-        )
-        new_life_message_id = life_msg.message_id
-
-        # index НЕ меняем — задаём тот же вопрос по той же категории
+        await query.answer("Ты что про жизнь забыл?", show_alert=True)
 
     # Если ещё есть категории — задаём следующий вопрос
     if index < len(allocations):
         await state.update_data(
             index=index,
-            life_message_id=new_life_message_id,
         )
         next_allocation = allocations[index]
         await _ask_allocation_confirmation(
             message=query.message,
+            state=state,
             allocation=next_allocation,
         )
     else:
-        # Категорий больше нет — life_message_id очищаем и показываем итог
-        await state.update_data(life_message_id=None)
+        try:
+            await query.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
         await _send_summary_and_goal_prompt(
             message=query.message,
             state=state,

@@ -119,3 +119,11 @@ async def ui_cleanup_to_context(
         ui_tracked_message_ids=[],
         ui_screen_message_id=None,
     )
+
+
+async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
+    data = await state.get_data()
+    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
+    if chat_id is None:
+        return
+    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")

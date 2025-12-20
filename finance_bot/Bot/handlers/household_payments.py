@@ -450,6 +450,7 @@ async def handle_household_answer(message: Message, state: FSMContext) -> None:
     asked_stack = list(data.get("asked_stack") or [])
     current_code = data.get("current_code")
     last_question_message_id = data.get("last_question_message_id")
+    household_ui_message_ids = list(data.get("household_ui_message_ids") or [])
     user_id = message.from_user.id
     db = FinanceDatabase()
     db.ensure_household_items_seeded(user_id)
@@ -513,6 +514,8 @@ async def handle_household_answer(message: Message, state: FSMContext) -> None:
     else:
         LOGGER.info("User %s answered NO for household question %s", user_id, current_code)
 
+    if last_question_message_id is None and household_ui_message_ids:
+        last_question_message_id = household_ui_message_ids[-1]
     if last_question_message_id is None:
         LOGGER.warning("Household question message id missing for code=%s", current_code)
     else:

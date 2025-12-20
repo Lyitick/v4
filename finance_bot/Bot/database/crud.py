@@ -1533,6 +1533,37 @@ class FinanceDatabase:
                 error,
             )
 
+    async def mark_household_question_unpaid(
+        self, user_id: int, month: str, question_code: str
+    ) -> None:
+        """Mark household question as unpaid."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE household_payments
+                SET is_paid = 0
+                WHERE user_id = ? AND month = ? AND question_code = ?
+                """,
+                (user_id, month, question_code),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Marked household question %s as unpaid for user %s month %s",
+                question_code,
+                user_id,
+                month,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to mark household question %s unpaid for user %s month %s: %s",
+                question_code,
+                user_id,
+                month,
+                error,
+            )
+
     async def get_unpaid_household_questions(self, user_id: int, month: str) -> List[str]:
         """Get unpaid household question codes for user and month."""
 
@@ -1557,6 +1588,32 @@ class FinanceDatabase:
                 error,
             )
             return []
+
+    async def get_household_payment_status_map(
+        self, user_id: int, month: str
+    ) -> Dict[str, int]:
+        """Return mapping: question_code -> is_paid (0/1) for the given month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT question_code, is_paid
+                FROM household_payments
+                WHERE user_id = ? AND month = ?
+                """,
+                (user_id, month),
+            )
+            rows = cursor.fetchall()
+            return {row["question_code"]: int(row["is_paid"]) for row in rows}
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to get household payment status for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return {}
 
     async def has_unpaid_household_questions(self, user_id: int, month: str) -> bool:
         """Return True if unpaid household questions exist for month."""

@@ -181,10 +181,18 @@ class FinanceDatabase:
                 amount INTEGER,
                 position INTEGER DEFAULT 0,
                 is_active INTEGER DEFAULT 1,
+                paid_month TEXT,
+                is_paid INTEGER DEFAULT 0,
                 created_at TEXT,
                 UNIQUE(user_id, code)
             )
             """
+        )
+        self._add_column_if_missing(
+            cursor, "household_payment_items", "paid_month", "TEXT"
+        )
+        self._add_column_if_missing(
+            cursor, "household_payment_items", "is_paid", "INTEGER DEFAULT 0"
         )
         cursor.execute(
             """
@@ -255,46 +263,8 @@ class FinanceDatabase:
         self.connection.commit()
 
     def ensure_household_items_seeded(self, user_id: int) -> None:
-        """Seed default household payment items if missing for user."""
-
-        try:
-            if BOT_USER_ID is not None and user_id == BOT_USER_ID:
-                LOGGER.warning(
-                    "Skipping household seeding for bot user %s", user_id
-                )
-                return
-            cursor = self.connection.cursor()
-            cursor.execute(
-                "SELECT 1 FROM household_payment_items WHERE user_id = ? LIMIT 1",
-                (user_id,),
-            )
-            if cursor.fetchone():
-                return
-
-            now_iso = now_tz().isoformat()
-            for position, item in enumerate(DEFAULT_HOUSEHOLD_ITEMS, start=1):
-                cursor.execute(
-                    """
-                    INSERT INTO household_payment_items (
-                        user_id, code, text, amount, position, is_active, created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, 1, ?)
-                    """,
-                    (
-                        user_id,
-                        item["code"],
-                        item["text"],
-                        item["amount"],
-                        position,
-                        now_iso,
-                    ),
-                )
-            self.connection.commit()
-            LOGGER.info("Seeded default household items for user %s", user_id)
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to seed household items for user %s: %s", user_id, error
-            )
+        """No-op: household items are managed by user and stored in DB."""
+        LOGGER.debug("Household item seeding disabled (user_id=%s)", user_id)
 
     def list_active_household_items(self, user_id: int) -> List[Dict[str, Any]]:
         """Return active household payment items for user ordered by position."""
@@ -1453,43 +1423,15 @@ class FinanceDatabase:
                 )
                 return
             cursor = self.connection.cursor()
-            self.ensure_household_items_seeded(user_id)
             cursor.execute(
                 """
-                SELECT code
-                FROM household_payment_items
+                UPDATE household_payment_items
+                SET paid_month = ?, is_paid = 0
                 WHERE user_id = ? AND is_active = 1
-                ORDER BY position, id
+                  AND (paid_month IS NULL OR paid_month != ?)
                 """,
-                (user_id,),
+                (month, user_id, month),
             )
-            active_codes_rows = cursor.fetchall()
-            active_codes = [row["code"] for row in active_codes_rows]
-            for code in active_codes:
-                cursor.execute(
-                    """
-                    INSERT OR IGNORE INTO household_payments (user_id, month, question_code, is_paid)
-                    VALUES (?, ?, ?, 0)
-                    """,
-                    (user_id, month, code),
-                )
-            if active_codes:
-                placeholders = ",".join(["?"] * len(active_codes))
-                cursor.execute(
-                    f"""
-                    DELETE FROM household_payments
-                    WHERE user_id = ? AND month = ? AND question_code NOT IN ({placeholders})
-                    """,
-                    (user_id, month, *active_codes),
-                )
-            else:
-                cursor.execute(
-                    """
-                    DELETE FROM household_payments
-                    WHERE user_id = ? AND month = ?
-                    """,
-                    (user_id, month),
-                )
             self.connection.commit()
             LOGGER.info(
                 "Initialized household questions for user %s month %s", user_id, month
@@ -1511,11 +1453,11 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                UPDATE household_payments
-                SET is_paid = 1
-                WHERE user_id = ? AND month = ? AND question_code = ?
+                UPDATE household_payment_items
+                SET paid_month = ?, is_paid = 1
+                WHERE user_id = ? AND code = ? AND is_active = 1
                 """,
-                (user_id, month, question_code),
+                (month, user_id, question_code),
             )
             self.connection.commit()
             LOGGER.info(
@@ -1533,6 +1475,37 @@ class FinanceDatabase:
                 error,
             )
 
+    async def mark_household_question_unpaid(
+        self, user_id: int, month: str, question_code: str
+    ) -> None:
+        """Mark household question as unpaid."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                UPDATE household_payment_items
+                SET paid_month = ?, is_paid = 0
+                WHERE user_id = ? AND code = ? AND is_active = 1
+                """,
+                (month, user_id, question_code),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Marked household question %s as unpaid for user %s month %s",
+                question_code,
+                user_id,
+                month,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to mark household question %s unpaid for user %s month %s: %s",
+                question_code,
+                user_id,
+                month,
+                error,
+            )
+
     async def get_unpaid_household_questions(self, user_id: int, month: str) -> List[str]:
         """Get unpaid household question codes for user and month."""
 
@@ -1540,15 +1513,17 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                SELECT question_code
-                FROM household_payments
-                WHERE user_id = ? AND month = ? AND is_paid = 0
-                ORDER BY id
+                SELECT code
+                FROM household_payment_items
+                WHERE user_id = ?
+                  AND is_active = 1
+                  AND NOT (paid_month = ? AND is_paid = 1)
+                ORDER BY position, id
                 """,
                 (user_id, month),
             )
             rows = cursor.fetchall()
-            return [row["question_code"] for row in rows]
+            return [row["code"] for row in rows]
         except sqlite3.Error as error:
             LOGGER.error(
                 "Failed to get unpaid household questions for user %s month %s: %s",
@@ -1558,6 +1533,37 @@ class FinanceDatabase:
             )
             return []
 
+    async def get_household_payment_status_map(
+        self, user_id: int, month: str
+    ) -> Dict[str, int]:
+        """Return mapping: question_code -> is_paid (0/1) for the given month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT code, paid_month, is_paid
+                FROM household_payment_items
+                WHERE user_id = ? AND is_active = 1
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return {
+                row["code"]: int(row["is_paid"])
+                if row["paid_month"] == month
+                else 0
+                for row in rows
+            }
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to get household payment status for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return {}
+
     async def has_unpaid_household_questions(self, user_id: int, month: str) -> bool:
         """Return True if unpaid household questions exist for month."""
 
@@ -1566,8 +1572,10 @@ class FinanceDatabase:
             cursor.execute(
                 """
                 SELECT 1
-                FROM household_payments
-                WHERE user_id = ? AND month = ? AND is_paid = 0
+                FROM household_payment_items
+                WHERE user_id = ?
+                  AND is_active = 1
+                  AND NOT (paid_month = ? AND is_paid = 1)
                 LIMIT 1
                 """,
                 (user_id, month),
@@ -1588,22 +1596,17 @@ class FinanceDatabase:
         """Return True if any active household payment is unpaid for the month."""
 
         try:
-            self.ensure_household_items_seeded(user_id)
             cursor = self.connection.cursor()
             cursor.execute(
                 """
                 SELECT 1
-                FROM household_payment_items i
-                LEFT JOIN household_payments p
-                    ON p.user_id = i.user_id
-                    AND p.month = ?
-                    AND p.question_code = i.code
-                WHERE i.user_id = ?
-                  AND i.is_active = 1
-                  AND (p.is_paid IS NULL OR p.is_paid = 0)
+                FROM household_payment_items
+                WHERE user_id = ?
+                  AND is_active = 1
+                  AND NOT (paid_month = ? AND is_paid = 1)
                 LIMIT 1
                 """,
-                (month, user_id),
+                (user_id, month),
             )
             return cursor.fetchone() is not None
         except sqlite3.Error as error:
@@ -1619,15 +1622,14 @@ class FinanceDatabase:
         """Reset household payment progress for a specific month."""
 
         try:
-            await self.init_household_questions_for_month(user_id, month)
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                UPDATE household_payments
-                SET is_paid = 0
-                WHERE user_id = ? AND month = ?
+                UPDATE household_payment_items
+                SET paid_month = ?, is_paid = 0
+                WHERE user_id = ? AND is_active = 1
                 """,
-                (user_id, month),
+                (month, user_id),
             )
             self.connection.commit()
             LOGGER.info(

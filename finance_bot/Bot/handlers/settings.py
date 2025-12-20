@@ -34,11 +34,12 @@ from Bot.states.wishlist_states import (
 )
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
-from Bot.utils.ui_cleanup import ui_register_message
-from Bot.utils.ui_flow import (
-    ui_get,
-    ui_track,
-    ui_transition,
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_to_context,
+    ui_register_message,
+    ui_set_screen_message,
+    ui_set_settings_mode_message,
+    ui_track_message,
 )
 
 router = Router()
@@ -54,13 +55,7 @@ class InSettingsFilter(BaseFilter):
 
 
 async def _register_user_message(state: FSMContext, message: Message) -> None:
-    ui_data = await ui_get(state)
-    await ui_track(
-        state,
-        message.message_id,
-        kind="user",
-        screen=ui_data.get("current_screen"),
-    )
+    await ui_track_message(state, message.chat.id, message.message_id)
 
 
 async def _delete_message_safely(bot, chat_id: int | None, message_id: int | None) -> None:
@@ -194,19 +189,14 @@ async def _send_main_menu_summary(
 async def _exit_settings_to_main(
     *, bot, state: FSMContext, chat_id: int, user_id: int
 ) -> None:
-    async def send_main_menu() -> Message:
-        return await bot.send_message(
-            chat_id=chat_id,
-            text="Главное меню",
-            reply_markup=await build_main_menu_for_user(user_id),
-        )
-
-    await ui_transition(bot, state, chat_id, "main", send_main_menu)
-    await state.update_data(
-        in_settings=False,
-        settings_current_screen=None,
-        settings_nav_stack=[],
+    await ui_cleanup_to_context(bot, state, chat_id, "MAIN_MENU")
+    sent = await bot.send_message(
+        chat_id=chat_id,
+        text="Главное меню",
+        reply_markup=await build_main_menu_for_user(user_id),
     )
+    await ui_set_screen_message(state, chat_id, sent.message_id)
+    await state.update_data(in_settings=False, settings_current_screen=None, settings_nav_stack=[])
 
 
 async def _get_settings_message_ids(
@@ -238,6 +228,7 @@ async def _edit_settings_page(
         )
         new_message_id = new_message.message_id
         await ui_register_message(state, chat_id, new_message_id)
+    await ui_set_screen_message(state, chat_id, new_message_id)
     await _store_settings_message(state, chat_id, new_message_id)
     return new_message_id
 
@@ -256,13 +247,24 @@ async def _render_reply_settings_page(
     message_id = data.get("settings_message_id")
     current_screen = data.get("settings_current_screen")
 
-    if force_new or not chat_id or not message_id or current_screen != screen_id:
+    if not force_new and chat_id and message_id and current_screen == screen_id:
+        new_message_id = await _edit_settings_page(
+            bot=message.bot,
+            state=state,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
+    else:
         await _delete_message_safely(message.bot, chat_id, message_id)
-    sent = await message.bot.send_message(
-        chat_id=message.chat.id, text=text, reply_markup=reply_markup
-    )
-    await ui_register_message(state, sent.chat.id, sent.message_id)
-    await _store_settings_message(state, sent.chat.id, sent.message_id)
+        sent = await message.bot.send_message(
+            chat_id=message.chat.id, text=text, reply_markup=reply_markup
+        )
+        new_message_id = sent.message_id
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+        await ui_set_screen_message(state, sent.chat.id, sent.message_id)
+        await _store_settings_message(state, sent.chat.id, sent.message_id)
     await _set_current_screen(state, screen_id)
 
 
@@ -867,24 +869,24 @@ async def handle_settings_back_action(message: Message, state: FSMContext) -> No
 async def open_settings(message: Message, state: FSMContext) -> None:
     """Open settings entry point with inline navigation."""
 
-    await ui_track(state, message.message_id, kind="user", screen="main")
-
-    async def send_settings_screen() -> Message:
-        sent = await message.answer(
-            "РЕЖИМ НАСТРОЕК\n\n⚙️ НАСТРОЙКИ",
-            reply_markup=settings_home_inline_keyboard(),
-        )
-        await _store_settings_message(state, sent.chat.id, sent.message_id)
-        await _set_current_screen(state, "st:home")
-        return sent
-
-    await ui_transition(
-        message.bot,
-        state,
-        message.chat.id,
-        "settings",
-        send_settings_screen,
+    await ui_track_message(state, message.chat.id, message.message_id)
+    await ui_cleanup_to_context(message.bot, state, message.chat.id, "SETTINGS_MENU")
+    mode_message = await message.answer(
+        "РЕЖИМ НАСТРОЕК",
+        reply_markup=settings_back_reply_keyboard(),
     )
+    await ui_set_settings_mode_message(
+        state, mode_message.chat.id, mode_message.message_id
+    )
+    settings_message = await message.answer(
+        "⚙️ НАСТРОЙКИ",
+        reply_markup=settings_home_inline_keyboard(),
+    )
+    await ui_set_screen_message(
+        state, settings_message.chat.id, settings_message.message_id
+    )
+    await _store_settings_message(state, settings_message.chat.id, settings_message.message_id)
+    await _set_current_screen(state, "st:home")
     await _reset_navigation(state)
 
 
@@ -943,7 +945,7 @@ async def household_payment_add_reply(message: Message, state: FSMContext) -> No
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text="напиши платёж",
+        text="Напиши платёж",
         reply_markup=back_only_keyboard(),
     )
 

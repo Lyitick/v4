@@ -7,10 +7,11 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from Bot.handlers.common import build_main_menu_for_user
-from Bot.utils.ui_flow import (
-    ui_set_greeting,
-    ui_track,
-    ui_transition,
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_to_context,
+    ui_set_screen_message,
+    ui_set_welcome_message,
+    ui_track_message,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -21,30 +22,21 @@ router = Router()
 async def _handle_start_common(message: Message, state: FSMContext) -> None:
     """Shared start logic for /start and "Поехалиии" commands."""
 
-    await state.clear()
     # ПРИВЕТСТВИЕ (PROTECTED)
     # Это сообщение защищено и НЕ должно удаляться массовыми чистками.
     # Автоматическое удаление запрещено. Удаление допускается только в отдельной задаче
     # после явного подтверждения пользователя.
     greeting = "Поработаем бл"
-    greeting_message = await message.answer(
-        greeting, reply_markup=await build_main_menu_for_user(message.from_user.id)
+    greeting_message = await message.answer(greeting)
+    await ui_set_welcome_message(
+        state, greeting_message.chat.id, greeting_message.message_id
     )
-    await ui_set_greeting(state, greeting_message.message_id)
-
-    async def send_main_menu() -> Message:
-        return await message.answer(
-            "Главное меню",
-            reply_markup=await build_main_menu_for_user(message.from_user.id),
-        )
-
-    await ui_transition(
-        message.bot,
-        state,
-        message.chat.id,
-        "main",
-        send_main_menu,
+    await ui_cleanup_to_context(message.bot, state, message.chat.id, "MAIN_MENU")
+    sent = await message.answer(
+        "Главное меню",
+        reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
+    await ui_set_screen_message(state, sent.chat.id, sent.message_id)
     LOGGER.info(
         "User %s started bot", message.from_user.id if message.from_user else "unknown"
     )
@@ -54,7 +46,11 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
 async def cmd_start(message: Message, state: FSMContext) -> None:
     """Handle /start command."""
 
-    await ui_track(state, message.message_id, kind="user", screen="main")
+    await ui_track_message(state, message.chat.id, message.message_id)
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        LOGGER.warning("Failed to delete /start message", exc_info=True)
     await _handle_start_common(message, state)
 
 
@@ -62,7 +58,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 async def handle_poehali(message: Message, state: FSMContext) -> None:
     """Handle alternative start phrase."""
 
-    await ui_track(state, message.message_id, kind="user", screen="main")
+    await ui_track_message(state, message.chat.id, message.message_id)
     await _handle_start_common(message, state)
 
 
@@ -70,15 +66,13 @@ async def handle_poehali(message: Message, state: FSMContext) -> None:
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     """Handle /cancel command."""
 
-    await ui_track(state, message.message_id, kind="user", screen="main")
-
-    async def send_main_menu() -> Message:
-        return await message.answer(
-            "Операция отменена. Вы в главном меню.",
-            reply_markup=await build_main_menu_for_user(message.from_user.id),
-        )
-
-    await ui_transition(message.bot, state, message.chat.id, "main", send_main_menu)
+    await ui_track_message(state, message.chat.id, message.message_id)
+    await ui_cleanup_to_context(message.bot, state, message.chat.id, "MAIN_MENU")
+    sent = await message.answer(
+        "Операция отменена. Вы в главном меню.",
+        reply_markup=await build_main_menu_for_user(message.from_user.id),
+    )
+    await ui_set_screen_message(state, sent.chat.id, sent.message_id)
     LOGGER.info("User %s cancelled current operation", message.from_user.id if message.from_user else "unknown")
 
 
@@ -86,13 +80,11 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def back_to_main(message: Message, state: FSMContext) -> None:
     """Return user to main menu."""
 
-    await ui_track(state, message.message_id, kind="user", screen="main")
-
-    async def send_main_menu() -> Message:
-        return await message.answer(
-            "Главное меню",
-            reply_markup=await build_main_menu_for_user(message.from_user.id),
-        )
-
-    await ui_transition(message.bot, state, message.chat.id, "main", send_main_menu)
+    await ui_track_message(state, message.chat.id, message.message_id)
+    await ui_cleanup_to_context(message.bot, state, message.chat.id, "MAIN_MENU")
+    sent = await message.answer(
+        "Главное меню",
+        reply_markup=await build_main_menu_for_user(message.from_user.id),
+    )
+    await ui_set_screen_message(state, sent.chat.id, sent.message_id)
     LOGGER.info("User %s returned to main menu", message.from_user.id if message.from_user else "unknown")

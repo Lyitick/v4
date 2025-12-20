@@ -847,9 +847,13 @@ async def handle_settings_back_action(message: Message, state: FSMContext) -> No
 async def open_settings(message: Message, state: FSMContext) -> None:
     """Open settings entry point with inline navigation."""
 
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        LOGGER.debug("Failed to delete user menu message (⚙️)", exc_info=True)
     await ui_cleanup_messages(message.bot, state)
     await state.clear()
-    await _register_user_message(state, message)
 
     mode_message = await _send_and_register(
         message=message,

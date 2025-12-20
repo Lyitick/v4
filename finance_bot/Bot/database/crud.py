@@ -255,46 +255,8 @@ class FinanceDatabase:
         self.connection.commit()
 
     def ensure_household_items_seeded(self, user_id: int) -> None:
-        """Seed default household payment items if missing for user."""
-
-        try:
-            if BOT_USER_ID is not None and user_id == BOT_USER_ID:
-                LOGGER.warning(
-                    "Skipping household seeding for bot user %s", user_id
-                )
-                return
-            cursor = self.connection.cursor()
-            cursor.execute(
-                "SELECT 1 FROM household_payment_items WHERE user_id = ? LIMIT 1",
-                (user_id,),
-            )
-            if cursor.fetchone():
-                return
-
-            now_iso = now_tz().isoformat()
-            for position, item in enumerate(DEFAULT_HOUSEHOLD_ITEMS, start=1):
-                cursor.execute(
-                    """
-                    INSERT INTO household_payment_items (
-                        user_id, code, text, amount, position, is_active, created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, 1, ?)
-                    """,
-                    (
-                        user_id,
-                        item["code"],
-                        item["text"],
-                        item["amount"],
-                        position,
-                        now_iso,
-                    ),
-                )
-            self.connection.commit()
-            LOGGER.info("Seeded default household items for user %s", user_id)
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to seed household items for user %s: %s", user_id, error
-            )
+        """No-op: household items are managed by user and stored in DB."""
+        LOGGER.debug("Household item seeding disabled (user_id=%s)", user_id)
 
     def list_active_household_items(self, user_id: int) -> List[Dict[str, Any]]:
         """Return active household payment items for user ordered by position."""

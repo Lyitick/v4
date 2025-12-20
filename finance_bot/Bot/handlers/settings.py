@@ -282,7 +282,7 @@ async def _render_settings_home(message: Message, state: FSMContext) -> None:
 def _format_household_payments_text(
     items: list[dict], *, unpaid_set: set[str], error_message: str | None = None
 ) -> str:
-    lines: list[str] = ["Бытовые платежи", ""]
+    lines: list[str] = ["РЕЖИМ НАСТРОЕК", "", "Бытовые платежи", ""]
     if not items:
         lines.append("Платежей пока нет. Нажми ➕ Добавить")
     else:
@@ -328,7 +328,7 @@ async def _render_household_payments_settings(
         ),
         reply_markup=household_settings_reply_keyboard(),
         screen_id="st:household_payments",
-        force_new=force_new_keyboard,
+        force_new=True,
     )
 
 
@@ -1026,7 +1026,7 @@ async def household_payment_delete_menu_reply(
     )
 
 
-@router.message(F.text == "🔄 Обнулить")
+@router.message(F.text == "🧹 Обнулить")
 async def household_reset_questions_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if data.get("settings_current_screen") != "st:household_payments":
@@ -1043,6 +1043,18 @@ async def household_reset_questions_reply(message: Message, state: FSMContext) -
     )
     await render_settings_screen(
         "st:household_payments", message=message, state=state, force_new=False
+    )
+
+
+@router.message(F.text == "🔄 Обновить")
+async def household_refresh_questions_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "st:household_payments":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await render_settings_screen(
+        "st:household_payments", message=message, state=state, force_new=True
     )
 
 

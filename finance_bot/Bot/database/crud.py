@@ -1546,7 +1546,7 @@ class FinanceDatabase:
                 FROM household_payment_items
                 WHERE user_id = ? AND is_active = 1
                 """,
-                (user_id, month),
+                (user_id,),
             )
             rows = cursor.fetchall()
             return {

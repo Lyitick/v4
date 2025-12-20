@@ -258,13 +258,13 @@ async def _render_reply_settings_page(
         )
     else:
         await _delete_message_safely(message.bot, chat_id, message_id)
-        sent = await message.bot.send_message(
-            chat_id=message.chat.id, text=text, reply_markup=reply_markup
-        )
-        new_message_id = sent.message_id
-        await ui_register_message(state, sent.chat.id, sent.message_id)
-        await ui_set_screen_message(state, sent.chat.id, sent.message_id)
-        await _store_settings_message(state, sent.chat.id, sent.message_id)
+    sent = await message.bot.send_message(
+        chat_id=message.chat.id, text=text, reply_markup=reply_markup
+    )
+    new_message_id = sent.message_id
+    await ui_register_message(state, sent.chat.id, sent.message_id)
+    await ui_set_screen_message(state, sent.chat.id, sent.message_id)
+    await _store_settings_message(state, sent.chat.id, sent.message_id)
     await _set_current_screen(state, screen_id)
 
 
@@ -685,7 +685,10 @@ async def render_settings_screen(
     force_new: bool = False,
 ) -> None:
     db = FinanceDatabase()
+    data = await state.get_data()
     user_id = message.from_user.id
+    if message.from_user.id == message.bot.id:
+        user_id = data.get("settings_user_id") or message.from_user.id
     if screen_id == "st:home":
         await _render_settings_home(message, state)
     elif screen_id == "st:income":
@@ -878,6 +881,7 @@ async def open_settings(message: Message, state: FSMContext) -> None:
     await ui_set_settings_mode_message(
         state, mode_message.chat.id, mode_message.message_id
     )
+    await state.update_data(settings_user_id=message.from_user.id)
     settings_message = await message.answer(
         "⚙️ НАСТРОЙКИ",
         reply_markup=settings_home_inline_keyboard(),

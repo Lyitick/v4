@@ -114,6 +114,18 @@ async def _send_household_settings_overview(
     month = current_month_str()
     unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
     unpaid_set: set[str] = set(unpaid_codes)
+    LOGGER.info(
+        "Household settings overview (user_id=%s, month=%s, items_count=%s, unpaid_count=%s)",
+        user_id,
+        month,
+        len(items),
+        len(unpaid_set),
+    )
+    if not items:
+        LOGGER.info(
+            "Household settings overview items empty (user_id=%s, source=list_active_household_items)",
+            user_id,
+        )
     await message.answer(
         _format_household_items(items, unpaid_set),
         reply_markup=household_settings_inline_keyboard(),

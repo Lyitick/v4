@@ -86,18 +86,23 @@ def _render_household_questions_text(
     return "\n".join(lines)
 
 
-def _format_household_items(items: List[Dict[str, int | str]]) -> str:
+def _format_household_items(
+    items: List[Dict[str, int | str]],
+    unpaid_set: set[str],
+) -> str:
     if not items:
-        return "Список платежей пуст."
+        return "Текущий список платежей: (пусто)"
 
     lines = ["Текущий список платежей:"]
     for index, item in enumerate(items, start=1):
         title = str(item.get("text", "")).rstrip("?")
         amount = item.get("amount")
+        code = str(item.get("code", ""))
+        status = "❌" if code in unpaid_set else "✅"
         if amount is not None:
-            lines.append(f"{index}) {title} — {amount}")
+            lines.append(f"{index}) {status} {title} — {amount}")
         else:
-            lines.append(f"{index}) {title}")
+            lines.append(f"{index}) {status} {title}")
     return "\n".join(lines)
 
 
@@ -106,8 +111,11 @@ async def _send_household_settings_overview(
 ) -> None:
     db.ensure_household_items_seeded(user_id)
     items = db.list_active_household_items(user_id)
+    month = current_month_str()
+    unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
+    unpaid_set: set[str] = set(unpaid_codes)
     await message.answer(
-        _format_household_items(items),
+        _format_household_items(items, unpaid_set),
         reply_markup=household_settings_inline_keyboard(),
     )
 

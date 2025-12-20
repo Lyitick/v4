@@ -36,6 +36,7 @@ from Bot.utils.savings import format_savings_summary
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
     ui_register_message,
+    ui_register_protected_message,
     ui_register_user_message,
 )
 
@@ -855,11 +856,12 @@ async def open_settings(message: Message, state: FSMContext) -> None:
     await ui_cleanup_messages(message.bot, state)
     await state.clear()
 
-    mode_message = await _send_and_register(
-        message=message,
-        state=state,
-        text="Режим настроек. Используй кнопку \"Назад\" чтобы выйти.",
+    mode_message = await message.answer(
+        "РЕЖИМ НАСТРОЕК",
         reply_markup=settings_back_reply_keyboard(),
+    )
+    await ui_register_protected_message(
+        state, mode_message.chat.id, mode_message.message_id
     )
     settings_message = await _send_and_register(
         message=message,

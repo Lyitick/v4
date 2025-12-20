@@ -24,19 +24,28 @@ from Bot.keyboards.settings import (
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
-from Bot.utils.ui_cleanup import ui_register_message
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_messages,
+    ui_register_message,
+    ui_register_user_message,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router(name="household_payments")
 
 
-async def _send_main_menu_summary(bot, chat_id: int, user_id: int) -> None:
+async def _send_main_menu_summary(
+    bot, state: FSMContext, chat_id: int, user_id: int
+) -> None:
     db = FinanceDatabase()
     savings = db.get_user_savings(user_id)
     summary = format_savings_summary(savings)
     menu = await build_main_menu_for_user(user_id)
-    await bot.send_message(chat_id=chat_id, text=f"Текущие накопления:\n{summary}", reply_markup=menu)
+    sent = await bot.send_message(
+        chat_id=chat_id, text=f"Текущие накопления:\n{summary}", reply_markup=menu
+    )
+    await ui_register_message(state, chat_id, sent.message_id)
 
 
 async def reset_household_cycle_if_needed(
@@ -292,13 +301,45 @@ async def household_remove_item(callback: CallbackQuery, state: FSMContext) -> N
 async def start_household_payments(message: Message, state: FSMContext) -> None:
     """Start household payments flow."""
 
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    try:
+        await message.delete()
+    except Exception:  # noqa: BLE001
+        LOGGER.debug(
+            "Failed to delete user menu message (Бытовые платежи)", exc_info=True
+        )
+
     user_id = message.from_user.id
     db = FinanceDatabase()
 
     await reset_household_cycle_if_needed(user_id, db)
     db.ensure_household_items_seeded(user_id)
     items = db.list_active_household_items(user_id)
+    if not items:
+        await ui_cleanup_messages(message.bot, state)
+        await state.clear()
+        sent = await message.answer(
+            "Список бытовых платежей не настроен.",
+            reply_markup=await build_main_menu_for_user(user_id),
+        )
+        await ui_register_message(state, message.chat.id, sent.message_id)
+        return
+
     month = current_month_str()
+    await db.init_household_questions_for_month(user_id, month)
+    status_map = await db.get_household_payment_status_map(user_id, month)
+    questions = [
+        {
+            "code": item.get("code", ""),
+            "text": item.get("text", ""),
+            "amount": item.get("amount"),
+        }
+        for item in items
+    ]
+    all_paid = all(
+        status_map.get(str(question.get("code", "")), 0) == 1
+        for question in questions
+    )
     unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
     unpaid_set: set[str] = set(unpaid_codes)
     hh_questions = [
@@ -311,13 +352,29 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
         if item.get("code") in unpaid_set
     ]
 
-    if not hh_questions:
-        await state.clear()
-        await message.answer(
-            "На этот месяц всё оплачено ✅",
-            reply_markup=ReplyKeyboardRemove(),
+    if all_paid:
+        answers = {}
+        for question in questions:
+            code = str(question.get("code", ""))
+            answers[code] = "yes" if status_map.get(code, 0) == 1 else "no"
+        text = _render_household_questions_text(
+            month,
+            questions,
+            answers,
+            current_index=None,
         )
-        await _send_main_menu_summary(message.bot, message.chat.id, user_id)
+        lines = text.splitlines()
+        if lines:
+            lines[0] = f"✅ Все бытовые платежи оплачены за {html.escape(month)}"
+        text = "\n".join(lines)
+        await ui_cleanup_messages(message.bot, state)
+        await state.clear()
+        sent = await message.answer(
+            text,
+            parse_mode="HTML",
+            reply_markup=await build_main_menu_for_user(user_id),
+        )
+        await ui_register_message(state, message.chat.id, sent.message_id)
         LOGGER.info("User %s has no unpaid household questions for month %s", user_id, month)
         return
 
@@ -336,6 +393,7 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
         parse_mode="HTML",
     )
     await state.update_data(hh_ui_message_id=sent.message_id)
+    await ui_register_message(state, message.chat.id, sent.message_id)
     LOGGER.info("User %s started household payments for month %s", user_id, month)
 
 
@@ -395,8 +453,11 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     await callback.answer()
 
     if not month or not questions:
+        await ui_cleanup_messages(callback.bot, state)
         await state.clear()
-        await _send_main_menu_summary(callback.bot, callback.message.chat.id, user_id)
+        await _send_main_menu_summary(
+            callback.bot, state, callback.message.chat.id, user_id
+        )
         return
 
     if callback.data == "hh_pay:back":
@@ -427,8 +488,11 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
             reply_markup=None,
             parse_mode="HTML",
         )
+        await ui_cleanup_messages(callback.bot, state)
         await state.clear()
-        await _send_main_menu_summary(callback.bot, callback.message.chat.id, user_id)
+        await _send_main_menu_summary(
+            callback.bot, state, callback.message.chat.id, user_id
+        )
         return
 
     question = questions[index]
@@ -479,5 +543,6 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         reply_markup=None,
         parse_mode="HTML",
     )
+    await ui_cleanup_messages(callback.bot, state)
     await state.clear()
-    await _send_main_menu_summary(callback.bot, callback.message.chat.id, user_id)
+    await _send_main_menu_summary(callback.bot, state, callback.message.chat.id, user_id)

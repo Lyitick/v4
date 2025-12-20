@@ -1589,6 +1589,32 @@ class FinanceDatabase:
             )
             return []
 
+    async def get_household_payment_status_map(
+        self, user_id: int, month: str
+    ) -> Dict[str, int]:
+        """Return mapping: question_code -> is_paid (0/1) for the given month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                SELECT question_code, is_paid
+                FROM household_payments
+                WHERE user_id = ? AND month = ?
+                """,
+                (user_id, month),
+            )
+            rows = cursor.fetchall()
+            return {row["question_code"]: int(row["is_paid"]) for row in rows}
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to get household payment status for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return {}
+
     async def has_unpaid_household_questions(self, user_id: int, month: str) -> bool:
         """Return True if unpaid household questions exist for month."""
 

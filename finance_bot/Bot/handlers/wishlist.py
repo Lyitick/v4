@@ -375,6 +375,18 @@ async def invalid_price(message: Message) -> None:
     await message.answer("Используй кнопки калькулятора ниже для ввода цены.")
 
 
+@router.message(WishlistState.waiting_for_category, F.text == "⬅️ Назад")
+async def add_wish_back_from_category(message: Message, state: FSMContext) -> None:
+    """Return to name step from category selection."""
+
+    await state.update_data(name=None, price=None, price_sum=None, url=None)
+    await state.set_state(WishlistState.waiting_for_name)
+    await message.answer(
+        "Введи название желания.",
+        reply_markup=back_only_keyboard(),
+    )
+
+
 @router.message(WishlistState.waiting_for_category)
 async def waiting_category_text(message: Message) -> None:
     """Prompt to use inline keyboard for category."""

@@ -48,8 +48,8 @@ def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
 
     buttons = [
         [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
-        [KeyboardButton(text="🔄 Обнулить")],
-        [KeyboardButton(text="⬅ Назад")],
+        [KeyboardButton(text="🔄 Обновить"), KeyboardButton(text="🧹 Обнулить")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 

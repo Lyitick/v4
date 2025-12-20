@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyb
 
 from Bot.database.crud import FinanceDatabase
 from Bot.handlers.common import build_main_menu_for_user
+from Bot.keyboards.main import back_only_keyboard
 from Bot.keyboards.settings import (
     byt_rules_reply_keyboard,
     byt_timer_reply_keyboard,
@@ -933,8 +934,8 @@ async def household_payment_add_reply(message: Message, state: FSMContext) -> No
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text="Введи название платежа",
-        reply_markup=settings_back_reply_keyboard(),
+        text="напиши платёж",
+        reply_markup=back_only_keyboard(),
     )
 
 

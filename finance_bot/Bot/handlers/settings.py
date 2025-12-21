@@ -690,7 +690,10 @@ async def render_settings_screen(
     force_new: bool = False,
 ) -> None:
     db = FinanceDatabase()
+    data = await state.get_data()
     user_id = message.from_user.id
+    if message.from_user.id == message.bot.id:
+        user_id = data.get("settings_user_id") or message.from_user.id
     if screen_id == "st:home":
         await _render_settings_home(message, state)
     elif screen_id == "st:income":

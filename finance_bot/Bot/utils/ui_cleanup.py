@@ -15,7 +15,11 @@ async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) 
     ids: List[int] = list(data.get("ui_message_ids") or [])
     if message_id not in ids:
         ids.append(int(message_id))
-    await state.update_data(ui_chat_id=chat_id, ui_message_ids=ids)
+    current_chat_id = data.get("ui_chat_id")
+    await state.update_data(
+        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
+        ui_message_ids=ids,
+    )
 
 
 async def ui_register_protected_message(
@@ -33,85 +37,93 @@ async def ui_register_protected_message(
 async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
     """Track a user message id for later cleanup."""
 
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_set_welcome_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
     data = await state.get_data()
-    ids: List[int] = list(data.get("user_message_ids") or [])
-    if message_id not in ids:
-        ids.append(int(message_id))
-    await state.update_data(ui_chat_id=chat_id, user_message_ids=ids)
-
-
-async def ui_cleanup_messages(bot: Bot, state: FSMContext) -> None:
-    """Delete tracked UI messages, ignoring errors."""
-
-    data = await state.get_data()
-    chat_id = data.get("ui_chat_id")
-    user_message_ids: List[int] = list(data.get("user_message_ids") or [])
-    protected_message_ids: set[int] = {
-        int(mid) for mid in list(data.get("ui_protected_message_ids") or [])
-    }
-    if chat_id is None:
-        await state.update_data(ui_message_ids=[], user_message_ids=[])
+    if data.get("ui_welcome_message_id") is not None:
         return
+    # НЕ УДАЛЯТЬ БЕЗ ПОДТВЕРЖДЕНИЯ ТИМЛИДА
+    await state.update_data(ui_chat_id=chat_id, ui_welcome_message_id=int(message_id))
 
-    def _log_bad_request(exc: TelegramBadRequest, message_id: int) -> None:
-        description = str(exc)
-        ignored = (
-            "message to delete not found",
-            "message can't be deleted",
-            "MESSAGE_ID_INVALID",
-            "chat not found",
-            "bot was blocked by the user",
-        )
-        if any(text in description for text in ignored):
+
+async def ui_set_settings_mode_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await state.update_data(
+        ui_chat_id=chat_id, ui_settings_mode_message_id=int(message_id)
+    )
+
+
+async def ui_set_screen_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await state.update_data(ui_chat_id=chat_id, ui_screen_message_id=int(message_id))
+
+
+async def ui_track_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    data = await state.get_data()
+    ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
+    await state.update_data(ui_chat_id=chat_id, ui_tracked_message_ids=ids)
+
+
+async def ui_cleanup_to_context(
+    bot: Bot, state: FSMContext, chat_id: int, context_name: str
+) -> None:
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    settings_mode_id = data.get("ui_settings_mode_message_id")
+    screen_message_id = data.get("ui_screen_message_id")
+    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+
+    keep_ids = {int(welcome_id)} if welcome_id else set()
+    if context_name in {"SETTINGS_MENU", "SETTINGS_HOUSEHOLD_PAYMENTS"}:
+        if settings_mode_id:
+            keep_ids.add(int(settings_mode_id))
+
+    delete_ids = [int(mid) for mid in tracked_ids]
+    if settings_mode_id:
+        delete_ids.append(int(settings_mode_id))
+    if screen_message_id:
+        delete_ids.append(int(screen_message_id))
+
+    for message_id in delete_ids:
+        if message_id in keep_ids:
+            continue
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except TelegramBadRequest as exc:
             LOGGER.warning(
                 "Failed to delete message (chat_id=%s, message_id=%s): %s",
                 chat_id,
                 message_id,
-                description,
+                exc,
             )
-        else:
-            LOGGER.exception(
-                "Unexpected TelegramBadRequest deleting message (chat_id=%s, message_id=%s)",
-                chat_id,
-                message_id,
-                exc_info=True,
-            )
-
-    processed: set[int] = set()
-    user_ids = sorted({int(mid) for mid in user_message_ids}, reverse=True)
-    ui_ids = sorted({int(mid) for mid in list(data.get("ui_message_ids") or [])}, reverse=True)
-
-    for message_id in user_ids:
-        if message_id in protected_message_ids:
-            continue
-        processed.add(message_id)
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except TelegramBadRequest as exc:
-            _log_bad_request(exc, message_id)
         except Exception:
-            LOGGER.exception(
+            LOGGER.warning(
                 "Unexpected error deleting message (chat_id=%s, message_id=%s)",
                 chat_id,
                 message_id,
                 exc_info=True,
             )
 
-    for message_id in ui_ids:
-        if message_id in processed:
-            continue
-        if message_id in protected_message_ids:
-            continue
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except TelegramBadRequest as exc:
-            _log_bad_request(exc, message_id)
-        except Exception:
-            LOGGER.exception(
-                "Unexpected error deleting UI message (chat_id=%s, message_id=%s)",
-                chat_id,
-                message_id,
-                exc_info=True,
-            )
+    await state.update_data(
+        ui_tracked_message_ids=[],
+        ui_screen_message_id=None,
+    )
 
-    await state.update_data(ui_message_ids=[], user_message_ids=[])
+
+async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
+    data = await state.get_data()
+    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
+    if chat_id is None:
+        return
+    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")

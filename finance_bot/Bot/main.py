@@ -108,9 +108,6 @@ async def main() -> None:
     db = FinanceDatabase()
     register_routers(dp)
 
-    reminder_task = asyncio.create_task(
-        _run_byt_scheduler(bot, db, settings.timezone)
-    )
     try:
         await bot.me()
     except TelegramUnauthorizedError:
@@ -123,6 +120,9 @@ async def main() -> None:
         await bot.session.close()
         return
 
+    reminder_task = asyncio.create_task(
+        _run_byt_scheduler(bot, db, settings.timezone)
+    )
     try:
         logger.info(
             "Starting bot polling (%s)",

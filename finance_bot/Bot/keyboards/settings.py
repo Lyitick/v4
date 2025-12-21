@@ -149,9 +149,12 @@ def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard for wishlist settings actions."""
 
     buttons = [
-        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
-        [KeyboardButton(text="🛒 Купленное")],
-        [KeyboardButton(text="⬅ Назад")],
+        [
+            KeyboardButton(text="➕ Добавить категорию вишлиста"),
+            KeyboardButton(text="➖ Удалить категорию вишлиста"),
+        ],
+        [KeyboardButton(text="🕒 Настроить купленное")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -242,9 +245,12 @@ def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
             KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
         ],
-        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
+        [
+            KeyboardButton(text="➕ Добавить время напоминания"),
+            KeyboardButton(text="➖ Удалить время напоминания"),
+        ],
         [KeyboardButton(text="⏳ Макс. дни отложить")],
-        [KeyboardButton(text="⬅ Назад")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -339,9 +345,12 @@ def income_settings_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard for income settings actions."""
 
     buttons = [
-        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
-        [KeyboardButton(text="%")],
-        [KeyboardButton(text="⬅ Назад")],
+        [
+            KeyboardButton(text="➕ Добавить категорию дохода"),
+            KeyboardButton(text="➖ Удалить категорию дохода"),
+        ],
+        [KeyboardButton(text="⚙️ Проценты доходов")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 

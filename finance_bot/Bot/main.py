@@ -62,6 +62,12 @@ def _validate_token(token: str) -> list[str]:
     return errors
 
 
+def _format_token_context(token_source: str, fingerprint: str, env_path: Path) -> str:
+    if token_source == ".env":
+        return f"token_source={token_source}, fingerprint={fingerprint}, env_path={env_path}"
+    return f"token_source={token_source}, fingerprint={fingerprint}"
+
+
 async def _run_byt_scheduler(bot: Bot, db: FinanceDatabase, timezone: ZoneInfo) -> None:
     """Background scheduler for BYT reminders."""
 
@@ -85,15 +91,11 @@ async def main() -> None:
     token = (settings.bot_token or "").strip()
     token_source = settings.bot_token_source
     fingerprint = _token_fingerprint(token)
+    token_context = _format_token_context(token_source, fingerprint, project_root / ".env")
 
     errors = _validate_token(token)
     for error in errors:
-        logger.error(
-            "%s (token_source=%s, fingerprint=%s)",
-            error,
-            token_source,
-            fingerprint,
-        )
+        logger.error("%s (%s)", error, token_context)
     if errors:
         return
 
@@ -115,27 +117,24 @@ async def main() -> None:
         logger.error(
             "Unauthorized: токен неверный/отозван/бот удалён. "
             "Проверь BotFather и переменные окружения. "
-            "(token_source=%s, fingerprint=%s)",
-            token_source,
-            fingerprint,
+            "(%s)",
+            token_context,
         )
         await bot.session.close()
         return
 
     try:
         logger.info(
-            "Starting bot polling (token_source=%s, fingerprint=%s)",
-            token_source,
-            fingerprint,
+            "Starting bot polling (%s)",
+            token_context,
         )
         await dp.start_polling(bot)
     except TelegramUnauthorizedError:
         logger.error(
             "Unauthorized: токен неверный/отозван/бот удалён. "
             "Проверь BotFather и переменные окружения. "
-            "(token_source=%s, fingerprint=%s)",
-            token_source,
-            fingerprint,
+            "(%s)",
+            token_context,
         )
     except Exception as error:  # noqa: BLE001
         logger.exception("Bot stopped due to error: %s", error)

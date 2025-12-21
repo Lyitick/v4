@@ -48,8 +48,8 @@ def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
 
     buttons = [
         [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
-        [KeyboardButton(text="🔄 Обнулить")],
-        [KeyboardButton(text="⬅ Назад")],
+        [KeyboardButton(text="🔄 Обновить"), KeyboardButton(text="🧹 Обнулить")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -119,6 +119,17 @@ def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def settings_home_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for settings home screen."""
+
+    buttons = [
+        [KeyboardButton(text="📊 Доход"), KeyboardButton(text="🧾 Вишлист")],
+        [KeyboardButton(text="🧺 БЫТ условия"), KeyboardButton(text="🧾 Бытовые платежи")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
 def wishlist_settings_inline_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for wishlist settings."""
 
@@ -138,9 +149,12 @@ def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard for wishlist settings actions."""
 
     buttons = [
-        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
-        [KeyboardButton(text="🛒 Купленное")],
-        [KeyboardButton(text="⬅ Назад")],
+        [
+            KeyboardButton(text="➕ Добавить категорию вишлиста"),
+            KeyboardButton(text="➖ Удалить категорию вишлиста"),
+        ],
+        [KeyboardButton(text="🕒 Настроить купленное")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -231,9 +245,12 @@ def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
             KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
         ],
-        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
+        [
+            KeyboardButton(text="➕ Добавить время напоминания"),
+            KeyboardButton(text="➖ Удалить время напоминания"),
+        ],
         [KeyboardButton(text="⏳ Макс. дни отложить")],
-        [KeyboardButton(text="⬅ Назад")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -305,7 +322,7 @@ def byt_timer_times_select_keyboard(times: list[dict], action_prefix: str) -> In
 def settings_back_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard with a single back button for settings mode."""
 
-    buttons = [[KeyboardButton(text="Назад")]]
+    buttons = [[KeyboardButton(text="⬅ Назад")]]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -328,9 +345,12 @@ def income_settings_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard for income settings actions."""
 
     buttons = [
-        [KeyboardButton(text="➕"), KeyboardButton(text="➖")],
-        [KeyboardButton(text="%")],
-        [KeyboardButton(text="⬅ Назад")],
+        [
+            KeyboardButton(text="➕ Добавить категорию дохода"),
+            KeyboardButton(text="➖ Удалить категорию дохода"),
+        ],
+        [KeyboardButton(text="⚙️ Проценты доходов")],
+        [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 

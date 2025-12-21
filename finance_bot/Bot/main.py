@@ -13,6 +13,7 @@ if str(project_root) not in sys.path:
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramUnauthorizedError
 
 from Bot.config.settings import get_settings
 from Bot.database.crud import FinanceDatabase
@@ -41,6 +42,26 @@ def register_routers(dispatcher: Dispatcher) -> None:
     dispatcher.include_router(common.router)
 
 
+def _token_fingerprint(token: str) -> str:
+    if not token:
+        return "empty"
+    if len(token) <= 8:
+        return f"{token[:2]}…{token[-2:]}"
+    return f"{token[:4]}…{token[-4:]}"
+
+
+def _validate_token(token: str) -> list[str]:
+    if not token.strip():
+        return ["BOT_TOKEN пустой или не загружен"]
+
+    errors = []
+    if ":" not in token:
+        errors.append("BOT_TOKEN не похож на токен (нет ':')")
+    if len(token) < 20:
+        errors.append("BOT_TOKEN слишком короткий (ожидается > 20 символов)")
+    return errors
+
+
 async def _run_byt_scheduler(bot: Bot, db: FinanceDatabase, timezone: ZoneInfo) -> None:
     """Background scheduler for BYT reminders."""
 
@@ -61,9 +82,23 @@ async def main() -> None:
     init_logging()
     settings = get_settings()
     logger = logging.getLogger(__name__)
+    token = (settings.bot_token or "").strip()
+    token_source = settings.bot_token_source
+    fingerprint = _token_fingerprint(token)
+
+    errors = _validate_token(token)
+    for error in errors:
+        logger.error(
+            "%s (token_source=%s, fingerprint=%s)",
+            error,
+            token_source,
+            fingerprint,
+        )
+    if errors:
+        return
 
     bot = Bot(
-        token=settings.bot_token,
+        token=token,
         default=DefaultBotProperties(parse_mode="HTML"),
     )
     dp = Dispatcher()
@@ -75,8 +110,33 @@ async def main() -> None:
         _run_byt_scheduler(bot, db, settings.timezone)
     )
     try:
-        logger.info("Starting bot polling")
+        await bot.me()
+    except TelegramUnauthorizedError:
+        logger.error(
+            "Unauthorized: токен неверный/отозван/бот удалён. "
+            "Проверь BotFather и переменные окружения. "
+            "(token_source=%s, fingerprint=%s)",
+            token_source,
+            fingerprint,
+        )
+        await bot.session.close()
+        return
+
+    try:
+        logger.info(
+            "Starting bot polling (token_source=%s, fingerprint=%s)",
+            token_source,
+            fingerprint,
+        )
         await dp.start_polling(bot)
+    except TelegramUnauthorizedError:
+        logger.error(
+            "Unauthorized: токен неверный/отозван/бот удалён. "
+            "Проверь BotFather и переменные окружения. "
+            "(token_source=%s, fingerprint=%s)",
+            token_source,
+            fingerprint,
+        )
     except Exception as error:  # noqa: BLE001
         logger.exception("Bot stopped due to error: %s", error)
     finally:

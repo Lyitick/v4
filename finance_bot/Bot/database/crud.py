@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
 
-from Bot.config import settings
+from Bot.config.settings import get_settings
 from Bot.utils.datetime_utils import add_one_month, now_tz
 
 
@@ -19,7 +19,7 @@ DB_PATH = Path(__file__).resolve().parents[2] / "finance.db"
 
 def _get_bot_user_id() -> int | None:
     try:
-        token = getattr(settings, "BOT_TOKEN", None)
+        token = get_settings().bot_token
         if not token:
             return None
         return int(str(token).split(":")[0])

@@ -22,7 +22,7 @@ from Bot.keyboards.settings import (
     settings_menu_keyboard,
 )
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
-from Bot.utils.datetime_utils import current_month_str
+from Bot.utils.datetime_utils import current_month_str, now_tz
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
@@ -422,8 +422,20 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
 
     user_id = message.from_user.id
     db = FinanceDatabase()
+    LOGGER.info("BYT manual check pressed user_id=%s", user_id)
 
     db.ensure_byt_timer_defaults(user_id)
+    data = await state.get_data()
+    last_ts = data.get("byt_manual_check_ts")
+    current_ts = time.time()
+    if last_ts is not None and current_ts - float(last_ts) < 2:
+        sent = await message.answer(
+            "Уже проверил. Попробуй ещё раз через пару секунд.",
+            reply_markup=await build_main_menu_for_user(user_id),
+        )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+        return
+    await state.update_data(byt_manual_check_ts=current_ts)
     try:
         await message.delete()
     except TelegramBadRequest:
@@ -440,6 +452,53 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
             )
         except Exception:
             simulated_time = None
+
+    now_dt = now_tz()
+    total_items = db.get_active_byt_wishes(user_id)
+    due_items = db.list_active_byt_items_for_reminder(user_id, now_dt)
+    due_ids = {int(item.get("id")) for item in due_items if item.get("id") is not None}
+    deferred_items = [
+        item
+        for item in total_items
+        if item.get("id") is not None and int(item.get("id")) not in due_ids
+    ]
+    nearest_deferred = None
+    for item in deferred_items:
+        deferred_until = item.get("deferred_until")
+        if not deferred_until:
+            continue
+        try:
+            deferred_dt = datetime.fromisoformat(str(deferred_until))
+        except ValueError:
+            continue
+        if nearest_deferred is None or deferred_dt < nearest_deferred:
+            nearest_deferred = deferred_dt
+    LOGGER.info(
+        "BYT manual check summary (user_id=%s, total_items=%s, due_items=%s, deferred_items=%s, nearest_deferred=%s)",
+        user_id,
+        len(total_items),
+        len(due_items),
+        len(deferred_items),
+        nearest_deferred.isoformat() if nearest_deferred else None,
+    )
+    if not due_items:
+        text = "✅ Сейчас покупать ничего не нужно. Список пуст или всё отложено."
+        if deferred_items:
+            if nearest_deferred:
+                nearest_label = nearest_deferred.strftime("%d.%m.%Y %H:%M")
+                text = (
+                    f"{text}\nЕсть отложенные покупки: {len(deferred_items)} шт. "
+                    f"(ближайшая — {nearest_label})"
+                )
+            else:
+                text = (
+                    f"{text}\nЕсть отложенные покупки: {len(deferred_items)} шт."
+                )
+        sent = await message.answer(
+            text, reply_markup=await build_main_menu_for_user(user_id)
+        )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+        return
 
     await run_byt_timer_check(
         message.bot, db, user_id=user_id, simulated_time=simulated_time

@@ -218,6 +218,9 @@ async def _edit_settings_page(
     reply_markup,
 ) -> int:
     try:
+        data = await state.get_data()
+        if data.get("settings_current_screen") in {"st:income", "st:wishlist", "st:byt_rules"}:
+            raise TelegramBadRequest(method="editMessageText", message="reply-only")
         await bot.edit_message_text(
             chat_id=chat_id, message_id=message_id, text=text, reply_markup=reply_markup
         )
@@ -247,17 +250,11 @@ async def _render_reply_settings_page(
     message_id = data.get("settings_message_id")
     current_screen = data.get("settings_current_screen")
 
-    if not force_new and chat_id and message_id and current_screen == screen_id:
-        new_message_id = await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text=text,
-            reply_markup=reply_markup,
-        )
-    else:
+    deleted_count = 0
+    if force_new or not chat_id or not message_id or current_screen != screen_id:
         await _delete_message_safely(message.bot, chat_id, message_id)
+        if message_id:
+            deleted_count = 1
     sent = await message.bot.send_message(
         chat_id=message.chat.id, text=text, reply_markup=reply_markup
     )
@@ -266,6 +263,12 @@ async def _render_reply_settings_page(
     await ui_set_screen_message(state, sent.chat.id, sent.message_id)
     await _store_settings_message(state, sent.chat.id, sent.message_id)
     await _set_current_screen(state, screen_id)
+    if deleted_count:
+        LOGGER.info(
+            "Settings reply screen cleanup: deleted %s messages (screen_id=%s)",
+            deleted_count,
+            screen_id,
+        )
 
 
 async def _render_settings_home(message: Message, state: FSMContext) -> None:
@@ -444,6 +447,7 @@ async def _render_income_settings(
 ) -> list[dict]:
     db.ensure_income_categories_seeded(user_id)
     categories = db.list_active_income_categories(user_id)
+    LOGGER.info("Open income settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(
         message=message,
         state=state,
@@ -466,6 +470,7 @@ async def _render_wishlist_settings(
 ) -> list[dict]:
     db.ensure_wishlist_categories_seeded(user_id)
     categories = db.list_active_wishlist_categories(user_id)
+    LOGGER.info("Open wishlist settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(
         message=message,
         state=state,
@@ -488,6 +493,7 @@ async def _render_byt_rules_settings(
     settings_row = db.get_user_settings(user_id)
     db.ensure_byt_timer_defaults(user_id)
     times = db.list_active_byt_timer_times(user_id)
+    LOGGER.info("Open byt conditions settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(
         message=message,
         state=state,
@@ -1058,7 +1064,17 @@ async def household_refresh_questions_reply(message: Message, state: FSMContext)
     )
 
 
-@router.message(InSettingsFilter(), F.text == "➕")
+@router.message(
+    InSettingsFilter(),
+    F.text.in_(
+        {
+            "➕",
+            "➕ Добавить категорию дохода",
+            "➕ Добавить категорию вишлиста",
+            "➕ Добавить время напоминания",
+        }
+    ),
+)
 async def settings_add_action_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
@@ -1074,27 +1090,39 @@ async def settings_add_action_reply(message: Message, state: FSMContext) -> None
         await _push_current_screen(state, "inc:add_category")
         await state.set_state(IncomeSettingsState.waiting_for_category_title)
         prompt = "Название новой категории дохода?"
+        next_screen = "inc:add_category"
     elif screen == "st:wishlist":
         await _push_current_screen(state, "wl:add_category")
         await state.set_state(WishlistSettingsState.waiting_for_category_title)
         prompt = "Название новой категории вишлиста?"
+        next_screen = "wl:add_category"
     else:
         await _push_current_screen(state, "bt:add_time_text")
         await state.set_state(BytTimerState.waiting_for_time_add)
         prompt = "Введи время в формате ЧЧ:ММ (например 12:00)"
+        next_screen = "bt:add_time_text"
 
-    chat_id, message_id = await _get_settings_message_ids(state, message)
-    await _edit_settings_page(
-        bot=message.bot,
+    await _render_reply_settings_page(
+        message=message,
         state=state,
-        chat_id=chat_id,
-        message_id=message_id,
         text=prompt,
-        reply_markup=None,
+        reply_markup=back_only_keyboard(),
+        screen_id=next_screen,
+        force_new=True,
     )
 
 
-@router.message(InSettingsFilter(), F.text == "➖")
+@router.message(
+    InSettingsFilter(),
+    F.text.in_(
+        {
+            "➖",
+            "➖ Удалить категорию дохода",
+            "➖ Удалить категорию вишлиста",
+            "➖ Удалить время напоминания",
+        }
+    ),
+)
 async def settings_delete_action_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
@@ -1116,7 +1144,7 @@ async def settings_delete_action_reply(message: Message, state: FSMContext) -> N
     await _navigate_to_screen("bt:del_time_menu", message=message, state=state, force_new=True)
 
 
-@router.message(F.text == "%")
+@router.message(F.text.in_({"%", "⚙️ Проценты доходов"}))
 async def income_percent_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
@@ -1148,7 +1176,7 @@ async def income_percent_menu_reply(message: Message, state: FSMContext) -> None
     )
 
 
-@router.message(F.text == "🛒 Купленное")
+@router.message(F.text == "🕒 Настроить купленное")
 async def wishlist_purchased_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):

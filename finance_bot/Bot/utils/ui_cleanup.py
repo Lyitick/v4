@@ -12,13 +12,13 @@ async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) 
     """Track a UI message id for later cleanup."""
 
     data = await state.get_data()
-    ids: List[int] = list(data.get("ui_message_ids") or [])
+    ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
     if message_id not in ids:
         ids.append(int(message_id))
     current_chat_id = data.get("ui_chat_id")
     await state.update_data(
         ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
-        ui_message_ids=ids,
+        ui_tracked_message_ids=ids,
     )
 
 
@@ -27,11 +27,7 @@ async def ui_register_protected_message(
 ) -> None:
     """Track a UI message id that should never be deleted."""
 
-    data = await state.get_data()
-    ids: List[int] = list(data.get("ui_protected_message_ids") or [])
-    if message_id not in ids:
-        ids.append(int(message_id))
-    await state.update_data(ui_chat_id=chat_id, ui_protected_message_ids=ids)
+    await ui_register_message(state, chat_id, message_id)
 
 
 async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
@@ -53,15 +49,13 @@ async def ui_set_welcome_message(
 async def ui_set_settings_mode_message(
     state: FSMContext, chat_id: int, message_id: int
 ) -> None:
-    await state.update_data(
-        ui_chat_id=chat_id, ui_settings_mode_message_id=int(message_id)
-    )
+    await ui_register_message(state, chat_id, message_id)
 
 
 async def ui_set_screen_message(
     state: FSMContext, chat_id: int, message_id: int
 ) -> None:
-    await state.update_data(ui_chat_id=chat_id, ui_screen_message_id=int(message_id))
+    await ui_register_message(state, chat_id, message_id)
 
 
 async def ui_track_message(
@@ -80,20 +74,10 @@ async def ui_cleanup_to_context(
 ) -> None:
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
-    settings_mode_id = data.get("ui_settings_mode_message_id")
-    screen_message_id = data.get("ui_screen_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
 
     keep_ids = {int(welcome_id)} if welcome_id else set()
-    if context_name in {"SETTINGS_MENU", "SETTINGS_HOUSEHOLD_PAYMENTS"}:
-        if settings_mode_id:
-            keep_ids.add(int(settings_mode_id))
-
     delete_ids = [int(mid) for mid in tracked_ids]
-    if settings_mode_id:
-        delete_ids.append(int(settings_mode_id))
-    if screen_message_id:
-        delete_ids.append(int(screen_message_id))
 
     for message_id in delete_ids:
         if message_id in keep_ids:
@@ -106,6 +90,7 @@ async def ui_cleanup_to_context(
                 chat_id,
                 message_id,
                 exc,
+                exc_info=True,
             )
         except Exception:
             LOGGER.warning(
@@ -117,7 +102,6 @@ async def ui_cleanup_to_context(
 
     await state.update_data(
         ui_tracked_message_ids=[],
-        ui_screen_message_id=None,
     )
 
 

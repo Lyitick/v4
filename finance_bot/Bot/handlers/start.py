@@ -9,8 +9,9 @@ from aiogram.types import Message
 
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.utils.ui_cleanup import (
+    ui_cleanup_messages,
     ui_cleanup_to_context,
-    ui_set_screen_message,
+    ui_render_screen,
     ui_set_welcome_message,
     ui_track_message,
 )
@@ -32,11 +33,13 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     await ui_cleanup_to_context(
         message.bot, state, message.chat.id, "MAIN_MENU"
     )
-    sent = await message.answer(
+    await ui_render_screen(
+        message.bot,
+        state,
+        message.chat.id,
         "Главное меню",
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
-    await ui_set_screen_message(state, sent.chat.id, sent.message_id)
     LOGGER.info(
         "User %s started bot", message.from_user.id if message.from_user else "unknown"
     )
@@ -67,12 +70,15 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     """Handle /cancel command."""
 
     await ui_track_message(state, message.chat.id, message.message_id)
-    await ui_cleanup_to_context(message.bot, state, message.chat.id, "MAIN_MENU")
-    sent = await message.answer(
+    await ui_cleanup_messages(message.bot, state, chat_id=message.chat.id)
+    await state.clear()
+    await ui_render_screen(
+        message.bot,
+        state,
+        message.chat.id,
         "Операция отменена. Вы в главном меню.",
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
-    await ui_set_screen_message(state, sent.chat.id, sent.message_id)
     LOGGER.info("User %s cancelled current operation", message.from_user.id if message.from_user else "unknown")
 
 
@@ -80,6 +86,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def back_to_main(message: Message, state: FSMContext) -> None:
     """Return user to main menu."""
 
+    await ui_track_message(state, message.chat.id, message.message_id)
     try:
         await message.delete()
         LOGGER.info(
@@ -101,18 +108,13 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
             message.message_id,
             exc_info=True,
         )
-    data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
-    await ui_cleanup_to_context(
+    await ui_cleanup_messages(message.bot, state, chat_id=message.chat.id)
+    await state.clear()
+    await ui_render_screen(
         message.bot,
         state,
         message.chat.id,
-        "MAIN_MENU",
-        keep_ids=[welcome_id] if welcome_id else None,
-    )
-    sent = await message.answer(
         "Главное меню",
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
-    await ui_set_screen_message(state, sent.chat.id, sent.message_id)
     LOGGER.info("User %s returned to main menu", message.from_user.id if message.from_user else "unknown")

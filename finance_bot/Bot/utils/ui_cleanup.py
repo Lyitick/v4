@@ -1,5 +1,5 @@
 import logging
-from typing import List
+from typing import Iterable, List, Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
@@ -15,10 +15,18 @@ async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) 
     ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
     if message_id not in ids:
         ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
     current_chat_id = data.get("ui_chat_id")
     await state.update_data(
         ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
         ui_tracked_message_ids=ids,
+    )
+    LOGGER.debug(
+        "Registered UI message (chat_id=%s, message_id=%s, tracked=%s)",
+        chat_id,
+        message_id,
+        len(ids),
     )
 
 
@@ -37,13 +45,71 @@ async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: 
 
 
 async def ui_set_welcome_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
+    bot: Bot, state: FSMContext, chat_id: int, text: str
+) -> int:
     data = await state.get_data()
-    if data.get("ui_welcome_message_id") is not None:
-        return
-    # НЕ УДАЛЯТЬ БЕЗ ПОДТВЕРЖДЕНИЯ ТИМЛИДА
-    await state.update_data(ui_chat_id=chat_id, ui_welcome_message_id=int(message_id))
+    welcome_id = data.get("ui_welcome_message_id")
+    if welcome_id is not None:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=int(welcome_id),
+                text=text,
+            )
+            LOGGER.info(
+                "Reused welcome message (chat_id=%s, message_id=%s)",
+                chat_id,
+                welcome_id,
+            )
+            return int(welcome_id)
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                LOGGER.info(
+                    "Welcome message already up to date (chat_id=%s, message_id=%s)",
+                    chat_id,
+                    welcome_id,
+                )
+                return int(welcome_id)
+            LOGGER.warning(
+                "Failed to edit welcome message (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                welcome_id,
+                exc,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Unexpected error editing welcome message (chat_id=%s, message_id=%s)",
+                chat_id,
+                welcome_id,
+                exc_info=True,
+            )
+    sent = await bot.send_message(chat_id=chat_id, text=text)
+    await state.update_data(
+        ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
+    )
+    LOGGER.info(
+        "Created welcome message (chat_id=%s, message_id=%s)",
+        chat_id,
+        sent.message_id,
+    )
+    if welcome_id is not None and int(welcome_id) != int(sent.message_id):
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=int(welcome_id))
+        except TelegramBadRequest as exc:
+            LOGGER.warning(
+                "Failed to delete previous welcome message (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                welcome_id,
+                exc,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Unexpected error deleting previous welcome message (chat_id=%s, message_id=%s)",
+                chat_id,
+                welcome_id,
+                exc_info=True,
+            )
+    return int(sent.message_id)
 
 
 async def ui_set_settings_mode_message(
@@ -61,27 +127,26 @@ async def ui_set_screen_message(
 async def ui_track_message(
     state: FSMContext, chat_id: int, message_id: int
 ) -> None:
-    data = await state.get_data()
-    ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    ids.append(int(message_id))
-    if len(ids) > 300:
-        ids = ids[-300:]
-    await state.update_data(ui_chat_id=chat_id, ui_tracked_message_ids=ids)
+    await ui_register_message(state, chat_id, message_id)
 
 
 async def ui_cleanup_to_context(
-    bot: Bot, state: FSMContext, chat_id: int, context_name: str
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    context_name: str,
+    keep_ids: Optional[Iterable[int]] = None,
 ) -> None:
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    legacy_ids: List[int] = list(data.get("ui_message_ids") or [])
+    combined_ids = list(dict.fromkeys([*legacy_ids, *tracked_ids]))
 
     keep_ids = {int(welcome_id)} if welcome_id else set()
     delete_ids = [int(mid) for mid in tracked_ids]
 
     for message_id in delete_ids:
-        if message_id in keep_ids:
-            continue
         try:
             await bot.delete_message(chat_id=chat_id, message_id=message_id)
         except TelegramBadRequest as exc:
@@ -100,6 +165,7 @@ async def ui_cleanup_to_context(
                 exc_info=True,
             )
 
+    remaining_ids = [mid for mid in combined_ids if int(mid) in keep_id_set]
     await state.update_data(
         ui_tracked_message_ids=[],
     )

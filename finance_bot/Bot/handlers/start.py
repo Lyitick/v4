@@ -2,6 +2,7 @@
 import logging
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -27,11 +28,10 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     # Автоматическое удаление запрещено. Удаление допускается только в отдельной задаче
     # после явного подтверждения пользователя.
     greeting = "Поработаем бл"
-    greeting_message = await message.answer(greeting)
-    await ui_set_welcome_message(
-        state, greeting_message.chat.id, greeting_message.message_id
+    await ui_set_welcome_message(message.bot, state, message.chat.id, greeting)
+    await ui_cleanup_to_context(
+        message.bot, state, message.chat.id, "MAIN_MENU"
     )
-    await ui_cleanup_to_context(message.bot, state, message.chat.id, "MAIN_MENU")
     sent = await message.answer(
         "Главное меню",
         reply_markup=await build_main_menu_for_user(message.from_user.id),
@@ -80,8 +80,36 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def back_to_main(message: Message, state: FSMContext) -> None:
     """Return user to main menu."""
 
-    await ui_track_message(state, message.chat.id, message.message_id)
-    await ui_cleanup_to_context(message.bot, state, message.chat.id, "MAIN_MENU")
+    try:
+        await message.delete()
+        LOGGER.info(
+            "Deleted back_to_main user message (chat_id=%s, message_id=%s)",
+            message.chat.id,
+            message.message_id,
+        )
+    except TelegramBadRequest as exc:
+        LOGGER.warning(
+            "Failed to delete back_to_main user message (chat_id=%s, message_id=%s): %s",
+            message.chat.id,
+            message.message_id,
+            exc,
+        )
+    except Exception:
+        LOGGER.warning(
+            "Unexpected error deleting back_to_main user message (chat_id=%s, message_id=%s)",
+            message.chat.id,
+            message.message_id,
+            exc_info=True,
+        )
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    await ui_cleanup_to_context(
+        message.bot,
+        state,
+        message.chat.id,
+        "MAIN_MENU",
+        keep_ids=[welcome_id] if welcome_id else None,
+    )
     sent = await message.answer(
         "Главное меню",
         reply_markup=await build_main_menu_for_user(message.from_user.id),

@@ -41,6 +41,7 @@ from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
     ui_register_message,
     ui_register_user_message,
+    ui_render_screen,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -83,10 +84,13 @@ async def _send_main_menu_summary(
     savings = db.get_user_savings(user_id)
     summary = format_savings_summary(savings)
     menu = await build_main_menu_for_user(user_id)
-    sent = await bot.send_message(
-        chat_id=chat_id, text=f"Текущие накопления:\n{summary}", reply_markup=menu
+    await ui_render_screen(
+        bot,
+        state,
+        chat_id,
+        f"Текущие накопления:\n{summary}",
+        reply_markup=menu,
     )
-    await ui_register_message(state, chat_id, sent.message_id)
 
 
 async def reset_household_cycle_if_needed(
@@ -141,6 +145,11 @@ async def _send_household_settings_overview(
 async def open_household_settings(message: Message, state: FSMContext) -> None:
     """Open household payments settings menu."""
 
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    try:
+        await message.delete()
+    except Exception:
+        LOGGER.warning("Failed to delete user menu message (⚙️ Бытовые платежи ⚙️)", exc_info=True)
     if message.from_user.id != settings.ADMIN_ID:
         sent = await message.answer(
             "Что-то пошло не так. Вернёмся в главное меню.",
@@ -344,11 +353,13 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
         await ui_cleanup_messages(message.bot, state)
         await _log_state_transition(state, user_id, None)
         await state.clear()
-        sent = await message.answer(
+        await ui_render_screen(
+            message.bot,
+            state,
+            message.chat.id,
             "Список бытовых платежей не настроен.",
             reply_markup=await build_main_menu_for_user(user_id),
         )
-        await ui_register_message(state, message.chat.id, sent.message_id)
         return
 
     month = current_month_str()
@@ -371,12 +382,14 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
         await ui_cleanup_messages(message.bot, state)
         await _log_state_transition(state, user_id, None)
         await state.clear()
-        sent = await message.answer(
+        await ui_render_screen(
+            message.bot,
+            state,
+            message.chat.id,
             text,
-            parse_mode="HTML",
             reply_markup=await build_main_menu_for_user(user_id),
+            parse_mode="HTML",
         )
-        await ui_register_message(state, message.chat.id, sent.message_id)
         _log_event(
             user_id,
             "HOUSEHOLD_ALL_PAID",

@@ -22,12 +22,6 @@ async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) 
         ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
         ui_tracked_message_ids=ids,
     )
-    LOGGER.debug(
-        "Registered UI message (chat_id=%s, message_id=%s, tracked=%s)",
-        chat_id,
-        message_id,
-        len(ids),
-    )
 
 
 async def ui_register_protected_message(
@@ -135,7 +129,7 @@ async def ui_cleanup_to_context(
     state: FSMContext,
     chat_id: int,
     context_name: str,
-    keep_ids: Optional[Iterable[int]] = None,
+    keep_ids: List[int] | None = None,
 ) -> None:
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
@@ -143,8 +137,10 @@ async def ui_cleanup_to_context(
     legacy_ids: List[int] = list(data.get("ui_message_ids") or [])
     combined_ids = list(dict.fromkeys([*legacy_ids, *tracked_ids]))
 
-    keep_ids = {int(welcome_id)} if welcome_id else set()
-    delete_ids = [int(mid) for mid in tracked_ids]
+    keep_id_set = {int(welcome_id)} if welcome_id else set()
+    if keep_ids:
+        keep_id_set.update(int(item) for item in keep_ids if item is not None)
+    delete_ids = [int(mid) for mid in tracked_ids if int(mid) not in keep_id_set]
 
     for message_id in delete_ids:
         try:
@@ -162,7 +158,6 @@ async def ui_cleanup_to_context(
                 "Unexpected error deleting message (chat_id=%s, message_id=%s)",
                 chat_id,
                 message_id,
-                exc_info=True,
             )
 
     remaining_ids = [mid for mid in combined_ids if int(mid) in keep_id_set]

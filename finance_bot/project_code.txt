@@ -23,10 +23,7 @@
 
 """Package initializer for finance bot modules."""
 
-
-
 ===== Bot/config/__init__.py =====
-
 
 
 ===== Bot/config/logging_config.py =====
@@ -60,7 +57,6 @@ def setup_logging() -> None:
     root_logger.handlers.clear()
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
-
 
 ===== Bot/config/settings.py =====
 
@@ -124,9 +120,7 @@ def get_settings() -> Settings:
 
     return Settings()
 
-
 ===== Bot/database/__init__.py =====
-
 
 
 ===== Bot/database/crud.py =====

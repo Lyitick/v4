@@ -28,7 +28,7 @@ from Bot.keyboards.main import (
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import BytDeferState, WishlistState
 from Bot.utils.datetime_utils import now_tz
-from Bot.utils.ui_cleanup import ui_register_message
+from Bot.utils.ui_cleanup import ui_register_message, ui_register_user_message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -90,6 +90,11 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
     """Open wishlist menu."""
 
     await delete_welcome_message_if_exists(message, state)
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    try:
+        await message.delete()
+    except Exception:
+        LOGGER.warning("Failed to delete user menu message (Вишлист)", exc_info=True)
     await state.clear()
     db = FinanceDatabase()
     wishes = db.get_wishes_by_user(message.from_user.id)

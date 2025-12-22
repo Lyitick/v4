@@ -116,6 +116,7 @@ async def ui_set_screen_message(
     state: FSMContext, chat_id: int, message_id: int
 ) -> None:
     await ui_register_message(state, chat_id, message_id)
+    await state.update_data(ui_screen_message_id=int(message_id), ui_chat_id=chat_id)
 
 
 async def ui_track_message(
@@ -172,3 +173,48 @@ async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> N
     if chat_id is None:
         return
     await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
+
+
+async def ui_render_screen(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> int:
+    data = await state.get_data()
+    screen_id = data.get("ui_screen_message_id")
+    if screen_id is not None:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=int(screen_id),
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+            await ui_set_screen_message(state, chat_id, int(screen_id))
+            return int(screen_id)
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                await ui_set_screen_message(state, chat_id, int(screen_id))
+                return int(screen_id)
+            LOGGER.warning(
+                "Failed to edit screen message (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                screen_id,
+                exc,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Unexpected error editing screen message (chat_id=%s, message_id=%s)",
+                chat_id,
+                screen_id,
+                exc_info=True,
+            )
+    sent = await bot.send_message(
+        chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode
+    )
+    await ui_set_screen_message(state, chat_id, sent.message_id)
+    return int(sent.message_id)

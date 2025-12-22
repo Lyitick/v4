@@ -35,10 +35,11 @@ from Bot.states.wishlist_states import (
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.ui_cleanup import (
+    ui_cleanup_messages,
     ui_cleanup_to_context,
     ui_register_message,
+    ui_render_screen,
     ui_set_screen_message,
-    ui_set_settings_mode_message,
     ui_track_message,
 )
 
@@ -189,14 +190,15 @@ async def _send_main_menu_summary(
 async def _exit_settings_to_main(
     *, bot, state: FSMContext, chat_id: int, user_id: int
 ) -> None:
-    await ui_cleanup_to_context(bot, state, chat_id, "MAIN_MENU")
-    sent = await bot.send_message(
-        chat_id=chat_id,
-        text="Главное меню",
+    await ui_cleanup_messages(bot, state, chat_id=chat_id)
+    await state.clear()
+    await ui_render_screen(
+        bot,
+        state,
+        chat_id,
+        "Главное меню",
         reply_markup=await build_main_menu_for_user(user_id),
     )
-    await ui_set_screen_message(state, chat_id, sent.message_id)
-    await state.update_data(in_settings=False, settings_current_screen=None, settings_nav_stack=[])
 
 
 async def _get_settings_message_ids(
@@ -878,23 +880,17 @@ async def open_settings(message: Message, state: FSMContext) -> None:
     """Open settings entry point with inline navigation."""
 
     await ui_track_message(state, message.chat.id, message.message_id)
+    await _delete_user_message(message)
     await ui_cleanup_to_context(message.bot, state, message.chat.id, "SETTINGS_MENU")
-    mode_message = await message.answer(
-        "РЕЖИМ НАСТРОЕК",
-        reply_markup=settings_back_reply_keyboard(),
-    )
-    await ui_set_settings_mode_message(
-        state, mode_message.chat.id, mode_message.message_id
-    )
     await state.update_data(settings_user_id=message.from_user.id)
-    settings_message = await message.answer(
+    screen_id = await ui_render_screen(
+        message.bot,
+        state,
+        message.chat.id,
         "⚙️ НАСТРОЙКИ",
         reply_markup=settings_home_reply_keyboard(),
     )
-    await ui_set_screen_message(
-        state, settings_message.chat.id, settings_message.message_id
-    )
-    await _store_settings_message(state, settings_message.chat.id, settings_message.message_id)
+    await _store_settings_message(state, message.chat.id, screen_id)
     await _set_current_screen(state, "st:home")
     await _reset_navigation(state)
 

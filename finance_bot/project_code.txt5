@@ -1,0 +1,1800 @@
+
+    buttons = [[KeyboardButton(text="⏪ На главную")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def back_only_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with a single back button."""
+
+    buttons = [[KeyboardButton(text="⬅️ Назад")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard for wishlist actions."""
+
+    buttons = [[KeyboardButton(text="➕"), KeyboardButton(text="Купленное")], [KeyboardButton(text="⏪ На главную")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
+    """Keyboard for wishlist actions without add button (+)."""
+
+    buttons = [
+        [KeyboardButton(text="Купленное")],
+        [KeyboardButton(text="⏪ На главную")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for wishlist categories."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        row.append(
+            InlineKeyboardButton(
+                text=category.get("title", ""),
+                callback_data=f"wlcat:{category.get('id')}",
+            )
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def wishlist_url_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for skipping wishlist URL input."""
+
+    buttons = [[InlineKeyboardButton(text="скип", callback_data="wishlist_skip_url")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def purchase_confirmation_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard for confirming purchase suggestion."""
+
+    buttons = [[KeyboardButton(text="✅ Купил"), KeyboardButton(text="🔄 Продолжить копить")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+
+
+def income_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with confirm income button."""
+
+    buttons = [[InlineKeyboardButton(text="✅ Получено", callback_data="income_confirm")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+===== Bot/keyboards/settings.py =====
+
+"""Settings keyboards."""
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
+
+def settings_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for settings menu."""
+
+    buttons = [
+        [KeyboardButton(text="⚙️ Бытовые платежи ⚙️")],
+        [KeyboardButton(text="⏪ На главную")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def household_settings_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for household settings actions."""
+
+    buttons = [
+        [
+            InlineKeyboardButton(text="➕", callback_data="hh_set:add"),
+            InlineKeyboardButton(text="➖", callback_data="hh_set:del"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def household_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for removing household items."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        label = f"{title} — {amount}" if amount is not None else title
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"hh_set:remove:{item.get('code', '')}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for household payments settings actions."""
+
+    buttons = [
+        [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
+        [KeyboardButton(text="🔄 Обновить"), KeyboardButton(text="🧹 Обнулить")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def household_payments_remove_reply_keyboard(
+    items: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for removing household payments in settings."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for item in items:
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        label = f"{title} — {amount}" if amount is not None else title
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def household_payments_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for household payments settings."""
+
+    inline_keyboard = [
+        [InlineKeyboardButton(text="➕ Добавить платеж", callback_data="hp:add_payment")],
+        [InlineKeyboardButton(text="➖ Удалить платеж", callback_data="hp:del_payment_menu")],
+        [InlineKeyboardButton(text="🔄 Обнулить", callback_data="hp:reset_questions")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def household_payments_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for removing household payments in settings."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        label = f"{title} — {amount}" if amount is not None else title
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"hp:del_payment:{item.get('code', '')}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for settings home screen."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="📊 Доход", callback_data="st:income"),
+            InlineKeyboardButton(text="🧾 Вишлист", callback_data="st:wishlist"),
+        ],
+        [InlineKeyboardButton(text="🧺 БЫТ условия", callback_data="st:byt_rules")],
+        [InlineKeyboardButton(text="🧾 Бытовые платежи", callback_data="st:household_payments")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def settings_home_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for settings home screen."""
+
+    buttons = [
+        [KeyboardButton(text="📊 Доход"), KeyboardButton(text="🧾 Вишлист")],
+        [KeyboardButton(text="🧺 БЫТ условия"), KeyboardButton(text="🧾 Бытовые платежи")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_settings_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for wishlist settings."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="➕ Категорию", callback_data="wl:add_cat"),
+            InlineKeyboardButton(text="➖ Категорию", callback_data="wl:del_cat_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="⏳ Срок купленного", callback_data="wl:purchased_select_category"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for wishlist settings actions."""
+
+    buttons = [
+        [
+            KeyboardButton(text="➕ Добавить категорию вишлиста"),
+            KeyboardButton(text="➖ Удалить категорию вишлиста"),
+        ],
+        [KeyboardButton(text="🕒 Настроить купленное")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_categories_select_reply_keyboard(categories: list[dict]) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def wishlist_purchased_mode_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist purchased mode."""
+
+    buttons = [
+        [KeyboardButton(text="Всегда")],
+        [KeyboardButton(text="Настроить дни")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_categories_select_keyboard(
+    categories: list[dict], action_prefix: str
+) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting wishlist category."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        button = InlineKeyboardButton(
+            text=category.get("title", ""),
+            callback_data=f"{action_prefix}:{category.get('id')}",
+        )
+        row.append(button)
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def wishlist_purchased_mode_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting wishlist purchased mode."""
+
+    inline_keyboard = [
+        [InlineKeyboardButton(text="Всегда", callback_data="wl:purchased_mode:always")],
+        [InlineKeyboardButton(text="Несколько дней", callback_data="wl:purchased_mode:days")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for BYT rules settings."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(
+                text="🔁 Вкл/Выкл напоминания", callback_data="byt:toggle_enabled"
+            ),
+            InlineKeyboardButton(
+                text="🔁 ОТЛОЖИТЬ Вкл/Выкл", callback_data="byt:toggle_defer"
+            ),
+        ],
+        [
+            InlineKeyboardButton(text="⏳ Макс. дни отложить", callback_data="byt:edit_max_defer_days"),
+            InlineKeyboardButton(text="⏰ Таймер", callback_data="byt:timer_menu"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for BYT rules settings."""
+
+    buttons = [
+        [
+            KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
+            KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
+        ],
+        [
+            KeyboardButton(text="➕ Добавить время напоминания"),
+            KeyboardButton(text="➖ Удалить время напоминания"),
+        ],
+        [KeyboardButton(text="⏳ Макс. дни отложить")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for BYT timer settings."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="➕ Добавить время", callback_data="bt:add_time_hour"),
+            InlineKeyboardButton(text="➖ Удалить время", callback_data="bt:del_time_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="🔁 Сбросить по умолчанию", callback_data="bt:reset_default"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def byt_timer_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for BYT timer settings."""
+
+    buttons = [
+        [
+            KeyboardButton(text="➕ Добавить время"),
+            KeyboardButton(text="➖ Удалить время"),
+        ],
+        [KeyboardButton(text="🔁 Сбросить по умолчанию")],
+        [KeyboardButton(text="⬅ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def byt_timer_times_select_reply_keyboard(times: list[dict]) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting BYT timer time."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for timer in times:
+        label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def byt_timer_times_select_keyboard(times: list[dict], action_prefix: str) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting BYT timer time."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for timer in times:
+        label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+        row.append(
+            InlineKeyboardButton(text=label, callback_data=f"{action_prefix}:{timer.get('id')}")
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def settings_back_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with a single back button for settings mode."""
+
+    buttons = [[KeyboardButton(text="⬅ Назад")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def income_settings_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for income settings actions."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="➕ Категорию", callback_data="inc:add"),
+            InlineKeyboardButton(text="➖ Категорию", callback_data="inc:del_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Проценты", callback_data="inc:pct_menu"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def income_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for income settings actions."""
+
+    buttons = [
+        [
+            KeyboardButton(text="➕ Добавить категорию дохода"),
+            KeyboardButton(text="➖ Удалить категорию дохода"),
+        ],
+        [KeyboardButton(text="⚙️ Проценты доходов")],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def income_categories_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting income category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        title = category.get("title", "")
+        percent = category.get("percent", 0)
+        row.append(KeyboardButton(text=f"{title} — {percent}%"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def income_categories_select_keyboard(
+    categories: list[dict], action_prefix: str
+) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting an income category."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        button = InlineKeyboardButton(
+            text=f"{category['title']} ({category['percent']}%)",
+            callback_data=f"{action_prefix}:{category['id']}",
+        )
+        row.append(button)
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def settings_stub_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for stub sections with back button."""
+
+    return InlineKeyboardMarkup(inline_keyboard=[])
+
+
+===== Bot/main.py =====
+
+"""Entry point for finance bot."""
+import asyncio
+import contextlib
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramUnauthorizedError
+
+from Bot.config.settings import get_settings
+from Bot.database.crud import FinanceDatabase
+from Bot.handlers import (
+    callbacks,
+    common,
+    finances,
+    household_payments,
+    settings,
+    start,
+    wishlist,
+)
+from Bot.handlers.wishlist import run_byt_timer_check
+from Bot.utils.logging import init_logging
+
+
+def register_routers(dispatcher: Dispatcher) -> None:
+    """Register all routers to dispatcher."""
+
+    dispatcher.include_router(start.router)
+    dispatcher.include_router(finances.router)
+    dispatcher.include_router(household_payments.router)
+    dispatcher.include_router(settings.router)
+    dispatcher.include_router(wishlist.router)
+    dispatcher.include_router(callbacks.router)
+    dispatcher.include_router(common.router)
+
+
+def _token_fingerprint(token: str) -> str:
+    if not token:
+        return "empty"
+    if len(token) <= 8:
+        return f"{token[:2]}…{token[-2:]}"
+    return f"{token[:4]}…{token[-4:]}"
+
+
+def _validate_token(token: str) -> list[str]:
+    if not token.strip():
+        return ["BOT_TOKEN пустой или не загружен"]
+
+    errors = []
+    if ":" not in token:
+        errors.append("BOT_TOKEN не похож на токен (нет ':')")
+    if len(token) < 20:
+        errors.append("BOT_TOKEN слишком короткий (ожидается > 20 символов)")
+    return errors
+
+
+def _format_token_context(token_source: str, fingerprint: str, env_path: Path) -> str:
+    if token_source == ".env":
+        return f"token_source={token_source}, fingerprint={fingerprint}, env_path={env_path}"
+    return f"token_source={token_source}, fingerprint={fingerprint}"
+
+
+async def _run_byt_scheduler(bot: Bot, db: FinanceDatabase, timezone: ZoneInfo) -> None:
+    """Background scheduler for BYT reminders."""
+
+    while True:
+        now = datetime.now(tz=timezone)
+        user_ids = set(db.get_users_with_byt_timer_times()) | set(
+            db.get_users_with_active_byt_wishes()
+        )
+        for uid in user_ids:
+            await run_byt_timer_check(bot, db, user_id=uid, run_time=now)
+        sleep_for = 60 - now.second - now.microsecond / 1_000_000
+        await asyncio.sleep(max(sleep_for, 1))
+
+
+async def main() -> None:
+    """Run bot polling."""
+
+    init_logging()
+    settings = get_settings()
+    logger = logging.getLogger(__name__)
+    token = (settings.bot_token or "").strip()
+    token_source = settings.bot_token_source
+    fingerprint = _token_fingerprint(token)
+    token_context = _format_token_context(token_source, fingerprint, project_root / ".env")
+
+    errors = _validate_token(token)
+    for error in errors:
+        logger.error("%s (%s)", error, token_context)
+    if errors:
+        return
+
+    bot = Bot(
+        token=token,
+        default=DefaultBotProperties(parse_mode="HTML"),
+    )
+    dp = Dispatcher()
+
+    db = FinanceDatabase()
+    register_routers(dp)
+
+    try:
+        await bot.me()
+    except TelegramUnauthorizedError:
+        logger.error(
+            "Unauthorized: токен неверный/отозван/бот удалён. "
+            "Проверь BotFather и переменные окружения. "
+            "(%s)",
+            token_context,
+        )
+        await bot.session.close()
+        return
+
+    reminder_task = asyncio.create_task(
+        _run_byt_scheduler(bot, db, settings.timezone)
+    )
+    try:
+        logger.info(
+            "Starting bot polling (%s)",
+            token_context,
+        )
+        await dp.start_polling(bot)
+    except TelegramUnauthorizedError:
+        logger.error(
+            "Unauthorized: токен неверный/отозван/бот удалён. "
+            "Проверь BotFather и переменные окружения. "
+            "(%s)",
+            token_context,
+        )
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Bot stopped due to error: %s", error)
+    finally:
+        reminder_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reminder_task
+        await bot.session.close()
+        logger.info("Bot shutdown complete")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
+
+===== Bot/renderers/__init__.py =====
+
+"""Renderer layer package."""
+
+
+===== Bot/renderers/household.py =====
+
+"""Renderers for household payments UI."""
+from __future__ import annotations
+
+import html
+from typing import Dict, List
+
+from aiogram.types import InlineKeyboardMarkup
+
+from Bot.keyboards.household import household_payments_inline_keyboard
+
+
+def render_household_questions_text(
+    month: str,
+    questions: list[dict],
+    answers: dict[str, str],
+    current_index: int | None,
+) -> str:
+    header = f"<b>БЫТОВЫЕ ПЛАТЕЖИ — {html.escape(month)}</b>"
+    lines = [header]
+    for index, question in enumerate(questions, start=1):
+        code = str(question.get("code", ""))
+        text = html.escape(str(question.get("text", "")).strip())
+        text = text.rstrip("?").strip()
+        suffix = ""
+        answer = answers.get(code)
+        if answer == "yes":
+            suffix = " ✅"
+        elif answer == "no":
+            suffix = " ❌"
+        display = text
+        if current_index is not None and index - 1 == current_index:
+            display = f"<b>{display.upper()}</b>"
+        lines.append(f"{index}) {display}{suffix}")
+    return "\n".join(lines)
+
+
+def format_household_items(
+    items: List[Dict[str, int | str]],
+    unpaid_set: set[str],
+) -> str:
+    if not items:
+        return "Текущий список платежей: (пусто)"
+
+    lines = ["Текущий список платежей:"]
+    for index, item in enumerate(items, start=1):
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        code = str(item.get("code", ""))
+        status = "❌" if code in unpaid_set else "✅"
+        if amount is not None:
+            lines.append(f"{index}) {status} {title} — {amount}")
+        else:
+            lines.append(f"{index}) {status} {title}")
+    return "\n".join(lines)
+
+
+def build_household_question_keyboard(
+    question_code: str | None, show_back: bool
+) -> InlineKeyboardMarkup:
+    return household_payments_inline_keyboard(
+        show_back=show_back, question_code=question_code
+    )
+
+
+===== Bot/services/__init__.py =====
+
+"""Service layer package."""
+
+
+===== Bot/services/household.py =====
+
+"""Business logic for household payments flow."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable
+
+
+@dataclass
+class HouseholdFlowState:
+    """Container for household flow state."""
+
+    month: str
+    questions: list[dict]
+    current_step_index: int
+    current_question_code: str | None
+    answers: dict[str, str]
+    processed_steps: set[str]
+
+
+def build_household_questions(items: Iterable[dict]) -> list[dict]:
+    return [
+        {
+            "code": str(item.get("code", "")),
+            "text": str(item.get("text", "")),
+            "amount": item.get("amount"),
+        }
+        for item in items
+        if item.get("code") is not None
+    ]
+
+
+def build_answers_from_status(status_map: dict[str, int]) -> dict[str, str]:
+    return {
+        str(code): "yes"
+        for code, value in status_map.items()
+        if int(value) == 1
+    }
+
+
+def filter_unpaid_questions(
+    questions: Iterable[dict], unpaid_codes: Iterable[str]
+) -> list[dict]:
+    unpaid_set = {str(code) for code in unpaid_codes}
+    return [question for question in questions if question.get("code") in unpaid_set]
+
+
+def get_current_question(questions: list[dict], index: int) -> dict | None:
+    if index < 0 or index >= len(questions):
+        return None
+    return questions[index]
+
+
+def get_next_index(index: int, questions: list[dict]) -> int:
+    return min(index + 1, len(questions))
+
+
+def get_previous_index(index: int) -> int:
+    return max(index - 1, 0)
+
+
+def should_ignore_answer(
+    answers: dict[str, str],
+    processed_steps: set[str],
+    question_code: str,
+    action: str,
+) -> bool:
+    return question_code in processed_steps and answers.get(question_code) == action
+
+
+def normalize_processed_steps(value: Iterable[str] | None) -> set[str]:
+    if not value:
+        return set()
+    return {str(item) for item in value}
+
+
+def update_flow_state(
+    month: str,
+    questions: list[dict],
+    current_step_index: int,
+    answers: dict[str, str] | None,
+    processed_steps: Iterable[str] | None,
+) -> HouseholdFlowState:
+    current_question = get_current_question(questions, current_step_index)
+    return HouseholdFlowState(
+        month=month,
+        questions=questions,
+        current_step_index=current_step_index,
+        current_question_code=str(current_question.get("code"))
+        if current_question
+        else None,
+        answers=dict(answers or {}),
+        processed_steps=normalize_processed_steps(processed_steps),
+    )
+
+
+===== Bot/states/__init__.py =====
+
+
+
+===== Bot/states/money_states.py =====
+
+"""FSM states for money flow."""
+from aiogram.fsm.state import State, StatesGroup
+
+
+class MoneyState(StatesGroup):
+    """State machine for income distribution."""
+
+    waiting_for_amount = State()
+    confirm_category = State()
+    waiting_for_purchase_confirmation = State()
+
+
+class HouseholdPaymentsState(StatesGroup):
+    """State machine for household payments flow."""
+
+    waiting_for_answer = State()
+
+
+class HouseholdSettingsState(StatesGroup):
+    """State machine for household payments settings."""
+
+    waiting_for_title = State()
+    waiting_for_amount = State()
+    waiting_for_removal = State()
+
+
+class IncomeSettingsState(StatesGroup):
+    """State machine for income settings."""
+
+    waiting_for_category_title = State()
+    waiting_for_new_category_percent = State()
+    waiting_for_removal = State()
+    waiting_for_percent_category = State()
+    waiting_for_percent = State()
+
+
+===== Bot/states/wishlist_states.py =====
+
+"""FSM states for wishlist."""
+from aiogram.fsm.state import State, StatesGroup
+
+
+class WishlistState(StatesGroup):
+    """State machine for wishlist management."""
+
+    waiting_for_name = State()
+    waiting_for_price = State()
+    waiting_for_url = State()
+    waiting_for_category = State()
+
+
+class WishlistBytReminderState(StatesGroup):
+    """State machine for BYT reminder flow."""
+
+    waiting_answer = State()
+
+
+class BytDeferState(StatesGroup):
+    """State machine for deferring BYT wishlist items."""
+
+    waiting_for_days = State()
+
+
+class WishlistSettingsState(StatesGroup):
+    """States for wishlist settings inputs."""
+
+    waiting_for_category_title = State()
+    waiting_for_removal = State()
+    waiting_for_purchased_category = State()
+    waiting_for_purchased_mode = State()
+    waiting_for_purchased_days = State()
+
+
+class BytSettingsState(StatesGroup):
+    """States for BYT settings inputs."""
+
+    waiting_for_max_defer_days = State()
+
+
+class BytTimerState(StatesGroup):
+    """States for BYT timer settings inputs."""
+
+    waiting_for_removal = State()
+    waiting_for_time_add = State()
+    waiting_for_hour = State()
+    waiting_for_minute = State()
+
+
+===== Bot/utils/__init__.py =====
+
+
+
+===== Bot/utils/datetime_utils.py =====
+
+"""Datetime utilities for the bot."""
+from datetime import datetime, timedelta
+
+from Bot.config import settings
+
+
+def now_tz() -> datetime:
+    """Return current datetime in configured timezone."""
+
+    return datetime.now(tz=settings.TIMEZONE)
+
+
+def current_month_str(now: datetime | None = None) -> str:
+    """Return current month label as YYYY-MM using configured timezone."""
+
+    current = now or now_tz()
+    return f"{current.year:04d}-{current.month:02d}"
+
+
+def add_one_month(source: datetime) -> datetime:
+    """Add one calendar month to datetime without external dependencies."""
+
+    year = source.year + (source.month // 12)
+    month = 1 if source.month == 12 else source.month + 1
+    last_day = (
+        (source.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    ).day
+    day = min(source.day, last_day)
+    return source.replace(year=year, month=month, day=day)
+
+
+===== Bot/utils/logging.py =====
+
+"""Logging utilities."""
+import logging
+
+from Bot.config.logging_config import setup_logging
+
+
+def init_logging() -> logging.Logger:
+    """Initialize logging and return module logger.
+
+    Returns:
+        logging.Logger: Configured logger instance.
+    """
+
+    setup_logging()
+    return logging.getLogger(__name__)
+
+
+===== Bot/utils/savings.py =====
+
+"""Savings utility helpers."""
+from typing import Any, Dict, List, Tuple
+
+
+def format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
+    """Format savings summary for user message."""
+
+    if not savings:
+        return "Пока нет накоплений."
+
+    lines: List[str] = []
+    for category, data in savings.items():
+        current = data.get("current", 0)
+        goal = data.get("goal", 0)
+        purpose = data.get("purpose", "")
+        line = f"{category}: {current:.2f}"
+        if goal and goal > 0:
+            progress = min(current / goal * 100, 100)
+            extra = f" (цель {goal:.2f} для '{purpose}', прогресс {progress:.1f}%)"
+            line = f"{line}{extra}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def find_reached_goal(
+    savings: Dict[str, Dict[str, Any]]
+) -> Tuple[str, Dict[str, Any]] | Tuple[None, None]:
+    """Find first saving goal that has been reached."""
+
+    for category, data in savings.items():
+        current = data.get("current", 0)
+        goal = data.get("goal", 0)
+        if goal and current >= goal:
+            return category, data
+    return None, None
+
+
+===== Bot/utils/ui_cleanup.py =====
+
+import logging
+from typing import Iterable, List, Optional
+
+from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) -> None:
+    """Track a UI message id for later cleanup."""
+
+    data = await state.get_data()
+    ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    if message_id not in ids:
+        ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
+    current_chat_id = data.get("ui_chat_id")
+    await state.update_data(
+        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
+        ui_tracked_message_ids=ids,
+    )
+
+
+async def ui_register_protected_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    """Track a UI message id that should never be deleted."""
+
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
+    """Track a user message id for later cleanup."""
+
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_set_welcome_message(
+    bot: Bot, state: FSMContext, chat_id: int, text: str
+) -> int:
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    if welcome_id is not None:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=int(welcome_id),
+                text=text,
+            )
+            LOGGER.info(
+                "Reused welcome message (chat_id=%s, message_id=%s)",
+                chat_id,
+                welcome_id,
+            )
+            return int(welcome_id)
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                LOGGER.info(
+                    "Welcome message already up to date (chat_id=%s, message_id=%s)",
+                    chat_id,
+                    welcome_id,
+                )
+                return int(welcome_id)
+            LOGGER.warning(
+                "Failed to edit welcome message (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                welcome_id,
+                exc,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Unexpected error editing welcome message (chat_id=%s, message_id=%s)",
+                chat_id,
+                welcome_id,
+                exc_info=True,
+            )
+    sent = await bot.send_message(chat_id=chat_id, text=text)
+    await state.update_data(
+        ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
+    )
+    LOGGER.info(
+        "Created welcome message (chat_id=%s, message_id=%s)",
+        chat_id,
+        sent.message_id,
+    )
+    if welcome_id is not None and int(welcome_id) != int(sent.message_id):
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=int(welcome_id))
+        except TelegramBadRequest as exc:
+            LOGGER.warning(
+                "Failed to delete previous welcome message (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                welcome_id,
+                exc,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Unexpected error deleting previous welcome message (chat_id=%s, message_id=%s)",
+                chat_id,
+                welcome_id,
+                exc_info=True,
+            )
+    return int(sent.message_id)
+
+
+async def ui_set_settings_mode_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_track_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_cleanup_to_context(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    context_name: str,
+    keep_ids: List[int] | None = None,
+) -> None:
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    legacy_ids: List[int] = list(data.get("ui_message_ids") or [])
+    combined_ids = list(dict.fromkeys([*legacy_ids, *tracked_ids]))
+
+    keep_id_set = {int(welcome_id)} if welcome_id else set()
+    if keep_ids:
+        keep_id_set.update(int(item) for item in keep_ids if item is not None)
+    delete_ids = [int(mid) for mid in tracked_ids if int(mid) not in keep_id_set]
+
+    for message_id in delete_ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except TelegramBadRequest as exc:
+            LOGGER.warning(
+                "Failed to delete message (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+                exc_info=True,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Unexpected error deleting message (chat_id=%s, message_id=%s)",
+                chat_id,
+                message_id,
+            )
+
+    remaining_ids = [mid for mid in combined_ids if int(mid) in keep_id_set]
+    await state.update_data(
+        ui_tracked_message_ids=[],
+    )
+
+
+async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
+    data = await state.get_data()
+    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
+    if chat_id is None:
+        return
+    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
+
+
+===== Bot/utils/ui_flow.py =====
+
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from aiogram import Bot
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
+
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_get(state: FSMContext) -> dict[str, Any]:
+    data = await state.get_data()
+    return {
+        "greeting_id": data.get("ui_welcome_message_id"),
+        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
+    }
+
+
+async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
+    ui = await ui_get(state)
+    if ui.get("greeting_id") is not None:
+        return
+    # greeting_id не удаляем никогда
+    await state.update_data(ui_welcome_message_id=int(message_id))
+
+
+async def ui_track(
+    state: FSMContext, message_id: int, kind: str, screen: str | None
+) -> None:
+    ui = await ui_get(state)
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    tracked.append(int(message_id))
+    if len(tracked) > 300:
+        tracked = tracked[-300:]
+    await state.update_data(ui_tracked_message_ids=tracked)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, screen: str, message_id: int
+) -> None:
+    await ui_track(state, message_id, kind="ui", screen=screen)
+
+
+async def ui_cleanup_for_transition(
+    bot: Bot, state: FSMContext, chat_id: int, keep_greeting: bool = True
+) -> None:
+    ui = await ui_get(state)
+    greeting_id = ui.get("greeting_id") if keep_greeting else None
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    ids = [int(item) for item in tracked]
+    for message_id in ids:
+        if greeting_id and message_id == greeting_id:
+            continue
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except TelegramBadRequest as exc:
+            LOGGER.warning(
+                "Failed to delete message (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+                exc_info=True,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Unexpected error deleting message (chat_id=%s, message_id=%s)",
+                chat_id,
+                message_id,
+                exc_info=True,
+            )
+    await state.update_data(ui_tracked_message_ids=[])
+
+
+async def ui_transition(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    new_screen: str,
+    send_screen: Callable[[], Awaitable[Message]],
+) -> Message:
+    await ui_cleanup_for_transition(bot, state, chat_id, keep_greeting=True)
+    sent = await send_screen()
+    await ui_set_screen_message(state, new_screen, sent.message_id)
+    return sent
+
+
+===== __init__.py =====
+
+
+
+===== tests/__init__.py =====
+
+
+
+===== tests/integration/__init__.py =====
+
+
+
+===== tests/integration/test_database.py =====
+
+"""Integration tests for database operations."""
+from Bot.database.crud import FinanceDatabase
+
+
+def setup_module(module) -> None:  # noqa: D401
+    """Clean database tables before tests."""
+
+    db = FinanceDatabase()
+    cursor = db.connection.cursor()
+    cursor.execute("DELETE FROM wishes")
+    cursor.execute("DELETE FROM purchases")
+    cursor.execute("DELETE FROM savings")
+    db.connection.commit()
+
+
+def test_add_and_get_wish() -> None:
+    """Add wish and retrieve it."""
+
+    db = FinanceDatabase()
+    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
+    wish = db.get_wish(wish_id)
+    assert wish is not None
+    assert wish["name"] == "Test"
+
+
+def test_update_saving_and_purchase() -> None:
+    """Update savings and add purchase entry."""
+
+    db = FinanceDatabase()
+    db.update_saving(1, "Инструменты", 20.0)
+    savings = db.get_user_savings(1)
+    assert savings.get("Инструменты", {}).get("current") == 20.0
+    db.add_purchase(1, "Test", 10.0, "Инструменты")
+    purchases = db.get_purchases_by_user(1)
+    assert len(purchases) == 1
+
+
+===== tests/run_all_tests.py =====
+
+"""Run all pytest suites."""
+import pytest
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main(["-q", "tests"]))
+
+
+===== tests/test_runner.py =====
+
+"""Helper to run tests programmatically."""
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    """Run pytest suite and return exit code."""
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", str(root / "tests")], check=False)
+    return result.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+
+===== tests/unit/__init__.py =====
+
+
+
+===== tests/unit/test_handlers.py =====
+
+"""Tests for handler utilities."""
+from Bot.handlers.finances import _format_savings_summary, _find_reached_goal
+
+
+def test_format_savings_summary_empty() -> None:
+    """Empty savings returns default message."""
+
+    assert _format_savings_summary({}) == "Пока нет накоплений."
+
+
+def test_find_reached_goal() -> None:
+    """Goal detection returns first satisfied category."""
+
+    savings = {
+        "категория": {"current": 150, "goal": 100, "purpose": "test"},
+        "другая": {"current": 50, "goal": 100, "purpose": "none"},
+    }
+    category, data = _find_reached_goal(savings)
+    assert category == "категория"
+    assert data["goal"] == 100
+
+
+===== tests/unit/test_household_payments.py =====
+
+"""Tests for household payments workflow."""
+from datetime import datetime
+
+import pytest
+
+from Bot.config import settings
+from Bot.database.crud import FinanceDatabase
+from Bot.handlers.household_payments import reset_household_cycle_if_needed
+from Bot.utils.datetime_utils import current_month_str
+
+
+@pytest.mark.asyncio
+async def test_reset_cycle_creates_statuses_after_threshold() -> None:
+    """Statuses should appear after threshold date only once."""
+
+    db = FinanceDatabase()
+    user_id = 99991
+    month = "2025-01"
+    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
+    db.connection.execute(
+        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    before_threshold = datetime(2025, 1, 5, 10, 0, tzinfo=settings.TIMEZONE)
+    await reset_household_cycle_if_needed(user_id, db, now=before_threshold)
+    assert not await db.household_status_exists(user_id, month)
+
+    after_threshold = datetime(2025, 1, 6, 12, 0, tzinfo=settings.TIMEZONE)
+    await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
+    assert await db.has_unpaid_household_questions(user_id, month)
+
+    await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
+    cursor = db.connection.execute(
+        "SELECT COUNT(*) FROM household_payments WHERE user_id = ? AND month = ?",
+        (user_id, month),
+    )
+    assert cursor.fetchone()[0] == len(items)
+
+
+@pytest.mark.asyncio
+async def test_mark_and_check_unpaid_questions() -> None:
+    """Marking paid questions should update unpaid check."""
+
+    db = FinanceDatabase()
+    user_id = 99992
+    month = current_month_str(datetime(2025, 2, 6, 12, 0, tzinfo=settings.TIMEZONE))
+    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
+    db.connection.execute(
+        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    await db.init_household_questions_for_month(user_id, month)
+    assert await db.has_unpaid_household_questions(user_id, month)
+
+    for item in items:
+        await db.mark_household_question_paid(user_id, month, str(item.get("code")))
+    assert not await db.has_unpaid_household_questions(user_id, month)
+
+
+@pytest.mark.asyncio
+async def test_question_flow_and_savings_update() -> None:
+    """Yes/No answers adjust savings and skip paid questions."""
+
+    db = FinanceDatabase()
+    user_id = 99993
+    month = current_month_str(datetime(2025, 3, 6, 12, 0, tzinfo=settings.TIMEZONE))
+    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
+    db.connection.execute("DELETE FROM savings WHERE user_id = ? AND category = 'быт'", (user_id,))
+    db.connection.execute(
+        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    db.update_saving(user_id, "быт", 5000)
+    await db.init_household_questions_for_month(user_id, month)
+
+    unpaid = await db.get_unpaid_household_questions(user_id, month)
+    assert unpaid
+    first_code = str(unpaid[0])
+    first_item = next(item for item in items if str(item.get("code")) == first_code)
+    amount = float(first_item.get("amount") or 0)
+
+    changed = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="yes",
+    )
+    assert changed is True
+
+    savings_map = db.get_user_savings_map(user_id)
+    assert savings_map.get("быт") == 5000 - amount
+
+    changed_again = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="yes",
+    )
+    assert changed_again is False
+
+    changed_back = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="no",
+    )
+    assert changed_back is True
+    savings_map = db.get_user_savings_map(user_id)
+    assert savings_map.get("быт") == 5000
+
+
+===== tests/unit/test_household_renderers.py =====
+
+"""Tests for household renderers."""
+
+from Bot.renderers.household import format_household_items, render_household_questions_text
+
+
+def test_render_questions_text_marks_answers() -> None:
+    questions = [
+        {"code": "q1", "text": "Оплатил интернет?", "amount": 100},
+        {"code": "q2", "text": "Оплатил свет?", "amount": 200},
+    ]
+    answers = {"q1": "yes", "q2": "no"}
+    text = render_household_questions_text("2025-02", questions, answers, current_index=1)
+    assert "✅" in text
+    assert "❌" in text
+    assert "2025-02" in text
+
+
+def test_format_household_items() -> None:
+    items = [
+        {"code": "q1", "text": "Интернет?", "amount": 100},
+        {"code": "q2", "text": "Свет?", "amount": 200},
+    ]
+    text = format_household_items(items, unpaid_set={"q2"})
+    assert "✅" in text
+    assert "❌" in text
+    assert "Интернет" in text
+
+
+===== tests/unit/test_household_services.py =====
+
+"""Tests for household services."""
+
+from Bot.services.household import (
+    build_household_questions,
+    get_current_question,
+    get_next_index,
+    get_previous_index,
+    should_ignore_answer,
+    update_flow_state,
+)
+
+
+def test_flow_state_and_navigation() -> None:
+    questions = build_household_questions(
+        [
+            {"code": "q1", "text": "Первый?", "amount": 100},
+            {"code": "q2", "text": "Второй?", "amount": 200},
+        ]
+    )
+    flow = update_flow_state(
+        month="2025-01",
+        questions=questions,
+        current_step_index=0,
+        answers={},
+        processed_steps=[],
+    )
+    assert flow.current_question_code == "q1"
+    assert get_current_question(questions, 1)["code"] == "q2"
+    assert get_next_index(0, questions) == 1
+    assert get_next_index(1, questions) == 2
+    assert get_previous_index(0) == 0
+    assert get_previous_index(1) == 0
+
+
+def test_idempotency_check() -> None:
+    answers = {"q1": "yes"}
+    processed_steps = {"q1"}
+    assert should_ignore_answer(answers, processed_steps, "q1", "yes") is True
+    assert should_ignore_answer(answers, processed_steps, "q1", "no") is False
+    assert should_ignore_answer(answers, processed_steps, "q2", "yes") is False
+
+
+===== tests/unit/test_imports.py =====
+
+"""Basic import tests."""
+
+
+def test_import_main() -> None:
+    """Ensure main module is importable."""
+
+    import Bot.main  # noqa: F401
+
+
+def test_import_handlers() -> None:
+    """Ensure handlers modules are importable."""
+
+    import Bot.handlers.start  # noqa: F401
+    import Bot.handlers.finances  # noqa: F401
+    import Bot.handlers.household_payments  # noqa: F401
+    import Bot.handlers.wishlist  # noqa: F401
+    import Bot.handlers.callbacks  # noqa: F401
+    import Bot.handlers.common  # noqa: F401
+
+
+===== tests/unit/test_ui_cleanup.py =====
+
+"""Tests for UI cleanup utilities."""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+import asyncio
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+if "aiogram" not in sys.modules:
+    aiogram = types.ModuleType("aiogram")
+
+    class DummyRouter:
+        def message(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class DummyF:
+        class _Field:
+            def __eq__(self, other):
+                return ("eq", other)
+
+        text = _Field()
+
+    class Bot:
+        pass
+
+    aiogram.F = DummyF()
+    aiogram.Router = DummyRouter
+    aiogram.Bot = Bot
+
+    exceptions = types.ModuleType("aiogram.exceptions")
+
+    class TelegramBadRequest(Exception):
+        pass
+
+    exceptions.TelegramBadRequest = TelegramBadRequest
+    aiogram.exceptions = exceptions
+
+    filters = types.ModuleType("aiogram.filters")
+
+    class Command:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    filters.Command = Command
+    aiogram.filters = filters
+
+    fsm = types.ModuleType("aiogram.fsm")
+    fsm_context = types.ModuleType("aiogram.fsm.context")
+
+    class FSMContext:
+        pass
+
+    fsm_context.FSMContext = FSMContext
+    fsm.context = fsm_context
+    aiogram.fsm = fsm
+
+    types_mod = types.ModuleType("aiogram.types")
+
+    class Message:
+        pass
+
+    class ReplyKeyboardMarkup:
+        pass
+
+    class InlineKeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class InlineKeyboardMarkup:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class KeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    types_mod.Message = Message
+    types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
+    types_mod.InlineKeyboardButton = InlineKeyboardButton
+    types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
+    types_mod.KeyboardButton = KeyboardButton
+    aiogram.types = types_mod
+
+    sys.modules["aiogram"] = aiogram
+    sys.modules["aiogram.exceptions"] = exceptions
+    sys.modules["aiogram.filters"] = filters
+    sys.modules["aiogram.fsm"] = fsm
+    sys.modules["aiogram.fsm.context"] = fsm_context
+    sys.modules["aiogram.types"] = types_mod
+
+from Bot.handlers.start import back_to_main
+from Bot.utils.ui_cleanup import ui_cleanup_to_context, ui_register_message
+
+
+class DummyState:
+    """Minimal FSMContext stand-in for unit tests."""
+
+    def __init__(self, initial=None) -> None:
+        self.data = dict(initial or {})
+
+    async def get_data(self) -> dict:
+        return dict(self.data)
+
+    async def update_data(self, **kwargs) -> None:
+        self.data.update(kwargs)
+
+
+class DummyBot:
+    """Minimal bot mock with async delete_message."""
+
+    def __init__(self) -> None:
+        self.delete_message = AsyncMock()
+
+
+def test_ui_cleanup_keeps_welcome() -> None:
+    """Cleanup removes tracked messages while keeping welcome."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_register_message(state, 1, 10)
+        await ui_register_message(state, 1, 11)
+        await ui_register_message(state, 1, 12)
+        await state.update_data(ui_welcome_message_id=11)
+
+        bot = DummyBot()
+        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU", keep_ids=[11])
+
+        deleted_ids = {
+            call.kwargs["message_id"] for call in bot.delete_message.call_args_list
+        }
+        assert deleted_ids == {10, 12}
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == [11]
+        assert data["ui_message_ids"] == [11]
+
+    asyncio.run(run_test())
+
+
+def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
+    """back_to_main deletes user message, cleans UI, and renders menu."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 55})
+        cleanup_mock = AsyncMock()
+        set_screen_mock = AsyncMock()
+        build_menu_mock = AsyncMock(return_value=MagicMock())
+
+        monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
+        monkeypatch.setattr("Bot.handlers.start.ui_set_screen_message", set_screen_mock)
+        monkeypatch.setattr(
+            "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
+        )
+
+        sent_message = SimpleNamespace(chat=SimpleNamespace(id=1), message_id=99)
+        message = SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            from_user=SimpleNamespace(id=2),
+            message_id=10,
+            bot=SimpleNamespace(),
+        )
+        message.delete = AsyncMock()
+        message.answer = AsyncMock(return_value=sent_message)
+
+        await back_to_main(message, state)
+
+        message.delete.assert_awaited_once()
+        cleanup_mock.assert_awaited_once()
+        _, kwargs = cleanup_mock.await_args
+        assert kwargs["keep_ids"] == [55]
+        build_menu_mock.assert_awaited_once_with(2)
+        set_screen_mock.assert_awaited_once_with(state, 1, 99)
+
+    asyncio.run(run_test())
+
+
+===== tests/unit/test_utils.py =====
+
+"""Utility tests."""
+from Bot.utils.logging import init_logging
+
+
+def test_init_logging_returns_logger() -> None:
+    """init_logging should return a logger instance."""
+
+    logger = init_logging()
+    assert logger.name == "Bot.utils.logging"
+
+
+===== utils/__init__.py =====
+
+from Bot.utils import *  # noqa: F401,F403
+
+
+===== utils/logging.py =====
+
+from Bot.utils.logging import *  # noqa: F401,F403
+
+

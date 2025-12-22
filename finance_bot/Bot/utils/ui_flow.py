@@ -12,12 +12,10 @@ LOGGER = logging.getLogger(__name__)
 
 async def ui_get(state: FSMContext) -> dict[str, Any]:
     data = await state.get_data()
-    ui = dict(data.get("ui") or {})
-    ui.setdefault("greeting_id", None)
-    ui.setdefault("current_screen", None)
-    ui.setdefault("screen_message_id", None)
-    ui.setdefault("tracked_ids", [])
-    return ui
+    return {
+        "greeting_id": data.get("ui_welcome_message_id"),
+        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
+    }
 
 
 async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
@@ -25,37 +23,24 @@ async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
     if ui.get("greeting_id") is not None:
         return
     # greeting_id не удаляем никогда
-    ui["greeting_id"] = int(message_id)
-    await state.update_data(ui=ui)
+    await state.update_data(ui_welcome_message_id=int(message_id))
 
 
 async def ui_track(
     state: FSMContext, message_id: int, kind: str, screen: str | None
 ) -> None:
     ui = await ui_get(state)
-    tracked: list[dict[str, Any]] = list(ui.get("tracked_ids") or [])
-    tracked.append({"id": int(message_id), "kind": kind, "screen": screen})
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    tracked.append(int(message_id))
     if len(tracked) > 300:
         tracked = tracked[-300:]
-    ui["tracked_ids"] = tracked
-    await state.update_data(ui=ui)
+    await state.update_data(ui_tracked_message_ids=tracked)
 
 
 async def ui_set_screen_message(
     state: FSMContext, screen: str, message_id: int
 ) -> None:
-    ui = await ui_get(state)
-    previous = ui.get("screen_message_id")
-    greeting_id = ui.get("greeting_id")
-    if previous and previous != greeting_id:
-        tracked: list[dict[str, Any]] = list(ui.get("tracked_ids") or [])
-        tracked.append({"id": int(previous), "kind": "ui", "screen": ui.get("current_screen")})
-        if len(tracked) > 300:
-            tracked = tracked[-300:]
-        ui["tracked_ids"] = tracked
-    ui["screen_message_id"] = int(message_id)
-    ui["current_screen"] = screen
-    await state.update_data(ui=ui)
+    await ui_track(state, message_id, kind="ui", screen=screen)
 
 
 async def ui_cleanup_for_transition(
@@ -63,11 +48,8 @@ async def ui_cleanup_for_transition(
 ) -> None:
     ui = await ui_get(state)
     greeting_id = ui.get("greeting_id") if keep_greeting else None
-    tracked: list[dict[str, Any]] = list(ui.get("tracked_ids") or [])
-    screen_message_id = ui.get("screen_message_id")
-    ids = [int(item.get("id")) for item in tracked]
-    if screen_message_id:
-        ids.append(int(screen_message_id))
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    ids = [int(item) for item in tracked]
     for message_id in ids:
         if greeting_id and message_id == greeting_id:
             continue
@@ -79,6 +61,7 @@ async def ui_cleanup_for_transition(
                 chat_id,
                 message_id,
                 exc,
+                exc_info=True,
             )
         except Exception:
             LOGGER.warning(
@@ -87,9 +70,7 @@ async def ui_cleanup_for_transition(
                 message_id,
                 exc_info=True,
             )
-    ui["tracked_ids"] = []
-    ui["screen_message_id"] = None
-    await state.update_data(ui=ui)
+    await state.update_data(ui_tracked_message_ids=[])
 
 
 async def ui_transition(

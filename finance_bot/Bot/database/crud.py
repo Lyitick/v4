@@ -1177,6 +1177,32 @@ class FinanceDatabase:
                 error,
             )
 
+    def _update_saving_in_transaction(
+        self,
+        cursor: sqlite3.Cursor,
+        user_id: int,
+        category: str,
+        amount_delta: float,
+    ) -> None:
+        cursor.execute(
+            "SELECT id, current FROM savings WHERE user_id = ? AND category = ?",
+            (user_id, category),
+        )
+        row = cursor.fetchone()
+        delta = self._to_float(amount_delta)
+        if row:
+            current = self._to_float(row["current"])
+            new_value = current + delta
+            cursor.execute(
+                "UPDATE savings SET current = ? WHERE id = ?",
+                (new_value, row["id"]),
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO savings (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
+                (user_id, category, delta),
+            )
+
     def decrease_savings(self, user_id: int, category: str, amount: float) -> None:
         """Decrease savings for category by amount."""
 
@@ -1425,12 +1451,12 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                UPDATE household_payment_items
-                SET paid_month = ?, is_paid = 0
+                INSERT OR IGNORE INTO household_payments (user_id, month, question_code, is_paid)
+                SELECT ?, ?, code, 0
+                FROM household_payment_items
                 WHERE user_id = ? AND is_active = 1
-                  AND (paid_month IS NULL OR paid_month != ?)
                 """,
-                (month, user_id, month),
+                (user_id, month, user_id),
             )
             self.connection.commit()
             LOGGER.info(
@@ -1453,11 +1479,12 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                UPDATE household_payment_items
-                SET paid_month = ?, is_paid = 1
-                WHERE user_id = ? AND code = ? AND is_active = 1
+                INSERT INTO household_payments (user_id, month, question_code, is_paid)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(user_id, month, question_code)
+                DO UPDATE SET is_paid = excluded.is_paid
                 """,
-                (month, user_id, question_code),
+                (user_id, month, question_code),
             )
             self.connection.commit()
             LOGGER.info(
@@ -1484,11 +1511,12 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                UPDATE household_payment_items
-                SET paid_month = ?, is_paid = 0
-                WHERE user_id = ? AND code = ? AND is_active = 1
+                INSERT INTO household_payments (user_id, month, question_code, is_paid)
+                VALUES (?, ?, ?, 0)
+                ON CONFLICT(user_id, month, question_code)
+                DO UPDATE SET is_paid = excluded.is_paid
                 """,
-                (month, user_id, question_code),
+                (user_id, month, question_code),
             )
             self.connection.commit()
             LOGGER.info(
@@ -1506,6 +1534,72 @@ class FinanceDatabase:
                 error,
             )
 
+    def apply_household_payment_answer(
+        self,
+        user_id: int,
+        month: str,
+        question_code: str,
+        amount: float | None,
+        answer: str,
+    ) -> bool:
+        """Apply household answer and savings update atomically.
+
+        Returns True if state changed, False if it was already applied.
+        """
+
+        try:
+            cursor = self.connection.cursor()
+            self.connection.execute("BEGIN")
+            cursor.execute(
+                """
+                SELECT is_paid
+                FROM household_payments
+                WHERE user_id = ? AND month = ? AND question_code = ?
+                """,
+                (user_id, month, question_code),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                cursor.execute(
+                    """
+                    INSERT INTO household_payments (user_id, month, question_code, is_paid)
+                    VALUES (?, ?, ?, 0)
+                    """,
+                    (user_id, month, question_code),
+                )
+                current_paid = 0
+            else:
+                current_paid = int(row["is_paid"])
+
+            target_paid = 1 if answer == "yes" else 0
+            if current_paid == target_paid:
+                self.connection.commit()
+                return False
+
+            cursor.execute(
+                """
+                UPDATE household_payments
+                SET is_paid = ?
+                WHERE user_id = ? AND month = ? AND question_code = ?
+                """,
+                (target_paid, user_id, month, question_code),
+            )
+            if amount is not None:
+                delta = -abs(amount) if answer == "yes" else abs(amount)
+                self._update_saving_in_transaction(cursor, user_id, "быт", delta)
+            self.connection.commit()
+            return True
+        except sqlite3.Error as error:
+            self.connection.rollback()
+            LOGGER.error(
+                "Failed to apply household answer for user %s month %s code %s: %s",
+                user_id,
+                month,
+                question_code,
+                error,
+            )
+            return False
+
     async def get_unpaid_household_questions(self, user_id: int, month: str) -> List[str]:
         """Get unpaid household question codes for user and month."""
 
@@ -1513,14 +1607,18 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                SELECT code
-                FROM household_payment_items
-                WHERE user_id = ?
-                  AND is_active = 1
-                  AND NOT (paid_month = ? AND is_paid = 1)
-                ORDER BY position, id
+                SELECT items.code
+                FROM household_payment_items AS items
+                LEFT JOIN household_payments AS payments
+                  ON payments.user_id = items.user_id
+                 AND payments.month = ?
+                 AND payments.question_code = items.code
+                WHERE items.user_id = ?
+                  AND items.is_active = 1
+                  AND COALESCE(payments.is_paid, 0) = 0
+                ORDER BY items.position, items.id
                 """,
-                (user_id, month),
+                (month, user_id),
             )
             rows = cursor.fetchall()
             return [row["code"] for row in rows]
@@ -1542,19 +1640,18 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                SELECT code, paid_month, is_paid
-                FROM household_payment_items
-                WHERE user_id = ? AND is_active = 1
+                SELECT items.code, COALESCE(payments.is_paid, 0) AS is_paid
+                FROM household_payment_items AS items
+                LEFT JOIN household_payments AS payments
+                  ON payments.user_id = items.user_id
+                 AND payments.month = ?
+                 AND payments.question_code = items.code
+                WHERE items.user_id = ? AND items.is_active = 1
                 """,
-                (user_id,),
+                (month, user_id),
             )
             rows = cursor.fetchall()
-            return {
-                row["code"]: int(row["is_paid"])
-                if row["paid_month"] == month
-                else 0
-                for row in rows
-            }
+            return {row["code"]: int(row["is_paid"]) for row in rows}
         except sqlite3.Error as error:
             LOGGER.error(
                 "Failed to get household payment status for user %s month %s: %s",
@@ -1572,13 +1669,17 @@ class FinanceDatabase:
             cursor.execute(
                 """
                 SELECT 1
-                FROM household_payment_items
-                WHERE user_id = ?
-                  AND is_active = 1
-                  AND NOT (paid_month = ? AND is_paid = 1)
+                FROM household_payment_items AS items
+                LEFT JOIN household_payments AS payments
+                  ON payments.user_id = items.user_id
+                 AND payments.month = ?
+                 AND payments.question_code = items.code
+                WHERE items.user_id = ?
+                  AND items.is_active = 1
+                  AND COALESCE(payments.is_paid, 0) = 0
                 LIMIT 1
                 """,
-                (user_id, month),
+                (month, user_id),
             )
             return cursor.fetchone() is not None
         except sqlite3.Error as error:
@@ -1600,13 +1701,17 @@ class FinanceDatabase:
             cursor.execute(
                 """
                 SELECT 1
-                FROM household_payment_items
-                WHERE user_id = ?
-                  AND is_active = 1
-                  AND NOT (paid_month = ? AND is_paid = 1)
+                FROM household_payment_items AS items
+                LEFT JOIN household_payments AS payments
+                  ON payments.user_id = items.user_id
+                 AND payments.month = ?
+                 AND payments.question_code = items.code
+                WHERE items.user_id = ?
+                  AND items.is_active = 1
+                  AND COALESCE(payments.is_paid, 0) = 0
                 LIMIT 1
                 """,
-                (user_id, month),
+                (month, user_id),
             )
             return cursor.fetchone() is not None
         except sqlite3.Error as error:
@@ -1625,11 +1730,20 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 """
-                UPDATE household_payment_items
-                SET paid_month = ?, is_paid = 0
+                UPDATE household_payments
+                SET is_paid = 0
+                WHERE user_id = ? AND month = ?
+                """,
+                (user_id, month),
+            )
+            cursor.execute(
+                """
+                INSERT OR IGNORE INTO household_payments (user_id, month, question_code, is_paid)
+                SELECT ?, ?, code, 0
+                FROM household_payment_items
                 WHERE user_id = ? AND is_active = 1
                 """,
-                (month, user_id),
+                (user_id, month, user_id),
             )
             self.connection.commit()
             LOGGER.info(

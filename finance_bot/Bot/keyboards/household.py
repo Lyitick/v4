@@ -24,14 +24,20 @@ def household_payments_answer_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def household_payments_inline_keyboard(show_back: bool) -> InlineKeyboardMarkup:
+def household_payments_inline_keyboard(
+    show_back: bool, question_code: str | None = None
+) -> InlineKeyboardMarkup:
     """Inline keyboard with Yes/No/Back options for household payments."""
 
+    suffix = f":{question_code}" if question_code else ""
     buttons = [
         [
-            InlineKeyboardButton(text="Да", callback_data="hh_pay:yes"),
-            InlineKeyboardButton(text="Нет", callback_data="hh_pay:no"),
-            InlineKeyboardButton(text="Назад", callback_data="hh_pay:back"),
+            InlineKeyboardButton(text="Да", callback_data=f"hh_pay:yes{suffix}"),
+            InlineKeyboardButton(text="Нет", callback_data=f"hh_pay:no{suffix}"),
         ]
     ]
+    if show_back:
+        buttons[0].append(
+            InlineKeyboardButton(text="Назад", callback_data=f"hh_pay:back{suffix}")
+        )
     return InlineKeyboardMarkup(inline_keyboard=buttons)

@@ -1,5 +1,5 @@
 import logging
-from typing import Iterable, List, Optional
+from typing import List
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
@@ -33,9 +33,56 @@ async def ui_register_protected_message(
 
 
 async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
-    """Track a user message id for later cleanup."""
+    """Do not track user messages for later cleanup."""
 
-    await ui_register_message(state, chat_id, message_id)
+    data = await state.get_data()
+    if data.get("ui_chat_id") is None:
+        await state.update_data(ui_chat_id=chat_id)
+
+
+async def ui_safe_delete_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    log_context: str | None = None,
+) -> bool:
+    context_label = f" ({log_context})" if log_context else ""
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        return True
+    except TelegramBadRequest as exc:
+        text = str(exc).lower()
+        if (
+            "message to delete not found" in text
+            or "message can't be deleted" in text
+            or "message can’t be deleted" in text
+        ):
+            LOGGER.debug(
+                "UI safe delete skipped%s (chat_id=%s, message_id=%s): %s",
+                context_label,
+                chat_id,
+                message_id,
+                exc,
+            )
+            return False
+        LOGGER.error(
+            "UI safe delete failed%s (chat_id=%s, message_id=%s): %s",
+            context_label,
+            chat_id,
+            message_id,
+            exc,
+            exc_info=True,
+        )
+        return False
+    except Exception:  # noqa: BLE001
+        LOGGER.error(
+            "UI safe delete error%s (chat_id=%s, message_id=%s)",
+            context_label,
+            chat_id,
+            message_id,
+            exc_info=True,
+        )
+        return False
 
 
 async def ui_set_welcome_message(
@@ -50,18 +97,12 @@ async def ui_set_welcome_message(
                 message_id=int(welcome_id),
                 text=text,
             )
-            LOGGER.info(
-                "Reused welcome message (chat_id=%s, message_id=%s)",
-                chat_id,
-                welcome_id,
-            )
+            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id)
             return int(welcome_id)
         except TelegramBadRequest as exc:
             if "message is not modified" in str(exc).lower():
                 LOGGER.info(
-                    "Welcome message already up to date (chat_id=%s, message_id=%s)",
-                    chat_id,
-                    welcome_id,
+                    "WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id
                 )
                 return int(welcome_id)
             LOGGER.warning(
@@ -81,28 +122,8 @@ async def ui_set_welcome_message(
     await state.update_data(
         ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
     )
-    LOGGER.info(
-        "Created welcome message (chat_id=%s, message_id=%s)",
-        chat_id,
-        sent.message_id,
-    )
-    if welcome_id is not None and int(welcome_id) != int(sent.message_id):
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=int(welcome_id))
-        except TelegramBadRequest as exc:
-            LOGGER.warning(
-                "Failed to delete previous welcome message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                welcome_id,
-                exc,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error deleting previous welcome message (chat_id=%s, message_id=%s)",
-                chat_id,
-                welcome_id,
-                exc_info=True,
-            )
+    LOGGER.info("WELCOME recreated (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
+    # DO NOT DELETE WITHOUT USER CONFIRMATION.
     return int(sent.message_id)
 
 
@@ -135,35 +156,44 @@ async def ui_cleanup_to_context(
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    legacy_ids: List[int] = list(data.get("ui_message_ids") or [])
-    combined_ids = list(dict.fromkeys([*legacy_ids, *tracked_ids]))
-
     keep_id_set = {int(welcome_id)} if welcome_id else set()
     if keep_ids:
         keep_id_set.update(int(item) for item in keep_ids if item is not None)
     delete_ids = [int(mid) for mid in tracked_ids if int(mid) not in keep_id_set]
-
+    deleted_count = 0
     for message_id in delete_ids:
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except TelegramBadRequest as exc:
-            LOGGER.warning(
-                "Failed to delete message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-                exc_info=True,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error deleting message (chat_id=%s, message_id=%s)",
-                chat_id,
-                message_id,
-            )
+        deleted = await ui_safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            log_context=f"context={context_name}",
+        )
+        if deleted:
+            deleted_count += 1
 
-    remaining_ids = [mid for mid in combined_ids if int(mid) in keep_id_set]
+    remaining_ids: List[int] = []
+    for message_id in tracked_ids:
+        normalized = int(message_id)
+        if normalized in keep_id_set and normalized not in remaining_ids:
+            remaining_ids.append(normalized)
+    if keep_ids:
+        for message_id in keep_ids:
+            normalized = int(message_id)
+            if normalized in keep_id_set and normalized not in remaining_ids:
+                remaining_ids.append(normalized)
+    if welcome_id is not None:
+        normalized = int(welcome_id)
+        if normalized not in remaining_ids:
+            remaining_ids.append(normalized)
+
+    LOGGER.info(
+        "UI_CLEANUP context=%s deleted=%s kept=%s",
+        context_name,
+        deleted_count,
+        len(remaining_ids),
+    )
     await state.update_data(
-        ui_tracked_message_ids=[],
+        ui_tracked_message_ids=remaining_ids,
     )
 
 

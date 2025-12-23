@@ -2,7 +2,6 @@
 import logging
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -12,8 +11,8 @@ from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
     ui_cleanup_to_context,
     ui_render_screen,
+    ui_safe_delete_message,
     ui_set_welcome_message,
-    ui_track_message,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -30,8 +29,15 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     # после явного подтверждения пользователя.
     greeting = "Поработаем бл"
     await ui_set_welcome_message(message.bot, state, message.chat.id, greeting)
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    keep_ids = [int(welcome_id)] if welcome_id is not None else []
     await ui_cleanup_to_context(
-        message.bot, state, message.chat.id, "MAIN_MENU"
+        message.bot,
+        state,
+        message.chat.id,
+        "MAIN_MENU",
+        keep_ids=keep_ids,
     )
     await ui_render_screen(
         message.bot,
@@ -49,11 +55,12 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
 async def cmd_start(message: Message, state: FSMContext) -> None:
     """Handle /start command."""
 
-    await ui_track_message(state, message.chat.id, message.message_id)
-    try:
-        await message.delete()
-    except Exception:  # noqa: BLE001
-        LOGGER.warning("Failed to delete /start message", exc_info=True)
+    await ui_safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        log_context="cmd_start",
+    )
     await _handle_start_common(message, state)
 
 
@@ -61,7 +68,6 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 async def handle_poehali(message: Message, state: FSMContext) -> None:
     """Handle alternative start phrase."""
 
-    await ui_track_message(state, message.chat.id, message.message_id)
     await _handle_start_common(message, state)
 
 
@@ -69,7 +75,6 @@ async def handle_poehali(message: Message, state: FSMContext) -> None:
 async def cmd_cancel(message: Message, state: FSMContext) -> None:
     """Handle /cancel command."""
 
-    await ui_track_message(state, message.chat.id, message.message_id)
     await ui_cleanup_messages(message.bot, state, chat_id=message.chat.id)
     await state.clear()
     await ui_render_screen(
@@ -86,30 +91,23 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
 async def back_to_main(message: Message, state: FSMContext) -> None:
     """Return user to main menu."""
 
-    await ui_track_message(state, message.chat.id, message.message_id)
-    try:
-        await message.delete()
-        LOGGER.info(
-            "Deleted back_to_main user message (chat_id=%s, message_id=%s)",
-            message.chat.id,
-            message.message_id,
-        )
-    except TelegramBadRequest as exc:
-        LOGGER.warning(
-            "Failed to delete back_to_main user message (chat_id=%s, message_id=%s): %s",
-            message.chat.id,
-            message.message_id,
-            exc,
-        )
-    except Exception:
-        LOGGER.warning(
-            "Unexpected error deleting back_to_main user message (chat_id=%s, message_id=%s)",
-            message.chat.id,
-            message.message_id,
-            exc_info=True,
-        )
-    await ui_cleanup_messages(message.bot, state, chat_id=message.chat.id)
-    await state.clear()
+    deleted = await ui_safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        log_context="back_to_main_user_msg",
+    )
+    LOGGER.info("BACK_TO_MAIN user_msg_deleted=%s", str(deleted).lower())
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    keep_ids = [int(welcome_id)] if welcome_id is not None else []
+    await ui_cleanup_to_context(
+        message.bot,
+        state,
+        message.chat.id,
+        "MAIN_MENU",
+        keep_ids=keep_ids,
+    )
     await ui_render_screen(
         message.bot,
         state,

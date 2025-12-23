@@ -98,7 +98,12 @@ if "aiogram" not in sys.modules:
     sys.modules["aiogram.types"] = types_mod
 
 from Bot.handlers.start import back_to_main
-from Bot.utils.ui_cleanup import ui_cleanup_to_context, ui_register_message
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_to_context,
+    ui_register_message,
+    ui_set_welcome_message,
+    ui_track_message,
+)
 
 
 class DummyState:
@@ -119,6 +124,21 @@ class DummyBot:
 
     def __init__(self) -> None:
         self.delete_message = AsyncMock()
+        self.edit_message_text = AsyncMock()
+        self.send_message = AsyncMock()
+
+
+def test_ui_track_deduplicates() -> None:
+    """Tracking avoids duplicate message ids."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_track_message(state, 1, 10)
+        await ui_track_message(state, 1, 10)
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == [10]
+
+    asyncio.run(run_test())
 
 
 def test_ui_cleanup_keeps_welcome() -> None:
@@ -140,7 +160,6 @@ def test_ui_cleanup_keeps_welcome() -> None:
         assert deleted_ids == {10, 12}
         data = await state.get_data()
         assert data["ui_tracked_message_ids"] == [11]
-        assert data["ui_message_ids"] == [11]
 
     asyncio.run(run_test())
 
@@ -151,32 +170,48 @@ def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
     async def run_test() -> None:
         state = DummyState({"ui_welcome_message_id": 55})
         cleanup_mock = AsyncMock()
-        set_screen_mock = AsyncMock()
+        render_mock = AsyncMock()
         build_menu_mock = AsyncMock(return_value=MagicMock())
+        safe_delete_mock = AsyncMock(return_value=True)
 
         monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
-        monkeypatch.setattr("Bot.handlers.start.ui_set_screen_message", set_screen_mock)
+        monkeypatch.setattr("Bot.handlers.start.ui_render_screen", render_mock)
         monkeypatch.setattr(
             "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
         )
+        monkeypatch.setattr("Bot.handlers.start.ui_safe_delete_message", safe_delete_mock)
 
-        sent_message = SimpleNamespace(chat=SimpleNamespace(id=1), message_id=99)
         message = SimpleNamespace(
             chat=SimpleNamespace(id=1),
             from_user=SimpleNamespace(id=2),
             message_id=10,
             bot=SimpleNamespace(),
         )
-        message.delete = AsyncMock()
-        message.answer = AsyncMock(return_value=sent_message)
 
         await back_to_main(message, state)
 
-        message.delete.assert_awaited_once()
+        safe_delete_mock.assert_awaited_once()
         cleanup_mock.assert_awaited_once()
         _, kwargs = cleanup_mock.await_args
         assert kwargs["keep_ids"] == [55]
         build_menu_mock.assert_awaited_once_with(2)
-        set_screen_mock.assert_awaited_once_with(state, 1, 99)
+        render_mock.assert_awaited_once()
+
+    asyncio.run(run_test())
+
+
+def test_welcome_reused_on_start() -> None:
+    """Welcome message is reused when id exists."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 77})
+        bot = DummyBot()
+        bot.send_message.return_value = SimpleNamespace(message_id=88)
+
+        welcome_id = await ui_set_welcome_message(bot, state, 1, "Hello")
+
+        assert welcome_id == 77
+        bot.edit_message_text.assert_awaited_once()
+        bot.send_message.assert_not_called()
 
     asyncio.run(run_test())

@@ -994,7 +994,7 @@ def find_reached_goal(
 ===== Bot/utils/ui_cleanup.py =====
 
 import logging
-from typing import Iterable, List, Optional
+from typing import List
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest
@@ -1028,9 +1028,56 @@ async def ui_register_protected_message(
 
 
 async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
-    """Track a user message id for later cleanup."""
+    """Do not track user messages for later cleanup."""
 
-    await ui_register_message(state, chat_id, message_id)
+    data = await state.get_data()
+    if data.get("ui_chat_id") is None:
+        await state.update_data(ui_chat_id=chat_id)
+
+
+async def ui_safe_delete_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    log_context: str | None = None,
+) -> bool:
+    context_label = f" ({log_context})" if log_context else ""
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        return True
+    except TelegramBadRequest as exc:
+        text = str(exc).lower()
+        if (
+            "message to delete not found" in text
+            or "message can't be deleted" in text
+            or "message can’t be deleted" in text
+        ):
+            LOGGER.debug(
+                "UI safe delete skipped%s (chat_id=%s, message_id=%s): %s",
+                context_label,
+                chat_id,
+                message_id,
+                exc,
+            )
+            return False
+        LOGGER.error(
+            "UI safe delete failed%s (chat_id=%s, message_id=%s): %s",
+            context_label,
+            chat_id,
+            message_id,
+            exc,
+            exc_info=True,
+        )
+        return False
+    except Exception:  # noqa: BLE001
+        LOGGER.error(
+            "UI safe delete error%s (chat_id=%s, message_id=%s)",
+            context_label,
+            chat_id,
+            message_id,
+            exc_info=True,
+        )
+        return False
 
 
 async def ui_set_welcome_message(
@@ -1045,18 +1092,12 @@ async def ui_set_welcome_message(
                 message_id=int(welcome_id),
                 text=text,
             )
-            LOGGER.info(
-                "Reused welcome message (chat_id=%s, message_id=%s)",
-                chat_id,
-                welcome_id,
-            )
+            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id)
             return int(welcome_id)
         except TelegramBadRequest as exc:
             if "message is not modified" in str(exc).lower():
                 LOGGER.info(
-                    "Welcome message already up to date (chat_id=%s, message_id=%s)",
-                    chat_id,
-                    welcome_id,
+                    "WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id
                 )
                 return int(welcome_id)
             LOGGER.warning(
@@ -1076,28 +1117,8 @@ async def ui_set_welcome_message(
     await state.update_data(
         ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
     )
-    LOGGER.info(
-        "Created welcome message (chat_id=%s, message_id=%s)",
-        chat_id,
-        sent.message_id,
-    )
-    if welcome_id is not None and int(welcome_id) != int(sent.message_id):
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=int(welcome_id))
-        except TelegramBadRequest as exc:
-            LOGGER.warning(
-                "Failed to delete previous welcome message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                welcome_id,
-                exc,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error deleting previous welcome message (chat_id=%s, message_id=%s)",
-                chat_id,
-                welcome_id,
-                exc_info=True,
-            )
+    LOGGER.info("WELCOME recreated (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
+    # DO NOT DELETE WITHOUT USER CONFIRMATION.
     return int(sent.message_id)
 
 
@@ -1111,6 +1132,7 @@ async def ui_set_screen_message(
     state: FSMContext, chat_id: int, message_id: int
 ) -> None:
     await ui_register_message(state, chat_id, message_id)
+    await state.update_data(ui_screen_message_id=int(message_id), ui_chat_id=chat_id)
 
 
 async def ui_track_message(
@@ -1129,35 +1151,44 @@ async def ui_cleanup_to_context(
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    legacy_ids: List[int] = list(data.get("ui_message_ids") or [])
-    combined_ids = list(dict.fromkeys([*legacy_ids, *tracked_ids]))
-
     keep_id_set = {int(welcome_id)} if welcome_id else set()
     if keep_ids:
         keep_id_set.update(int(item) for item in keep_ids if item is not None)
     delete_ids = [int(mid) for mid in tracked_ids if int(mid) not in keep_id_set]
-
+    deleted_count = 0
     for message_id in delete_ids:
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except TelegramBadRequest as exc:
-            LOGGER.warning(
-                "Failed to delete message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-                exc_info=True,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error deleting message (chat_id=%s, message_id=%s)",
-                chat_id,
-                message_id,
-            )
+        deleted = await ui_safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            log_context=f"context={context_name}",
+        )
+        if deleted:
+            deleted_count += 1
 
-    remaining_ids = [mid for mid in combined_ids if int(mid) in keep_id_set]
+    remaining_ids: List[int] = []
+    for message_id in tracked_ids:
+        normalized = int(message_id)
+        if normalized in keep_id_set and normalized not in remaining_ids:
+            remaining_ids.append(normalized)
+    if keep_ids:
+        for message_id in keep_ids:
+            normalized = int(message_id)
+            if normalized in keep_id_set and normalized not in remaining_ids:
+                remaining_ids.append(normalized)
+    if welcome_id is not None:
+        normalized = int(welcome_id)
+        if normalized not in remaining_ids:
+            remaining_ids.append(normalized)
+
+    LOGGER.info(
+        "UI_CLEANUP context=%s deleted=%s kept=%s",
+        context_name,
+        deleted_count,
+        len(remaining_ids),
+    )
     await state.update_data(
-        ui_tracked_message_ids=[],
+        ui_tracked_message_ids=remaining_ids,
     )
 
 
@@ -1168,6 +1199,50 @@ async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> N
         return
     await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
 
+
+async def ui_render_screen(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> int:
+    data = await state.get_data()
+    screen_id = data.get("ui_screen_message_id")
+    if screen_id is not None:
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=int(screen_id),
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+            )
+            await ui_set_screen_message(state, chat_id, int(screen_id))
+            return int(screen_id)
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                await ui_set_screen_message(state, chat_id, int(screen_id))
+                return int(screen_id)
+            LOGGER.warning(
+                "Failed to edit screen message (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                screen_id,
+                exc,
+            )
+        except Exception:
+            LOGGER.warning(
+                "Unexpected error editing screen message (chat_id=%s, message_id=%s)",
+                chat_id,
+                screen_id,
+                exc_info=True,
+            )
+    sent = await bot.send_message(
+        chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode
+    )
+    await ui_set_screen_message(state, chat_id, sent.message_id)
+    return int(sent.message_id)
 
 ===== Bot/utils/ui_flow.py =====
 
@@ -1691,7 +1766,12 @@ if "aiogram" not in sys.modules:
     sys.modules["aiogram.types"] = types_mod
 
 from Bot.handlers.start import back_to_main
-from Bot.utils.ui_cleanup import ui_cleanup_to_context, ui_register_message
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_to_context,
+    ui_register_message,
+    ui_set_welcome_message,
+    ui_track_message,
+)
 
 
 class DummyState:
@@ -1712,6 +1792,21 @@ class DummyBot:
 
     def __init__(self) -> None:
         self.delete_message = AsyncMock()
+        self.edit_message_text = AsyncMock()
+        self.send_message = AsyncMock()
+
+
+def test_ui_track_deduplicates() -> None:
+    """Tracking avoids duplicate message ids."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_track_message(state, 1, 10)
+        await ui_track_message(state, 1, 10)
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == [10]
+
+    asyncio.run(run_test())
 
 
 def test_ui_cleanup_keeps_welcome() -> None:
@@ -1733,7 +1828,6 @@ def test_ui_cleanup_keeps_welcome() -> None:
         assert deleted_ids == {10, 12}
         data = await state.get_data()
         assert data["ui_tracked_message_ids"] == [11]
-        assert data["ui_message_ids"] == [11]
 
     asyncio.run(run_test())
 
@@ -1744,36 +1838,51 @@ def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
     async def run_test() -> None:
         state = DummyState({"ui_welcome_message_id": 55})
         cleanup_mock = AsyncMock()
-        set_screen_mock = AsyncMock()
+        render_mock = AsyncMock()
         build_menu_mock = AsyncMock(return_value=MagicMock())
+        safe_delete_mock = AsyncMock(return_value=True)
 
         monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
-        monkeypatch.setattr("Bot.handlers.start.ui_set_screen_message", set_screen_mock)
+        monkeypatch.setattr("Bot.handlers.start.ui_render_screen", render_mock)
         monkeypatch.setattr(
             "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
         )
+        monkeypatch.setattr("Bot.handlers.start.ui_safe_delete_message", safe_delete_mock)
 
-        sent_message = SimpleNamespace(chat=SimpleNamespace(id=1), message_id=99)
         message = SimpleNamespace(
             chat=SimpleNamespace(id=1),
             from_user=SimpleNamespace(id=2),
             message_id=10,
             bot=SimpleNamespace(),
         )
-        message.delete = AsyncMock()
-        message.answer = AsyncMock(return_value=sent_message)
 
         await back_to_main(message, state)
 
-        message.delete.assert_awaited_once()
+        safe_delete_mock.assert_awaited_once()
         cleanup_mock.assert_awaited_once()
         _, kwargs = cleanup_mock.await_args
         assert kwargs["keep_ids"] == [55]
         build_menu_mock.assert_awaited_once_with(2)
-        set_screen_mock.assert_awaited_once_with(state, 1, 99)
+        render_mock.assert_awaited_once()
 
     asyncio.run(run_test())
 
+
+def test_welcome_reused_on_start() -> None:
+    """Welcome message is reused when id exists."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 77})
+        bot = DummyBot()
+        bot.send_message.return_value = SimpleNamespace(message_id=88)
+
+        welcome_id = await ui_set_welcome_message(bot, state, 1, "Hello")
+
+        assert welcome_id == 77
+        bot.edit_message_text.assert_awaited_once()
+        bot.send_message.assert_not_called()
+
+    asyncio.run(run_test())
 
 ===== tests/unit/test_utils.py =====
 

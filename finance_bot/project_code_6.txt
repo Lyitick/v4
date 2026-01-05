@@ -1,0 +1,402 @@
+        question_code=first_code,
+        amount=amount,
+        answer="yes",
+    )
+    assert changed is True
+
+    savings_map = db.get_user_savings_map(user_id)
+    assert savings_map.get("быт") == 5000 - amount
+
+    changed_again = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="yes",
+    )
+    assert changed_again is False
+
+    changed_back = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="no",
+    )
+    assert changed_back is True
+    savings_map = db.get_user_savings_map(user_id)
+    assert savings_map.get("быт") == 5000
+
+
+===== tests/unit/test_household_renderers.py =====
+
+"""Tests for household renderers."""
+
+from Bot.renderers.household import format_household_items, render_household_questions_text
+
+
+def test_render_questions_text_marks_answers() -> None:
+    questions = [
+        {"code": "q1", "text": "Оплатил интернет?", "amount": 100},
+        {"code": "q2", "text": "Оплатил свет?", "amount": 200},
+    ]
+    answers = {"q1": "yes", "q2": "no"}
+    text = render_household_questions_text("2025-02", questions, answers, current_index=1)
+    assert "✅" in text
+    assert "❌" in text
+    assert "2025-02" in text
+
+
+def test_format_household_items() -> None:
+    items = [
+        {"code": "q1", "text": "Интернет?", "amount": 100},
+        {"code": "q2", "text": "Свет?", "amount": 200},
+    ]
+    text = format_household_items(items, unpaid_set={"q2"})
+    assert "✅" in text
+    assert "❌" in text
+    assert "Интернет" in text
+
+
+===== tests/unit/test_household_services.py =====
+
+"""Tests for household services."""
+
+from Bot.services.household import (
+    build_household_questions,
+    get_current_question,
+    get_next_index,
+    get_previous_index,
+    should_ignore_answer,
+    update_flow_state,
+)
+
+
+def test_flow_state_and_navigation() -> None:
+    questions = build_household_questions(
+        [
+            {"code": "q1", "text": "Первый?", "amount": 100},
+            {"code": "q2", "text": "Второй?", "amount": 200},
+        ]
+    )
+    flow = update_flow_state(
+        month="2025-01",
+        questions=questions,
+        current_step_index=0,
+        answers={},
+        processed_steps=[],
+    )
+    assert flow.current_question_code == "q1"
+    assert get_current_question(questions, 1)["code"] == "q2"
+    assert get_next_index(0, questions) == 1
+    assert get_next_index(1, questions) == 2
+    assert get_previous_index(0) == 0
+    assert get_previous_index(1) == 0
+
+
+def test_idempotency_check() -> None:
+    answers = {"q1": "yes"}
+    processed_steps = {"q1"}
+    assert should_ignore_answer(answers, processed_steps, "q1", "yes") is True
+    assert should_ignore_answer(answers, processed_steps, "q1", "no") is False
+    assert should_ignore_answer(answers, processed_steps, "q2", "yes") is False
+
+
+===== tests/unit/test_imports.py =====
+
+"""Basic import tests."""
+
+
+def test_import_main() -> None:
+    """Ensure main module is importable."""
+
+    import Bot.main  # noqa: F401
+
+
+def test_import_handlers() -> None:
+    """Ensure handlers modules are importable."""
+
+    import Bot.handlers.start  # noqa: F401
+    import Bot.handlers.finances  # noqa: F401
+    import Bot.handlers.household_payments  # noqa: F401
+    import Bot.handlers.wishlist  # noqa: F401
+    import Bot.handlers.callbacks  # noqa: F401
+    import Bot.handlers.common  # noqa: F401
+
+
+===== tests/unit/test_telegram_safe.py =====
+
+"""Tests for telegram_safe utilities."""
+from unittest.mock import AsyncMock
+
+import pytest
+
+pytest.importorskip("aiogram")
+
+from aiogram.exceptions import TelegramNetworkError  # noqa: E402
+
+from Bot.utils.telegram_safe import safe_edit_message_text  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_text_retries_network_error() -> None:
+    """Network errors should trigger retries for edit operations."""
+
+    bot = AsyncMock()
+    bot.edit_message_text = AsyncMock(
+        side_effect=[TelegramNetworkError("fail"), None]
+    )
+
+    result = await safe_edit_message_text(
+        bot,
+        chat_id=123,
+        message_id=456,
+        text="hello",
+    )
+
+    assert result is True
+    assert bot.edit_message_text.call_count == 2
+
+
+===== tests/unit/test_ui_cleanup.py =====
+
+"""Tests for UI cleanup utilities."""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+import asyncio
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+if "aiogram" not in sys.modules:
+    aiogram = types.ModuleType("aiogram")
+
+    class DummyRouter:
+        def message(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class DummyF:
+        class _Field:
+            def __eq__(self, other):
+                return ("eq", other)
+
+        text = _Field()
+
+    class Bot:
+        pass
+
+    aiogram.F = DummyF()
+    aiogram.Router = DummyRouter
+    aiogram.Bot = Bot
+
+    exceptions = types.ModuleType("aiogram.exceptions")
+
+    class TelegramBadRequest(Exception):
+        pass
+
+    exceptions.TelegramBadRequest = TelegramBadRequest
+    aiogram.exceptions = exceptions
+
+    filters = types.ModuleType("aiogram.filters")
+
+    class Command:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    filters.Command = Command
+    aiogram.filters = filters
+
+    fsm = types.ModuleType("aiogram.fsm")
+    fsm_context = types.ModuleType("aiogram.fsm.context")
+
+    class FSMContext:
+        pass
+
+    fsm_context.FSMContext = FSMContext
+    fsm.context = fsm_context
+    aiogram.fsm = fsm
+
+    types_mod = types.ModuleType("aiogram.types")
+
+    class Message:
+        pass
+
+    class ReplyKeyboardMarkup:
+        pass
+
+    class InlineKeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class InlineKeyboardMarkup:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class KeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    types_mod.Message = Message
+    types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
+    types_mod.InlineKeyboardButton = InlineKeyboardButton
+    types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
+    types_mod.KeyboardButton = KeyboardButton
+    aiogram.types = types_mod
+
+    sys.modules["aiogram"] = aiogram
+    sys.modules["aiogram.exceptions"] = exceptions
+    sys.modules["aiogram.filters"] = filters
+    sys.modules["aiogram.fsm"] = fsm
+    sys.modules["aiogram.fsm.context"] = fsm_context
+    sys.modules["aiogram.types"] = types_mod
+
+from Bot.handlers.start import back_to_main
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_to_context,
+    ui_register_message,
+    ui_set_welcome_message,
+    ui_track_message,
+)
+
+
+class DummyState:
+    """Minimal FSMContext stand-in for unit tests."""
+
+    def __init__(self, initial=None) -> None:
+        self.data = dict(initial or {})
+
+    async def get_data(self) -> dict:
+        return dict(self.data)
+
+    async def update_data(self, **kwargs) -> None:
+        self.data.update(kwargs)
+
+
+class DummyBot:
+    """Minimal bot mock with async delete_message."""
+
+    def __init__(self) -> None:
+        self.delete_message = AsyncMock()
+        self.edit_message_text = AsyncMock()
+        self.send_message = AsyncMock()
+
+
+def test_ui_track_deduplicates() -> None:
+    """Tracking avoids duplicate message ids."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_track_message(state, 1, 10)
+        await ui_track_message(state, 1, 10)
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == [10]
+
+    asyncio.run(run_test())
+
+
+def test_ui_cleanup_keeps_welcome() -> None:
+    """Cleanup removes tracked messages while keeping welcome."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_register_message(state, 1, 10)
+        await ui_register_message(state, 1, 11)
+        await ui_register_message(state, 1, 12)
+        await state.update_data(ui_welcome_message_id=11)
+
+        bot = DummyBot()
+        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU", keep_ids=[11])
+
+        deleted_ids = {
+            call.kwargs["message_id"] for call in bot.delete_message.call_args_list
+        }
+        assert deleted_ids == {10, 12}
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == [11]
+
+    asyncio.run(run_test())
+
+
+def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
+    """back_to_main deletes user message, cleans UI, and renders menu."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 55})
+        cleanup_mock = AsyncMock()
+        render_mock = AsyncMock()
+        build_menu_mock = AsyncMock(return_value=MagicMock())
+        safe_delete_mock = AsyncMock(return_value=True)
+
+        monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
+        monkeypatch.setattr("Bot.handlers.start.ui_render_screen", render_mock)
+        monkeypatch.setattr(
+            "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
+        )
+        monkeypatch.setattr("Bot.handlers.start.ui_safe_delete_message", safe_delete_mock)
+
+        message = SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            from_user=SimpleNamespace(id=2),
+            message_id=10,
+            bot=SimpleNamespace(),
+        )
+
+        await back_to_main(message, state)
+
+        safe_delete_mock.assert_awaited_once()
+        cleanup_mock.assert_awaited_once()
+        _, kwargs = cleanup_mock.await_args
+        assert kwargs["keep_ids"] == [55]
+        build_menu_mock.assert_awaited_once_with(2)
+        render_mock.assert_awaited_once()
+
+    asyncio.run(run_test())
+
+
+def test_welcome_reused_on_start() -> None:
+    """Welcome message is reused when id exists."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 77})
+        bot = DummyBot()
+        bot.send_message.return_value = SimpleNamespace(message_id=88)
+
+        welcome_id = await ui_set_welcome_message(bot, state, 1, "Hello")
+
+        assert welcome_id == 77
+        bot.edit_message_text.assert_awaited_once()
+        bot.send_message.assert_not_called()
+
+    asyncio.run(run_test())
+
+
+===== tests/unit/test_utils.py =====
+
+"""Utility tests."""
+from Bot.utils.logging import init_logging
+
+
+def test_init_logging_returns_logger() -> None:
+    """init_logging should return a logger instance."""
+
+    logger = init_logging()
+    assert logger.name == "Bot.utils.logging"
+
+
+===== utils/__init__.py =====
+
+from Bot.utils import *  # noqa: F401,F403
+
+
+===== utils/logging.py =====
+
+from Bot.utils.logging import *  # noqa: F401,F403

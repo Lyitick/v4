@@ -9,6 +9,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 from Bot.database.crud import FinanceDatabase
+from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import back_only_keyboard
 from Bot.keyboards.settings import (
@@ -34,6 +35,7 @@ from Bot.states.wishlist_states import (
 )
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
+from Bot.utils.telegram_safe import safe_edit_message_text, safe_send_message
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
     ui_cleanup_to_context,
@@ -57,6 +59,12 @@ class InSettingsFilter(BaseFilter):
 
 async def _register_user_message(state: FSMContext, message: Message) -> None:
     await ui_track_message(state, message.chat.id, message.message_id)
+
+
+async def _safe_edit(bot, **kwargs) -> None:
+    edited = await safe_edit_message_text(bot, logger=LOGGER, **kwargs)
+    if not edited:
+        raise TelegramBadRequest(method="editMessageText", message="edit-failed")
 
 
 async def _delete_message_safely(bot, chat_id: int | None, message_id: int | None) -> None:
@@ -178,13 +186,14 @@ async def _send_and_register(
 async def _send_main_menu_summary(
     *, bot, state: FSMContext, chat_id: int, user_id: int
 ) -> None:
-    db = FinanceDatabase()
+    db = get_db()
     savings = db.get_user_savings(user_id)
     summary = format_savings_summary(savings)
     text = f"Текущие накопления:\n{summary}"
     menu = await build_main_menu_for_user(user_id)
-    sent = await bot.send_message(chat_id=chat_id, text=text, reply_markup=menu)
-    await ui_register_message(state, sent.chat.id, sent.message_id)
+    sent = await safe_send_message(bot, chat_id=chat_id, text=text, reply_markup=menu)
+    if sent:
+        await ui_register_message(state, sent.chat.id, sent.message_id)
 
 
 async def _exit_settings_to_main(
@@ -223,15 +232,23 @@ async def _edit_settings_page(
         data = await state.get_data()
         if data.get("settings_current_screen") in {"st:income", "st:wishlist", "st:byt_rules"}:
             raise TelegramBadRequest(method="editMessageText", message="reply-only")
-        await bot.edit_message_text(
-            chat_id=chat_id, message_id=message_id, text=text, reply_markup=reply_markup
+        await _safe_edit(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
         )
         new_message_id = message_id
     except TelegramBadRequest:
-        new_message = await bot.send_message(
-            chat_id=chat_id, text=text, reply_markup=reply_markup
+        new_message = await safe_send_message(
+            bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            logger=LOGGER,
         )
-        new_message_id = new_message.message_id
+        new_message_id = new_message.message_id if new_message else message_id
         await ui_register_message(state, chat_id, new_message_id)
     await ui_set_screen_message(state, chat_id, new_message_id)
     await _store_settings_message(state, chat_id, new_message_id)
@@ -257,13 +274,17 @@ async def _render_reply_settings_page(
         await _delete_message_safely(message.bot, chat_id, message_id)
         if message_id:
             deleted_count = 1
-    sent = await message.bot.send_message(
-        chat_id=message.chat.id, text=text, reply_markup=reply_markup
+    sent = await safe_send_message(
+        message.bot,
+        chat_id=message.chat.id,
+        text=text,
+        reply_markup=reply_markup,
     )
-    new_message_id = sent.message_id
-    await ui_register_message(state, sent.chat.id, sent.message_id)
-    await ui_set_screen_message(state, sent.chat.id, sent.message_id)
-    await _store_settings_message(state, sent.chat.id, sent.message_id)
+    new_message_id = sent.message_id if sent else 0
+    if sent:
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+        await ui_set_screen_message(state, sent.chat.id, sent.message_id)
+        await _store_settings_message(state, sent.chat.id, sent.message_id)
     await _set_current_screen(state, screen_id)
     if deleted_count:
         LOGGER.info(
@@ -691,7 +712,7 @@ async def render_settings_screen(
     error_message: str | None = None,
     force_new: bool = False,
 ) -> None:
-    db = FinanceDatabase()
+    db = get_db()
     data = await state.get_data()
     user_id = message.from_user.id
     if message.from_user.id == message.bot.id:
@@ -1035,7 +1056,7 @@ async def household_reset_questions_reply(message: Message, state: FSMContext) -
         return
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    db = FinanceDatabase()
+    db = get_db()
     month = current_month_str()
     await db.reset_household_questions_for_month(message.from_user.id, month)
     LOGGER.info(
@@ -1152,7 +1173,7 @@ async def income_percent_menu_reply(message: Message, state: FSMContext) -> None
     await _delete_user_message(message)
     await state.set_state(None)
 
-    db = FinanceDatabase()
+    db = get_db()
     total = db.sum_income_category_percents(message.from_user.id)
     if total == 100:
         await render_settings_screen(
@@ -1197,7 +1218,7 @@ async def byt_toggle_enabled_reply(message: Message, state: FSMContext) -> None:
     await _register_user_message(state, message)
     await _delete_user_message(message)
     await state.set_state(None)
-    db = FinanceDatabase()
+    db = get_db()
     settings_row = db.get_user_settings(message.from_user.id)
     current = bool(settings_row.get("byt_reminders_enabled", 1))
     db.set_byt_reminders_enabled(message.from_user.id, not current)
@@ -1213,7 +1234,7 @@ async def byt_toggle_defer_reply(message: Message, state: FSMContext) -> None:
     await _register_user_message(state, message)
     await _delete_user_message(message)
     await state.set_state(None)
-    db = FinanceDatabase()
+    db = get_db()
     settings_row = db.get_user_settings(message.from_user.id)
     current = bool(settings_row.get("byt_defer_enabled", 1))
     db.set_byt_defer_enabled(message.from_user.id, not current)
@@ -1230,7 +1251,7 @@ async def edit_byt_max_defer_days_reply(message: Message, state: FSMContext) -> 
     await _delete_user_message(message)
     await _push_current_screen(state, "byt:edit_max_defer_days")
     await state.set_state(BytSettingsState.waiting_for_max_defer_days)
-    db = FinanceDatabase()
+    db = get_db()
     settings_row = db.get_user_settings(message.from_user.id)
     await state.update_data(
         byt_max_days_str="0",
@@ -1336,7 +1357,7 @@ async def byt_timer_reset_reply(message: Message, state: FSMContext) -> None:
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    db = FinanceDatabase()
+    db = get_db()
     db.reset_byt_timer_times(message.from_user.id)
     await render_settings_screen("byt:timer_menu", message=message, state=state)
 
@@ -1351,7 +1372,7 @@ async def open_byt_rules(callback: CallbackQuery, state: FSMContext) -> None:
 async def toggle_byt_enabled(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    db = FinanceDatabase()
+    db = get_db()
     settings_row = db.get_user_settings(callback.from_user.id)
     current = bool(settings_row.get("byt_reminders_enabled", 1))
     db.set_byt_reminders_enabled(callback.from_user.id, not current)
@@ -1364,7 +1385,7 @@ async def toggle_byt_enabled(callback: CallbackQuery, state: FSMContext) -> None
 async def toggle_byt_defer(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
-    db = FinanceDatabase()
+    db = get_db()
     settings_row = db.get_user_settings(callback.from_user.id)
     current = bool(settings_row.get("byt_defer_enabled", 1))
     db.set_byt_defer_enabled(callback.from_user.id, not current)
@@ -1378,7 +1399,7 @@ async def edit_byt_max_defer_days(callback: CallbackQuery, state: FSMContext) ->
     await callback.answer()
     await _push_current_screen(state, "byt:edit_max_defer_days")
     await state.set_state(BytSettingsState.waiting_for_max_defer_days)
-    db = FinanceDatabase()
+    db = get_db()
     settings_row = db.get_user_settings(callback.from_user.id)
     await state.update_data(
         byt_max_days_str="0", previous_byt_max_days=settings_row.get("byt_defer_max_days", 365)
@@ -1446,7 +1467,7 @@ async def byt_timer_delete(callback: CallbackQuery, state: FSMContext) -> None:
     except (IndexError, ValueError):
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     times = db.list_active_byt_timer_times(callback.from_user.id)
     if len(times) <= 1:
         await _render_byt_timer_settings(
@@ -1467,7 +1488,7 @@ async def byt_timer_delete(callback: CallbackQuery, state: FSMContext) -> None:
 @router.callback_query(F.data == "bt:reset_default")
 async def byt_timer_reset(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    db = FinanceDatabase()
+    db = get_db()
     db.reset_byt_timer_times(callback.from_user.id)
     await render_settings_screen(
         "byt:timer_menu", message=callback.message, state=state
@@ -1506,7 +1527,7 @@ async def household_payment_delete_choice(
         )
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     db.deactivate_household_payment_item(message.from_user.id, code)
     await db.init_household_questions_for_month(
         message.from_user.id, current_month_str()
@@ -1546,7 +1567,7 @@ async def income_category_delete_choice(message: Message, state: FSMContext) -> 
         )
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     categories = db.list_active_income_categories(message.from_user.id)
     if len([cat for cat in categories if cat.get("is_active", 1)]) <= 1:
         await state.set_state(None)
@@ -1588,7 +1609,7 @@ async def income_category_percent_choice(message: Message, state: FSMContext) ->
         )
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     category = db.get_income_category_by_id(message.from_user.id, category_id)
     if not category:
         await state.set_state(None)
@@ -1654,7 +1675,7 @@ async def wishlist_category_delete_choice(message: Message, state: FSMContext) -
         )
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     categories = db.list_active_wishlist_categories(message.from_user.id)
     if len(categories) <= 1:
         await state.set_state(None)
@@ -1696,7 +1717,7 @@ async def wishlist_purchased_category_choice(message: Message, state: FSMContext
         )
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     category = db.get_wishlist_category_by_id(message.from_user.id, category_id)
     if not category or not category.get("is_active", 1):
         await state.set_state(None)
@@ -1729,7 +1750,7 @@ async def wishlist_purchased_mode_choice(message: Message, state: FSMContext) ->
         await render_settings_screen("st:wishlist", message=message, state=state)
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     if choice == "Всегда":
         db.update_wishlist_category_purchased_mode(
             message.from_user.id, int(category_id), "always"
@@ -1813,7 +1834,7 @@ async def byt_timer_delete_choice(message: Message, state: FSMContext) -> None:
         )
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     times = db.list_active_byt_timer_times(message.from_user.id)
     if len(times) <= 1:
         await state.set_state(None)
@@ -1851,7 +1872,7 @@ async def byt_timer_add_time_value(message: Message, state: FSMContext) -> None:
         return
 
     hour, minute = parsed
-    db = FinanceDatabase()
+    db = get_db()
     db.add_byt_timer_time(message.from_user.id, hour, minute)
     await state.set_state(None)
     previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
@@ -1947,7 +1968,7 @@ async def wishlist_add_category_title(message: Message, state: FSMContext) -> No
         )
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     db.create_wishlist_category(message.from_user.id, title)
     await state.set_state(None)
     previous_screen = await _pop_previous_screen(state) or "st:wishlist"
@@ -1982,17 +2003,21 @@ async def income_new_category_percent(message: Message, state: FSMContext) -> No
         percent_str = percent_str.lstrip("0") if percent_str != "0" else ""
         percent_str = f"{percent_str}{text}" or "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=f": {percent_str}",
             )
         except Exception:
-            fallback = await message.bot.send_message(
-                chat_id=display_chat_id, text=f": {percent_str}"
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {percent_str}",
             )
-            display_message_id = fallback.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             new_income_percent_str=percent_str,
             new_income_display_chat_id=display_chat_id,
@@ -2003,15 +2028,21 @@ async def income_new_category_percent(message: Message, state: FSMContext) -> No
     if text == "Очистить":
         percent_str = "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=": 0",
             )
         except Exception:
-            fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
-            display_message_id = fallback.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=": 0",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             new_income_percent_str=percent_str,
             new_income_display_chat_id=display_chat_id,
@@ -2035,7 +2066,7 @@ async def income_new_category_percent(message: Message, state: FSMContext) -> No
             error_message = error_message or "Название категории не задано."
 
         if error_message is None:
-            db = FinanceDatabase()
+            db = get_db()
             category_id = db.create_income_category(message.from_user.id, title)
             if category_id is not None:
                 db.update_income_category_percent(
@@ -2107,17 +2138,21 @@ async def household_payment_amount(message: Message, state: FSMContext) -> None:
         amount_str = amount_str.lstrip("0") if amount_str != "0" else ""
         amount_str = f"{amount_str}{text}" or "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=f": {amount_str}",
             )
         except Exception:
-            fallback = await message.bot.send_message(
-                chat_id=display_chat_id, text=f": {amount_str}"
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {amount_str}",
             )
-            display_message_id = fallback.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             hp_amount_str=amount_str,
             hp_amount_display_chat_id=display_chat_id,
@@ -2128,15 +2163,21 @@ async def household_payment_amount(message: Message, state: FSMContext) -> None:
     if text == "Очистить":
         amount_str = "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=": 0",
             )
         except Exception:
-            fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
-            display_message_id = fallback.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=": 0",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             hp_amount_str=amount_str,
             hp_amount_display_chat_id=display_chat_id,
@@ -2156,7 +2197,7 @@ async def household_payment_amount(message: Message, state: FSMContext) -> None:
                 error_message = "Сумма должна быть больше нуля."
 
         title = (data.get("hp_new_title") or "").strip()
-        db = FinanceDatabase()
+        db = get_db()
 
         if not title:
             error_message = error_message or "Название платежа не задано."
@@ -2218,7 +2259,7 @@ async def category_delete(callback: CallbackQuery, state: FSMContext) -> None:
     except (IndexError, ValueError):
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     scope = "income"
     categories = db.list_active_income_categories(callback.from_user.id)
     if len([cat for cat in categories if cat.get("is_active", 1)]) <= 1:
@@ -2243,7 +2284,7 @@ async def wishlist_category_delete(callback: CallbackQuery, state: FSMContext) -
     except (IndexError, ValueError):
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     categories = db.list_active_wishlist_categories(callback.from_user.id)
     if len(categories) <= 1:
         await render_settings_screen(
@@ -2274,7 +2315,7 @@ async def category_percent_prompt(callback: CallbackQuery, state: FSMContext) ->
     except (IndexError, ValueError):
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     scope = "income"
     category = db.get_income_category_by_id(callback.from_user.id, category_id)
     if not category:
@@ -2336,7 +2377,7 @@ async def wishlist_purchased_category(callback: CallbackQuery, state: FSMContext
     except (IndexError, ValueError):
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     category = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
     if not category or not category.get("is_active", 1):
         await render_settings_screen(
@@ -2359,7 +2400,7 @@ async def wishlist_set_purchased_always(callback: CallbackQuery, state: FSMConte
     if category_id is None:
         await render_settings_screen("st:wishlist", message=callback.message, state=state)
         return
-    db = FinanceDatabase()
+    db = get_db()
     db.update_wishlist_category_purchased_mode(callback.from_user.id, int(category_id), "always")
     await state.set_state(None)
     await _reset_navigation(state, "st:wishlist")
@@ -2374,7 +2415,7 @@ async def wishlist_set_purchased_days(callback: CallbackQuery, state: FSMContext
     if category_id is None:
         await render_settings_screen("st:wishlist", message=callback.message, state=state)
         return
-    db = FinanceDatabase()
+    db = get_db()
     category = db.get_wishlist_category_by_id(callback.from_user.id, int(category_id))
     if not category:
         await _reset_navigation(state, "st:wishlist")
@@ -2444,13 +2485,13 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
             percent_str,
         )
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(message.bot, 
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=f": {percent_str}",
             )
         except Exception:
-            fallback = await message.bot.send_message(
+            fallback = await safe_send_message(message.bot, 
                 chat_id=display_chat_id, text=f": {percent_str}"
             )
             display_message_id = fallback.message_id
@@ -2465,15 +2506,21 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
     if text == "Очистить":
         percent_str = "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=": 0",
             )
         except Exception:
-            fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
-            display_message_id = fallback.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=": 0",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             percent_str=percent_str,
             percent_display_chat_id=display_chat_id,
@@ -2505,7 +2552,7 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
             return
 
         if error_message is None:
-            db = FinanceDatabase()
+            db = get_db()
             db.update_income_category_percent(message.from_user.id, category_id, percent)
             total = db.sum_income_category_percents(message.from_user.id)
 
@@ -2532,7 +2579,7 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
             await _render_income_percent_menu(
                 state=state,
                 message=message,
-                db=FinanceDatabase(),
+                db=get_db(),
                 user_id=message.from_user.id,
                 error_message=error_message,
             )
@@ -2569,15 +2616,21 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
         days_str = days_str.lstrip("0") if days_str != "0" else ""
         days_str = f"{days_str}{text}" or "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=f": {days_str}",
             )
         except Exception:
-            fallback = await message.bot.send_message(chat_id=display_chat_id, text=f": {days_str}")
-            display_message_id = fallback.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {days_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             purchased_days_str=days_str,
             purchased_display_chat_id=display_chat_id,
@@ -2588,15 +2641,21 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
     if text == "Очистить":
         days_str = "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=": 0",
             )
         except Exception:
-            fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
-            display_message_id = fallback.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=": 0",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             purchased_days_str=days_str,
             purchased_display_chat_id=display_chat_id,
@@ -2630,7 +2689,7 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
             )
             return
 
-        db = FinanceDatabase()
+        db = get_db()
         category_id = data.get("editing_wl_category_id")
         if category_id is not None:
             db.update_wishlist_category_purchased_days(
@@ -2677,14 +2736,20 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
         days_str = days_str.lstrip("0") if days_str != "0" else ""
         days_str = f"{days_str}{text}" or "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=f": {days_str}",
             )
         except Exception:
-            fallback = await message.bot.send_message(chat_id=display_chat_id, text=f": {days_str}")
-            display_message_id = fallback.message_id
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {days_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
         await state.update_data(
             byt_max_days_str=days_str,
             byt_max_display_chat_id=display_chat_id,
@@ -2695,14 +2760,20 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
     if text == "Очистить":
         days_str = "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(
+                message.bot,
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=": 0",
             )
         except Exception:
-            fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
-            display_message_id = fallback.message_id
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=": 0",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
         await state.update_data(
             byt_max_days_str=days_str,
             byt_max_display_chat_id=display_chat_id,
@@ -2736,7 +2807,7 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             )
             return
 
-        db = FinanceDatabase()
+        db = get_db()
         settings_row = db.get_user_settings(message.from_user.id)
         previous_days = settings_row.get("byt_defer_max_days")
         db.set_byt_defer_max_days(message.from_user.id, days)
@@ -2781,14 +2852,15 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
         hour_str = hour_str.lstrip("0") if hour_str != "0" else ""
         hour_str = f"{hour_str}{text}" or "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(message.bot, 
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=f": {hour_str}",
             )
         except Exception:
-            prompt = await message.bot.send_message(chat_id=display_chat_id, text=f": {hour_str}")
-            display_message_id = prompt.message_id
+            prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=f": {hour_str}")
+                        if prompt:
+                display_message_id = prompt.message_id
             await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             bt_hour_str=hour_str,
@@ -2800,14 +2872,15 @@ async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
     if text == "Очистить":
         hour_str = "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(message.bot, 
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=": 0",
             )
         except Exception:
-            prompt = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
-            display_message_id = prompt.message_id
+            prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=": 0")
+                        if prompt:
+                display_message_id = prompt.message_id
             await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             bt_hour_str=hour_str,
@@ -2882,14 +2955,15 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
         minute_str = minute_str.lstrip("0") if minute_str != "0" else ""
         minute_str = f"{minute_str}{text}" or "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(message.bot, 
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=f": {minute_str}",
             )
         except Exception:
-            prompt = await message.bot.send_message(chat_id=display_chat_id, text=f": {minute_str}")
-            display_message_id = prompt.message_id
+            prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=f": {minute_str}")
+                        if prompt:
+                display_message_id = prompt.message_id
             await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             bt_minute_str=minute_str,
@@ -2901,14 +2975,15 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
     if text == "Очистить":
         minute_str = "0"
         try:
-            await message.bot.edit_message_text(
+            await _safe_edit(message.bot, 
                 chat_id=display_chat_id,
                 message_id=int(display_message_id),
                 text=": 0",
             )
         except Exception:
-            prompt = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
-            display_message_id = prompt.message_id
+            prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=": 0")
+                        if prompt:
+                display_message_id = prompt.message_id
             await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
             bt_minute_str=minute_str,
@@ -2942,7 +3017,7 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
                 reply_markup=None,
             )
             return
-        db = FinanceDatabase()
+        db = get_db()
         selected_hour = int(data.get("selected_hour", 0))
         db.add_byt_timer_time(message.from_user.id, selected_hour, minute)
         await _cleanup_input_ui(

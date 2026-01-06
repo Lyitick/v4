@@ -16,7 +16,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramUnauthorizedError
 
 from Bot.config.settings import get_settings
-from Bot.database.crud import FinanceDatabase
+from Bot.database.get_db import get_db
 from Bot.handlers import (
     callbacks,
     common,
@@ -68,7 +68,7 @@ def _format_token_context(token_source: str, fingerprint: str, env_path: Path) -
     return f"token_source={token_source}, fingerprint={fingerprint}"
 
 
-async def _run_byt_scheduler(bot: Bot, db: FinanceDatabase, timezone: ZoneInfo) -> None:
+async def _run_byt_scheduler(bot: Bot, db, timezone: ZoneInfo) -> None:
     """Background scheduler for BYT reminders."""
 
     while True:
@@ -105,7 +105,7 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
-    db = FinanceDatabase()
+    db = get_db()
     register_routers(dp)
 
     try:

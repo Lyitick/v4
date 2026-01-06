@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from Bot.database.crud import FinanceDatabase
+from Bot.database.get_db import get_db
 from Bot.keyboards.main import (
     back_to_main_keyboard,
     purchase_confirmation_keyboard,
@@ -17,6 +18,7 @@ from Bot.handlers.common import build_main_menu_for_user
 from Bot.states.money_states import MoneyState
 from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
 from Bot.utils.savings import find_reached_goal, format_savings_summary
+from Bot.utils.telegram_safe import safe_delete_message, safe_edit_message_text
 from Bot.utils.ui_cleanup import ui_register_message
 
 LOGGER = logging.getLogger(__name__)
@@ -89,28 +91,22 @@ async def _refresh_income_message(
         new_message = await message.answer(text)
         return new_message.message_id
 
-    # Пытаемся отредактировать существующее сообщение
-    try:
-        await message.bot.edit_message_text(
-            chat_id=message.chat.id,
-            message_id=income_message_id,
-            text=text,
-        )
+    edited = await safe_edit_message_text(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=income_message_id,
+        text=text,
+        logger=LOGGER,
+    )
+    if edited:
         return income_message_id
-    except Exception:  # noqa: BLE001
-        LOGGER.warning(
-            "Failed to edit income message %s",
-            income_message_id,
-            exc_info=True,
-        )
 
-    try:
-        await message.bot.delete_message(
-            chat_id=message.chat.id,
-            message_id=income_message_id,
-        )
-    except Exception:
-        pass
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=income_message_id,
+        logger=LOGGER,
+    )
 
     new_message = await message.answer(text)
     return new_message.message_id
@@ -156,16 +152,16 @@ async def _ask_allocation_confirmation(
     data = await state.get_data()
     existing_id: Optional[int] = data.get("allocation_question_message_id")
     if existing_id:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=existing_id,
-                text=text,
-                reply_markup=yes_no_inline_keyboard(),
-            )
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=existing_id,
+            text=text,
+            reply_markup=yes_no_inline_keyboard(),
+            logger=LOGGER,
+        )
+        if edited:
             return
-        except Exception:
-            pass
 
     sent = await message.answer(text, reply_markup=yes_no_inline_keyboard())
     await state.update_data(allocation_question_message_id=sent.message_id)
@@ -177,7 +173,7 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
 
     await delete_welcome_message_if_exists(message, state)
     await state.clear()
-    FinanceDatabase().ensure_income_categories_seeded(message.from_user.id)
+    get_db().ensure_income_categories_seeded(message.from_user.id)
     await state.set_state(MoneyState.waiting_for_amount)
 
     income_sum = "0"
@@ -197,7 +193,12 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
 
     # Удаляем сообщение пользователя "Рассчитать доход"
     try:
-        await message.delete()
+        await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
     except Exception:  # noqa: BLE001
         LOGGER.warning("Failed to delete user command message", exc_info=True)
 
@@ -227,32 +228,22 @@ async def _process_income_amount_value(
     income_message_id: Optional[int] = data.get("income_message_id")
 
     if income_question_message_id:
-        try:
-            await message.bot.delete_message(
-                chat_id=message.chat.id,
-                message_id=income_question_message_id,
-            )
-        except Exception:  # noqa: BLE001
-            LOGGER.warning(
-                "Failed to delete income helper message %s",
-                income_question_message_id,
-                exc_info=True,
-            )
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=income_question_message_id,
+            logger=LOGGER,
+        )
 
     if income_message_id:
-        try:
-            await message.bot.delete_message(
-                chat_id=message.chat.id,
-                message_id=income_message_id,
-            )
-        except Exception:  # noqa: BLE001
-            LOGGER.warning(
-                "Failed to delete income helper message %s",
-                income_message_id,
-                exc_info=True,
-            )
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=income_message_id,
+            logger=LOGGER,
+        )
 
-    db = FinanceDatabase()
+    db = get_db()
     db.ensure_income_categories_seeded(message.from_user.id)
     categories = db.list_active_income_categories(message.from_user.id)
     total_percent = db.sum_income_category_percents(message.from_user.id)
@@ -296,7 +287,12 @@ async def _process_income_amount_value(
     )
 
     try:
-        await message.delete()
+        await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
     except Exception:
         pass
 
@@ -329,7 +325,12 @@ async def handle_income_digit(message: Message, state: FSMContext) -> None:
     await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
 
     try:
-        await message.delete()
+        await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
     except Exception:
         pass
 
@@ -344,7 +345,12 @@ async def handle_income_confirm(message: Message, state: FSMContext) -> None:
     if not amount_str:
         await message.answer("Сначала набери сумму с помощью кнопок.")
         try:
-            await message.delete()
+            await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
         except Exception:
             pass
         return
@@ -355,7 +361,12 @@ async def handle_income_confirm(message: Message, state: FSMContext) -> None:
     except ValueError:
         await message.answer("Некорректная сумма. Попробуй ещё раз.")
         try:
-            await message.delete()
+            await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
         except Exception:
             pass
         return
@@ -365,7 +376,12 @@ async def handle_income_confirm(message: Message, state: FSMContext) -> None:
             "Сумма должна быть положительной и не больше 10 000 000. Попробуй снова."
         )
         try:
-            await message.delete()
+            await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
         except Exception:
             pass
         return
@@ -377,7 +393,12 @@ async def handle_income_confirm(message: Message, state: FSMContext) -> None:
     )
 
     try:
-        await message.delete()
+        await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
     except Exception:
         pass
 
@@ -406,7 +427,7 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
     # --- Пользователь нажал "Да" ---
     if query.data == "confirm_yes":
         # Обновляем накопления
-        FinanceDatabase().update_saving(
+        get_db().update_saving(
             user_id=query.from_user.id if query.from_user else None,
             category=current["category"],
             amount_delta=current["amount"],
@@ -458,7 +479,7 @@ async def _send_summary_and_goal_prompt(
         user_id = message.from_user.id if message.from_user else message.chat.id
 
     await state.clear()
-    db = FinanceDatabase()
+    db = get_db()
 
     # Читаем накопления по реальному user_id пользователя
     savings = db.get_user_savings(user_id)
@@ -528,7 +549,7 @@ async def show_affordable_wishes(
     if user_id is None:
         return
 
-    db = db or FinanceDatabase()
+    db = db or get_db()
     savings_map = db.get_user_savings_map(user_id)
     wishes = db.get_wishes_by_user(user_id)
 
@@ -579,7 +600,7 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     category = data.get("category")
     goal_amount = data.get("goal", 0)
-    db = FinanceDatabase()
+    db = get_db()
 
     if message.text == "✅ Купил" and category:
         db.update_saving(message.from_user.id, category, -goal_amount)

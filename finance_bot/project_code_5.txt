@@ -1,3 +1,413 @@
+        await state.clear()
+        if callback.message:
+            await safe_answer(callback.message, "Нет бытовых покупок для отложки.", logger=LOGGER)
+        else:
+            await safe_send_message(
+                callback.bot,
+                chat_id=callback.from_user.id,
+                text="Нет бытовых покупок для отложки.",
+                logger=LOGGER,
+            )
+        await safe_callback_answer(callback, logger=LOGGER)
+        return
+
+    keyboard = _build_byt_defer_keyboard(items)
+    await state.clear()
+    if callback.message:
+        edited = await safe_edit_message_text(
+            callback.message.bot,
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            text="ЧТО?",
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+        if not edited:
+            await safe_answer(callback.message, "ЧТО?", reply_markup=keyboard, logger=LOGGER)
+    else:
+        await safe_send_message(
+            callback.bot,
+            chat_id=callback.from_user.id,
+            text="ЧТО?",
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+    await safe_callback_answer(callback, logger=LOGGER)
+
+
+@router.callback_query(F.data.startswith("byt_defer_pick:"))
+async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    """Start deferring selected BYT item."""
+
+    data = callback.data.split(":", maxsplit=1)
+    wish_id: int | None = None
+    if len(data) == 2:
+        try:
+            wish_id = int(data[1])
+        except ValueError:
+            wish_id = None
+    if wish_id is None:
+        state_data = await state.get_data()
+        try:
+            wish_id = (
+                int(state_data.get("defer_item_id"))
+                if state_data.get("defer_item_id") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            wish_id = None
+    if wish_id is None:
+        await safe_callback_answer(callback, "Ошибка: не найден item_id", show_alert=True, logger=LOGGER)
+        return
+
+    started = await _start_byt_defer_flow(callback, state, wish_id)
+    if not started:
+        await state.clear()
+
+
+@router.message(
+    BytDeferState.waiting_for_days,
+    F.text.in_(
+        {
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "Очистить",
+            "✅ Газ",
+        }
+    ),
+)
+async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
+    """Handle calculator input for BYT defer days."""
+
+    data = await state.get_data()
+    current_sum = str(data.get("defer_days_str", "0"))
+    display_chat_id = data.get("defer_display_chat_id", message.chat.id)
+    display_message_id = data.get("defer_display_message_id")
+    db = get_db()
+
+    if message.text == "Очистить":
+        new_sum = "0"
+    elif message.text == "✅ Газ":
+        amount_str = current_sum.strip()
+        if not amount_str:
+            LOGGER.warning(
+                "BYT defer submit missing entered_days user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Нужно ввести число дней. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+        try:
+            days = int(amount_str)
+        except (TypeError, ValueError):
+            LOGGER.warning(
+                "BYT defer submit invalid days user_id=%s value=%s",
+                message.from_user.id if message.from_user else "unknown",
+                amount_str,
+            )
+            await message.answer("Нужно ввести число. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        if days <= 0:
+            LOGGER.warning(
+                "BYT defer submit non-positive days user_id=%s value=%s",
+                message.from_user.id if message.from_user else "unknown",
+                days,
+            )
+            await message.answer("Нужно ввести число дней. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        try:
+            settings_row = db.get_user_settings(message.from_user.id)
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to load user settings for BYT defer user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+                exc_info=exc,
+            )
+            await message.answer("Ошибка БД")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+        max_days = int(settings_row.get("byt_defer_max_days", 365) or 365)
+        if days < 1 or days > max_days:
+            await message.answer(f"Количество дней должно быть от 1 до {max_days}.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        raw_defer_item_id = data.get("defer_item_id")
+        try:
+            defer_item_id = int(raw_defer_item_id) if raw_defer_item_id is not None else None
+        except (TypeError, ValueError):
+            defer_item_id = None
+        if defer_item_id is None:
+            LOGGER.warning(
+                "BYT defer submit missing item_id user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Не выбран товар для отсрочки.")
+            await state.clear()
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+        reminder_message_id = data.get("reminder_message_id")
+        deferred_until = now_tz() + timedelta(days=days)
+
+        try:
+            db.set_wishlist_item_deferred_until(
+                message.from_user.id, defer_item_id, deferred_until.isoformat()
+            )
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to set BYT defer days user_id=%s item_id=%s days=%s",
+                message.from_user.id if message.from_user else "unknown",
+                defer_item_id,
+                days,
+                exc_info=exc,
+            )
+            await message.answer("Ошибка БД")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        LOGGER.info(
+            "BYT defer days submit user_id=%s item_id=%s days=%s",
+            message.from_user.id if message.from_user else "unknown",
+            defer_item_id,
+            days,
+        )
+
+        await state.clear()
+        await message.answer(
+            f"Отложено на {days} дн.", reply_markup=ReplyKeyboardRemove()
+        )
+
+        if reminder_message_id:
+            await _refresh_byt_reminder_message(
+                message.bot,
+                message.chat.id,
+                int(reminder_message_id),
+                message.from_user.id,
+            )
+
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
+
+    new_display_message_id = display_message_id
+    new_display_chat_id = display_chat_id
+    if display_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=display_chat_id,
+            message_id=int(display_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+        if not edited:
+            prompt = await message.answer(f": {new_sum}")
+            new_display_message_id = prompt.message_id
+            new_display_chat_id = message.chat.id
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        new_display_message_id = prompt.message_id
+        new_display_chat_id = message.chat.id
+
+    await state.update_data(
+        defer_days_str=new_sum,
+        defer_display_message_id=new_display_message_id,
+        defer_display_chat_id=new_display_chat_id,
+    )
+
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+@router.message(BytDeferState.waiting_for_days)
+async def handle_byt_defer_days_invalid(message: Message) -> None:
+    """Prompt to use calculator buttons for defer days."""
+
+    await message.answer("Используй кнопки калькулятора ниже.")
+
+
+===== Bot/keyboards/__init__.py =====
+
+
+
+===== Bot/keyboards/calculator.py =====
+
+"""Calculator keyboard definitions."""
+
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+
+
+def income_calculator_keyboard() -> ReplyKeyboardMarkup:
+    """Общая цифровая клавиатура для ввода сумм."""
+
+    keyboard = [
+        [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
+        [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
+        [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
+        [
+            KeyboardButton(text="Очистить"),
+            KeyboardButton(text="0"),
+            KeyboardButton(text="✅ Газ"),
+        ],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+===== Bot/keyboards/household.py =====
+
+"""Keyboards for household payments."""
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
+
+
+def household_payments_answer_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with Yes/No and Back options for household payments."""
+
+    buttons = [
+        [
+            KeyboardButton(text="✅ Да"),
+            KeyboardButton(text="❌ Нет"),
+            KeyboardButton(text="⬅️ Назад"),
+        ]
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+def household_payments_inline_keyboard(
+    show_back: bool, question_code: str | None = None
+) -> InlineKeyboardMarkup:
+    """Inline keyboard with Yes/No/Back options for household payments."""
+
+    suffix = f":{question_code}" if question_code else ""
+    buttons = [
+        [
+            InlineKeyboardButton(text="Да", callback_data=f"hh_pay:yes{suffix}"),
+            InlineKeyboardButton(text="Нет", callback_data=f"hh_pay:no{suffix}"),
+        ]
+    ]
+    if show_back:
+        buttons[0].append(
+            InlineKeyboardButton(text="Назад", callback_data=f"hh_pay:back{suffix}")
+        )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+===== Bot/keyboards/main.py =====
+
+"""Keyboard definitions."""
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
+
+def main_menu_keyboard(
+    show_household: bool = False,
+    show_test_button: bool = False,
+    show_settings: bool = True,
+) -> ReplyKeyboardMarkup:
+    """Create main menu keyboard."""
+
+    buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
+    if show_household:
+        buttons.append([KeyboardButton(text="Бытовые платежи")])
+    if show_settings:
+        buttons.append([KeyboardButton(text="⚙️")])
+    if show_test_button:
+        buttons.append([KeyboardButton(text="Проверить быт")])  # TODO: удалить после тестов
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def yes_no_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with Yes/No options."""
+
+    buttons = [[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+
+
+def yes_no_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with Yes/No options to avoid opening system keyboard."""
+
+    buttons = [
+        [
+            InlineKeyboardButton(text="Да", callback_data="confirm_yes"),
+            InlineKeyboardButton(text="Нет", callback_data="confirm_no"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def back_to_main_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with back to main option."""
 
     buttons = [[KeyboardButton(text="⏪ На главную")]]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -495,7 +905,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramUnauthorizedError
 
 from Bot.config.settings import get_settings
-from Bot.database.crud import FinanceDatabase
+from Bot.database.get_db import get_db
 from Bot.handlers import (
     callbacks,
     common,
@@ -547,7 +957,7 @@ def _format_token_context(token_source: str, fingerprint: str, env_path: Path) -
     return f"token_source={token_source}, fingerprint={fingerprint}"
 
 
-async def _run_byt_scheduler(bot: Bot, db: FinanceDatabase, timezone: ZoneInfo) -> None:
+async def _run_byt_scheduler(bot: Bot, db, timezone: ZoneInfo) -> None:
     """Background scheduler for BYT reminders."""
 
     while True:
@@ -584,7 +994,7 @@ async def main() -> None:
     )
     dp = Dispatcher()
 
-    db = FinanceDatabase()
+    db = get_db()
     register_routers(dp)
 
     try:
@@ -991,14 +1401,341 @@ def find_reached_goal(
     return None, None
 
 
+===== Bot/utils/telegram_safe.py =====
+
+"""Safe wrappers for Telegram API operations."""
+from __future__ import annotations
+
+import asyncio
+import logging
+
+from aiohttp import ClientConnectionError, ClientOSError
+from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+LOGGER = logging.getLogger(__name__)
+
+DEFAULT_REQUEST_TIMEOUT = 30
+
+
+def _get_logger(logger: logging.Logger | None) -> logging.Logger:
+    return logger or LOGGER
+
+
+def _is_network_error(exc: Exception) -> bool:
+    return isinstance(
+        exc,
+        (
+            TelegramNetworkError,
+            ClientOSError,
+            ClientConnectionError,
+            asyncio.TimeoutError,
+            TimeoutError,
+        ),
+    )
+
+
+def _log_network_error(
+    logger: logging.Logger,
+    action: str,
+    exc: Exception,
+    attempt: int,
+    retries: int,
+) -> None:
+    logger.warning(
+        "NETWORK_RETRY action=%s attempt=%s/%s error=%s",
+        action,
+        attempt,
+        retries + 1,
+        exc,
+    )
+    if logger.isEnabledFor(logging.DEBUG):
+        logger.debug("Network error details for %s", action, exc_info=True)
+
+
+async def safe_delete_message(
+    bot,
+    chat_id: int,
+    message_id: int,
+    *,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+) -> bool:
+    """Safely delete a message without raising exceptions."""
+
+    log = _get_logger(logger)
+    for attempt in range(retries + 1):
+        try:
+            await bot.delete_message(
+                chat_id=chat_id,
+                message_id=message_id,
+                request_timeout=request_timeout,
+            )
+            return True
+        except TelegramBadRequest as exc:
+            text = str(exc).lower()
+            if (
+                "message to delete not found" in text
+                or "message can't be deleted" in text
+                or "message can’t be deleted" in text
+            ):
+                log.debug(
+                    "Safe delete skipped (chat_id=%s, message_id=%s): %s",
+                    chat_id,
+                    message_id,
+                    exc,
+                )
+                return False
+            log.warning(
+                "Safe delete failed (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe delete failure details", exc_info=True)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "delete_message", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return False
+            log.warning(
+                "Safe delete unexpected error (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe delete unexpected error details", exc_info=True)
+            return False
+    return False
+
+
+async def safe_edit_message_text(
+    bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+) -> bool:
+    """Safely edit a message text without raising exceptions."""
+
+    log = _get_logger(logger)
+    if isinstance(reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)):
+        log.warning("Safe edit skipped due to reply keyboard markup")
+        return False
+
+    for attempt in range(retries + 1):
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+            return True
+        except TelegramBadRequest as exc:
+            lowered = str(exc).lower()
+            if "message is not modified" in lowered:
+                return True
+            if "message to edit not found" in lowered:
+                log.debug(
+                    "Safe edit skipped (chat_id=%s, message_id=%s): %s",
+                    chat_id,
+                    message_id,
+                    exc,
+                )
+                return False
+            log.warning(
+                "Safe edit failed (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit failure details", exc_info=True)
+            return False
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "edit_message_text", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return False
+            log.warning(
+                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit unexpected error details", exc_info=True)
+            return False
+    return False
+
+
+async def safe_send_message(
+    bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+):
+    """Safely send a message using bot.send_message without raising exceptions."""
+
+    log = _get_logger(logger)
+    for attempt in range(retries + 1):
+        try:
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+        except TelegramBadRequest as exc:
+            log.warning("Safe send failed: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe send failure details", exc_info=True)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "send_message", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return None
+            log.warning("Safe send unexpected error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe send unexpected error details", exc_info=True)
+            return None
+    return None
+
+
+async def safe_answer(
+    message_or_callback,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+) -> int | None:
+    """Safely send a message using .answer without raising exceptions."""
+
+    log = _get_logger(logger)
+    for attempt in range(retries + 1):
+        try:
+            sent = await message_or_callback.answer(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+            return int(sent.message_id)
+        except TelegramBadRequest as exc:
+            log.warning("Safe answer failed: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe answer failure details", exc_info=True)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "answer", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return None
+            log.warning("Safe answer unexpected error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe answer unexpected error details", exc_info=True)
+            return None
+    return None
+
+
+async def safe_callback_answer(
+    callback,
+    text: str | None = None,
+    *,
+    show_alert: bool | None = None,
+    logger: logging.Logger | None = None,
+) -> None:
+    """Safely answer a callback query without raising exceptions."""
+
+    log = _get_logger(logger)
+    try:
+        await callback.answer(text=text, show_alert=show_alert)
+    except Exception as exc:  # noqa: BLE001
+        if _is_network_error(exc):
+            log.warning("Safe callback answer failed due to network error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe callback answer network details", exc_info=True)
+            return
+        log.warning("Safe callback answer unexpected error: %s", exc)
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("Safe callback answer unexpected error details", exc_info=True)
+
+
+===== Bot/utils/text_sanitizer.py =====
+
+"""Text sanitizers for user-facing labels."""
+from __future__ import annotations
+
+import re
+
+
+_TAIL_PATTERNS = [
+    r"на\s+тиньк",
+    r"на\s+альфу",
+    r"на\s+сбер",
+    r"на\s+яндекс",
+]
+
+
+def sanitize_income_title(text: str) -> str:
+    value = str(text or "")
+    for pattern in _TAIL_PATTERNS:
+        value = re.sub(rf"\s*(?:—|-|:)?\s*{pattern}", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s*\(\s*озон\s*\)", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\(\s*\)", "", value)
+    value = re.sub(r"\s{2,}", " ", value)
+    return value.strip(" -—:\t\n")
+
+
 ===== Bot/utils/ui_cleanup.py =====
 
 import logging
 from typing import List
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
+
+from Bot.database.get_db import get_db
+from Bot.utils.telegram_safe import (
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1041,43 +1778,12 @@ async def ui_safe_delete_message(
     message_id: int,
     log_context: str | None = None,
 ) -> bool:
-    context_label = f" ({log_context})" if log_context else ""
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        return True
-    except TelegramBadRequest as exc:
-        text = str(exc).lower()
-        if (
-            "message to delete not found" in text
-            or "message can't be deleted" in text
-            or "message can’t be deleted" in text
-        ):
-            LOGGER.debug(
-                "UI safe delete skipped%s (chat_id=%s, message_id=%s): %s",
-                context_label,
-                chat_id,
-                message_id,
-                exc,
-            )
-            return False
-        LOGGER.error(
-            "UI safe delete failed%s (chat_id=%s, message_id=%s): %s",
-            context_label,
-            chat_id,
-            message_id,
-            exc,
-            exc_info=True,
-        )
-        return False
-    except Exception:  # noqa: BLE001
-        LOGGER.error(
-            "UI safe delete error%s (chat_id=%s, message_id=%s)",
-            context_label,
-            chat_id,
-            message_id,
-            exc_info=True,
-        )
-        return False
+    return await safe_delete_message(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        logger=LOGGER,
+    )
 
 
 async def ui_set_welcome_message(
@@ -1086,40 +1792,34 @@ async def ui_set_welcome_message(
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     if welcome_id is not None:
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=int(welcome_id),
-                text=text,
-            )
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(welcome_id),
+            text=text,
+            logger=LOGGER,
+        )
+        if edited:
             LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id)
             return int(welcome_id)
-        except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
-                LOGGER.info(
-                    "WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id
-                )
-                return int(welcome_id)
-            LOGGER.warning(
-                "Failed to edit welcome message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                welcome_id,
-                exc,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error editing welcome message (chat_id=%s, message_id=%s)",
-                chat_id,
-                welcome_id,
-                exc_info=True,
-            )
-    sent = await bot.send_message(chat_id=chat_id, text=text)
-    await state.update_data(
-        ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
-    )
-    LOGGER.info("WELCOME recreated (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
-    # DO NOT DELETE WITHOUT USER CONFIRMATION.
-    return int(sent.message_id)
+
+    if welcome_id is None:
+        db = get_db()
+        persisted = db.get_welcome_message_id(chat_id)
+        if persisted is not None:
+            await state.update_data(ui_chat_id=chat_id, ui_welcome_message_id=int(persisted))
+            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, persisted)
+            return int(persisted)
+
+    sent = await safe_send_message(bot, chat_id=chat_id, text=text, logger=LOGGER)
+    if sent:
+        await state.update_data(
+            ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
+        )
+        get_db().set_welcome_message_id(chat_id, int(sent.message_id))
+        LOGGER.info("WELCOME recreated (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
+        return int(sent.message_id)
+    return 0
 
 
 async def ui_set_settings_mode_message(
@@ -1151,10 +1851,12 @@ async def ui_cleanup_to_context(
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    keep_id_set = {int(welcome_id)} if welcome_id else set()
-    if keep_ids:
-        keep_id_set.update(int(item) for item in keep_ids if item is not None)
-    delete_ids = [int(mid) for mid in tracked_ids if int(mid) not in keep_id_set]
+    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
+    delete_ids = [
+        int(mid)
+        for mid in tracked_ids
+        if int(mid) not in keep_id_set and int(mid) != int(welcome_id or 0)
+    ]
     deleted_count = 0
     for message_id in delete_ids:
         deleted = await ui_safe_delete_message(
@@ -1166,29 +1868,14 @@ async def ui_cleanup_to_context(
         if deleted:
             deleted_count += 1
 
-    remaining_ids: List[int] = []
-    for message_id in tracked_ids:
-        normalized = int(message_id)
-        if normalized in keep_id_set and normalized not in remaining_ids:
-            remaining_ids.append(normalized)
-    if keep_ids:
-        for message_id in keep_ids:
-            normalized = int(message_id)
-            if normalized in keep_id_set and normalized not in remaining_ids:
-                remaining_ids.append(normalized)
-    if welcome_id is not None:
-        normalized = int(welcome_id)
-        if normalized not in remaining_ids:
-            remaining_ids.append(normalized)
-
     LOGGER.info(
         "UI_CLEANUP context=%s deleted=%s kept=%s",
         context_name,
         deleted_count,
-        len(remaining_ids),
+        len(keep_id_set),
     )
     await state.update_data(
-        ui_tracked_message_ids=remaining_ids,
+        ui_tracked_message_ids=list(keep_id_set),
     )
 
 
@@ -1210,39 +1897,34 @@ async def ui_render_screen(
 ) -> int:
     data = await state.get_data()
     screen_id = data.get("ui_screen_message_id")
-    if screen_id is not None:
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=int(screen_id),
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-            )
+    if screen_id is not None and not isinstance(
+        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
+    ):
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(screen_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            logger=LOGGER,
+        )
+        if edited:
             await ui_set_screen_message(state, chat_id, int(screen_id))
             return int(screen_id)
-        except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
-                await ui_set_screen_message(state, chat_id, int(screen_id))
-                return int(screen_id)
-            LOGGER.warning(
-                "Failed to edit screen message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                screen_id,
-                exc,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error editing screen message (chat_id=%s, message_id=%s)",
-                chat_id,
-                screen_id,
-                exc_info=True,
-            )
-    sent = await bot.send_message(
-        chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode
+    sent = await safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
     )
-    await ui_set_screen_message(state, chat_id, sent.message_id)
-    return int(sent.message_id)
+    if sent:
+        await ui_set_screen_message(state, chat_id, sent.message_id)
+        return int(sent.message_id)
+    return int(screen_id or 0)
+
 
 ===== Bot/utils/ui_flow.py =====
 
@@ -1316,594 +1998,3 @@ async def ui_cleanup_for_transition(
                 "Unexpected error deleting message (chat_id=%s, message_id=%s)",
                 chat_id,
                 message_id,
-                exc_info=True,
-            )
-    await state.update_data(ui_tracked_message_ids=[])
-
-
-async def ui_transition(
-    bot: Bot,
-    state: FSMContext,
-    chat_id: int,
-    new_screen: str,
-    send_screen: Callable[[], Awaitable[Message]],
-) -> Message:
-    await ui_cleanup_for_transition(bot, state, chat_id, keep_greeting=True)
-    sent = await send_screen()
-    await ui_set_screen_message(state, new_screen, sent.message_id)
-    return sent
-
-
-===== __init__.py =====
-
-
-
-===== tests/__init__.py =====
-
-
-
-===== tests/integration/__init__.py =====
-
-
-
-===== tests/integration/test_database.py =====
-
-"""Integration tests for database operations."""
-from Bot.database.crud import FinanceDatabase
-
-
-def setup_module(module) -> None:  # noqa: D401
-    """Clean database tables before tests."""
-
-    db = FinanceDatabase()
-    cursor = db.connection.cursor()
-    cursor.execute("DELETE FROM wishes")
-    cursor.execute("DELETE FROM purchases")
-    cursor.execute("DELETE FROM savings")
-    db.connection.commit()
-
-
-def test_add_and_get_wish() -> None:
-    """Add wish and retrieve it."""
-
-    db = FinanceDatabase()
-    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
-    wish = db.get_wish(wish_id)
-    assert wish is not None
-    assert wish["name"] == "Test"
-
-
-def test_update_saving_and_purchase() -> None:
-    """Update savings and add purchase entry."""
-
-    db = FinanceDatabase()
-    db.update_saving(1, "Инструменты", 20.0)
-    savings = db.get_user_savings(1)
-    assert savings.get("Инструменты", {}).get("current") == 20.0
-    db.add_purchase(1, "Test", 10.0, "Инструменты")
-    purchases = db.get_purchases_by_user(1)
-    assert len(purchases) == 1
-
-
-===== tests/run_all_tests.py =====
-
-"""Run all pytest suites."""
-import pytest
-
-
-if __name__ == "__main__":
-    raise SystemExit(pytest.main(["-q", "tests"]))
-
-
-===== tests/test_runner.py =====
-
-"""Helper to run tests programmatically."""
-import subprocess
-import sys
-from pathlib import Path
-
-
-def main() -> int:
-    """Run pytest suite and return exit code."""
-
-    root = Path(__file__).resolve().parents[1]
-    result = subprocess.run([sys.executable, "-m", "pytest", "-q", str(root / "tests")], check=False)
-    return result.returncode
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-
-
-===== tests/unit/__init__.py =====
-
-
-
-===== tests/unit/test_handlers.py =====
-
-"""Tests for handler utilities."""
-from Bot.handlers.finances import _format_savings_summary, _find_reached_goal
-
-
-def test_format_savings_summary_empty() -> None:
-    """Empty savings returns default message."""
-
-    assert _format_savings_summary({}) == "Пока нет накоплений."
-
-
-def test_find_reached_goal() -> None:
-    """Goal detection returns first satisfied category."""
-
-    savings = {
-        "категория": {"current": 150, "goal": 100, "purpose": "test"},
-        "другая": {"current": 50, "goal": 100, "purpose": "none"},
-    }
-    category, data = _find_reached_goal(savings)
-    assert category == "категория"
-    assert data["goal"] == 100
-
-
-===== tests/unit/test_household_payments.py =====
-
-"""Tests for household payments workflow."""
-from datetime import datetime
-
-import pytest
-
-from Bot.config import settings
-from Bot.database.crud import FinanceDatabase
-from Bot.handlers.household_payments import reset_household_cycle_if_needed
-from Bot.utils.datetime_utils import current_month_str
-
-
-@pytest.mark.asyncio
-async def test_reset_cycle_creates_statuses_after_threshold() -> None:
-    """Statuses should appear after threshold date only once."""
-
-    db = FinanceDatabase()
-    user_id = 99991
-    month = "2025-01"
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
-    db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
-    )
-    db.connection.commit()
-    db.ensure_household_items_seeded(user_id)
-    items = db.list_active_household_items(user_id)
-
-    before_threshold = datetime(2025, 1, 5, 10, 0, tzinfo=settings.TIMEZONE)
-    await reset_household_cycle_if_needed(user_id, db, now=before_threshold)
-    assert not await db.household_status_exists(user_id, month)
-
-    after_threshold = datetime(2025, 1, 6, 12, 0, tzinfo=settings.TIMEZONE)
-    await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
-    assert await db.has_unpaid_household_questions(user_id, month)
-
-    await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
-    cursor = db.connection.execute(
-        "SELECT COUNT(*) FROM household_payments WHERE user_id = ? AND month = ?",
-        (user_id, month),
-    )
-    assert cursor.fetchone()[0] == len(items)
-
-
-@pytest.mark.asyncio
-async def test_mark_and_check_unpaid_questions() -> None:
-    """Marking paid questions should update unpaid check."""
-
-    db = FinanceDatabase()
-    user_id = 99992
-    month = current_month_str(datetime(2025, 2, 6, 12, 0, tzinfo=settings.TIMEZONE))
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
-    db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
-    )
-    db.connection.commit()
-    db.ensure_household_items_seeded(user_id)
-    items = db.list_active_household_items(user_id)
-
-    await db.init_household_questions_for_month(user_id, month)
-    assert await db.has_unpaid_household_questions(user_id, month)
-
-    for item in items:
-        await db.mark_household_question_paid(user_id, month, str(item.get("code")))
-    assert not await db.has_unpaid_household_questions(user_id, month)
-
-
-@pytest.mark.asyncio
-async def test_question_flow_and_savings_update() -> None:
-    """Yes/No answers adjust savings and skip paid questions."""
-
-    db = FinanceDatabase()
-    user_id = 99993
-    month = current_month_str(datetime(2025, 3, 6, 12, 0, tzinfo=settings.TIMEZONE))
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
-    db.connection.execute("DELETE FROM savings WHERE user_id = ? AND category = 'быт'", (user_id,))
-    db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
-    )
-    db.connection.commit()
-    db.ensure_household_items_seeded(user_id)
-    items = db.list_active_household_items(user_id)
-
-    db.update_saving(user_id, "быт", 5000)
-    await db.init_household_questions_for_month(user_id, month)
-
-    unpaid = await db.get_unpaid_household_questions(user_id, month)
-    assert unpaid
-    first_code = str(unpaid[0])
-    first_item = next(item for item in items if str(item.get("code")) == first_code)
-    amount = float(first_item.get("amount") or 0)
-
-    changed = db.apply_household_payment_answer(
-        user_id=user_id,
-        month=month,
-        question_code=first_code,
-        amount=amount,
-        answer="yes",
-    )
-    assert changed is True
-
-    savings_map = db.get_user_savings_map(user_id)
-    assert savings_map.get("быт") == 5000 - amount
-
-    changed_again = db.apply_household_payment_answer(
-        user_id=user_id,
-        month=month,
-        question_code=first_code,
-        amount=amount,
-        answer="yes",
-    )
-    assert changed_again is False
-
-    changed_back = db.apply_household_payment_answer(
-        user_id=user_id,
-        month=month,
-        question_code=first_code,
-        amount=amount,
-        answer="no",
-    )
-    assert changed_back is True
-    savings_map = db.get_user_savings_map(user_id)
-    assert savings_map.get("быт") == 5000
-
-
-===== tests/unit/test_household_renderers.py =====
-
-"""Tests for household renderers."""
-
-from Bot.renderers.household import format_household_items, render_household_questions_text
-
-
-def test_render_questions_text_marks_answers() -> None:
-    questions = [
-        {"code": "q1", "text": "Оплатил интернет?", "amount": 100},
-        {"code": "q2", "text": "Оплатил свет?", "amount": 200},
-    ]
-    answers = {"q1": "yes", "q2": "no"}
-    text = render_household_questions_text("2025-02", questions, answers, current_index=1)
-    assert "✅" in text
-    assert "❌" in text
-    assert "2025-02" in text
-
-
-def test_format_household_items() -> None:
-    items = [
-        {"code": "q1", "text": "Интернет?", "amount": 100},
-        {"code": "q2", "text": "Свет?", "amount": 200},
-    ]
-    text = format_household_items(items, unpaid_set={"q2"})
-    assert "✅" in text
-    assert "❌" in text
-    assert "Интернет" in text
-
-
-===== tests/unit/test_household_services.py =====
-
-"""Tests for household services."""
-
-from Bot.services.household import (
-    build_household_questions,
-    get_current_question,
-    get_next_index,
-    get_previous_index,
-    should_ignore_answer,
-    update_flow_state,
-)
-
-
-def test_flow_state_and_navigation() -> None:
-    questions = build_household_questions(
-        [
-            {"code": "q1", "text": "Первый?", "amount": 100},
-            {"code": "q2", "text": "Второй?", "amount": 200},
-        ]
-    )
-    flow = update_flow_state(
-        month="2025-01",
-        questions=questions,
-        current_step_index=0,
-        answers={},
-        processed_steps=[],
-    )
-    assert flow.current_question_code == "q1"
-    assert get_current_question(questions, 1)["code"] == "q2"
-    assert get_next_index(0, questions) == 1
-    assert get_next_index(1, questions) == 2
-    assert get_previous_index(0) == 0
-    assert get_previous_index(1) == 0
-
-
-def test_idempotency_check() -> None:
-    answers = {"q1": "yes"}
-    processed_steps = {"q1"}
-    assert should_ignore_answer(answers, processed_steps, "q1", "yes") is True
-    assert should_ignore_answer(answers, processed_steps, "q1", "no") is False
-    assert should_ignore_answer(answers, processed_steps, "q2", "yes") is False
-
-
-===== tests/unit/test_imports.py =====
-
-"""Basic import tests."""
-
-
-def test_import_main() -> None:
-    """Ensure main module is importable."""
-
-    import Bot.main  # noqa: F401
-
-
-def test_import_handlers() -> None:
-    """Ensure handlers modules are importable."""
-
-    import Bot.handlers.start  # noqa: F401
-    import Bot.handlers.finances  # noqa: F401
-    import Bot.handlers.household_payments  # noqa: F401
-    import Bot.handlers.wishlist  # noqa: F401
-    import Bot.handlers.callbacks  # noqa: F401
-    import Bot.handlers.common  # noqa: F401
-
-
-===== tests/unit/test_ui_cleanup.py =====
-
-"""Tests for UI cleanup utilities."""
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
-import asyncio
-import sys
-import types
-from pathlib import Path
-
-import pytest
-
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-if "aiogram" not in sys.modules:
-    aiogram = types.ModuleType("aiogram")
-
-    class DummyRouter:
-        def message(self, *args, **kwargs):
-            def decorator(func):
-                return func
-
-            return decorator
-
-    class DummyF:
-        class _Field:
-            def __eq__(self, other):
-                return ("eq", other)
-
-        text = _Field()
-
-    class Bot:
-        pass
-
-    aiogram.F = DummyF()
-    aiogram.Router = DummyRouter
-    aiogram.Bot = Bot
-
-    exceptions = types.ModuleType("aiogram.exceptions")
-
-    class TelegramBadRequest(Exception):
-        pass
-
-    exceptions.TelegramBadRequest = TelegramBadRequest
-    aiogram.exceptions = exceptions
-
-    filters = types.ModuleType("aiogram.filters")
-
-    class Command:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    filters.Command = Command
-    aiogram.filters = filters
-
-    fsm = types.ModuleType("aiogram.fsm")
-    fsm_context = types.ModuleType("aiogram.fsm.context")
-
-    class FSMContext:
-        pass
-
-    fsm_context.FSMContext = FSMContext
-    fsm.context = fsm_context
-    aiogram.fsm = fsm
-
-    types_mod = types.ModuleType("aiogram.types")
-
-    class Message:
-        pass
-
-    class ReplyKeyboardMarkup:
-        pass
-
-    class InlineKeyboardButton:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    class InlineKeyboardMarkup:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    class KeyboardButton:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    types_mod.Message = Message
-    types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
-    types_mod.InlineKeyboardButton = InlineKeyboardButton
-    types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
-    types_mod.KeyboardButton = KeyboardButton
-    aiogram.types = types_mod
-
-    sys.modules["aiogram"] = aiogram
-    sys.modules["aiogram.exceptions"] = exceptions
-    sys.modules["aiogram.filters"] = filters
-    sys.modules["aiogram.fsm"] = fsm
-    sys.modules["aiogram.fsm.context"] = fsm_context
-    sys.modules["aiogram.types"] = types_mod
-
-from Bot.handlers.start import back_to_main
-from Bot.utils.ui_cleanup import (
-    ui_cleanup_to_context,
-    ui_register_message,
-    ui_set_welcome_message,
-    ui_track_message,
-)
-
-
-class DummyState:
-    """Minimal FSMContext stand-in for unit tests."""
-
-    def __init__(self, initial=None) -> None:
-        self.data = dict(initial or {})
-
-    async def get_data(self) -> dict:
-        return dict(self.data)
-
-    async def update_data(self, **kwargs) -> None:
-        self.data.update(kwargs)
-
-
-class DummyBot:
-    """Minimal bot mock with async delete_message."""
-
-    def __init__(self) -> None:
-        self.delete_message = AsyncMock()
-        self.edit_message_text = AsyncMock()
-        self.send_message = AsyncMock()
-
-
-def test_ui_track_deduplicates() -> None:
-    """Tracking avoids duplicate message ids."""
-
-    async def run_test() -> None:
-        state = DummyState()
-        await ui_track_message(state, 1, 10)
-        await ui_track_message(state, 1, 10)
-        data = await state.get_data()
-        assert data["ui_tracked_message_ids"] == [10]
-
-    asyncio.run(run_test())
-
-
-def test_ui_cleanup_keeps_welcome() -> None:
-    """Cleanup removes tracked messages while keeping welcome."""
-
-    async def run_test() -> None:
-        state = DummyState()
-        await ui_register_message(state, 1, 10)
-        await ui_register_message(state, 1, 11)
-        await ui_register_message(state, 1, 12)
-        await state.update_data(ui_welcome_message_id=11)
-
-        bot = DummyBot()
-        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU", keep_ids=[11])
-
-        deleted_ids = {
-            call.kwargs["message_id"] for call in bot.delete_message.call_args_list
-        }
-        assert deleted_ids == {10, 12}
-        data = await state.get_data()
-        assert data["ui_tracked_message_ids"] == [11]
-
-    asyncio.run(run_test())
-
-
-def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
-    """back_to_main deletes user message, cleans UI, and renders menu."""
-
-    async def run_test() -> None:
-        state = DummyState({"ui_welcome_message_id": 55})
-        cleanup_mock = AsyncMock()
-        render_mock = AsyncMock()
-        build_menu_mock = AsyncMock(return_value=MagicMock())
-        safe_delete_mock = AsyncMock(return_value=True)
-
-        monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
-        monkeypatch.setattr("Bot.handlers.start.ui_render_screen", render_mock)
-        monkeypatch.setattr(
-            "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
-        )
-        monkeypatch.setattr("Bot.handlers.start.ui_safe_delete_message", safe_delete_mock)
-
-        message = SimpleNamespace(
-            chat=SimpleNamespace(id=1),
-            from_user=SimpleNamespace(id=2),
-            message_id=10,
-            bot=SimpleNamespace(),
-        )
-
-        await back_to_main(message, state)
-
-        safe_delete_mock.assert_awaited_once()
-        cleanup_mock.assert_awaited_once()
-        _, kwargs = cleanup_mock.await_args
-        assert kwargs["keep_ids"] == [55]
-        build_menu_mock.assert_awaited_once_with(2)
-        render_mock.assert_awaited_once()
-
-    asyncio.run(run_test())
-
-
-def test_welcome_reused_on_start() -> None:
-    """Welcome message is reused when id exists."""
-
-    async def run_test() -> None:
-        state = DummyState({"ui_welcome_message_id": 77})
-        bot = DummyBot()
-        bot.send_message.return_value = SimpleNamespace(message_id=88)
-
-        welcome_id = await ui_set_welcome_message(bot, state, 1, "Hello")
-
-        assert welcome_id == 77
-        bot.edit_message_text.assert_awaited_once()
-        bot.send_message.assert_not_called()
-
-    asyncio.run(run_test())
-
-===== tests/unit/test_utils.py =====
-
-"""Utility tests."""
-from Bot.utils.logging import init_logging
-
-
-def test_init_logging_returns_logger() -> None:
-    """init_logging should return a logger instance."""
-
-    logger = init_logging()
-    assert logger.name == "Bot.utils.logging"
-
-
-===== utils/__init__.py =====
-
-from Bot.utils import *  # noqa: F401,F403
-
-
-===== utils/logging.py =====
-
-from Bot.utils.logging import *  # noqa: F401,F403
-
-

@@ -71,6 +71,9 @@ if "aiogram" not in sys.modules:
     class ReplyKeyboardMarkup:
         pass
 
+    class ReplyKeyboardRemove:
+        pass
+
     class InlineKeyboardButton:
         def __init__(self, *args, **kwargs):
             return None
@@ -85,6 +88,7 @@ if "aiogram" not in sys.modules:
 
     types_mod.Message = Message
     types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
+    types_mod.ReplyKeyboardRemove = ReplyKeyboardRemove
     types_mod.InlineKeyboardButton = InlineKeyboardButton
     types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
     types_mod.KeyboardButton = KeyboardButton
@@ -152,14 +156,14 @@ def test_ui_cleanup_keeps_welcome() -> None:
         await state.update_data(ui_welcome_message_id=11)
 
         bot = DummyBot()
-        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU", keep_ids=[11])
+        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU")
 
         deleted_ids = {
             call.kwargs["message_id"] for call in bot.delete_message.call_args_list
         }
         assert deleted_ids == {10, 12}
         data = await state.get_data()
-        assert data["ui_tracked_message_ids"] == [11]
+        assert data["ui_tracked_message_ids"] == []
 
     asyncio.run(run_test())
 
@@ -193,7 +197,7 @@ def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
         safe_delete_mock.assert_awaited_once()
         cleanup_mock.assert_awaited_once()
         _, kwargs = cleanup_mock.await_args
-        assert kwargs["keep_ids"] == [55]
+        assert kwargs.get("keep_ids") is None
         build_menu_mock.assert_awaited_once_with(2)
         render_mock.assert_awaited_once()
 

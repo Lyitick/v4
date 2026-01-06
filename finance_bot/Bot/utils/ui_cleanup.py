@@ -2,8 +2,15 @@ import logging
 from typing import List
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
+
+from Bot.database.get_db import get_db
+from Bot.utils.telegram_safe import (
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -46,43 +53,12 @@ async def ui_safe_delete_message(
     message_id: int,
     log_context: str | None = None,
 ) -> bool:
-    context_label = f" ({log_context})" if log_context else ""
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        return True
-    except TelegramBadRequest as exc:
-        text = str(exc).lower()
-        if (
-            "message to delete not found" in text
-            or "message can't be deleted" in text
-            or "message can’t be deleted" in text
-        ):
-            LOGGER.debug(
-                "UI safe delete skipped%s (chat_id=%s, message_id=%s): %s",
-                context_label,
-                chat_id,
-                message_id,
-                exc,
-            )
-            return False
-        LOGGER.error(
-            "UI safe delete failed%s (chat_id=%s, message_id=%s): %s",
-            context_label,
-            chat_id,
-            message_id,
-            exc,
-            exc_info=True,
-        )
-        return False
-    except Exception:  # noqa: BLE001
-        LOGGER.error(
-            "UI safe delete error%s (chat_id=%s, message_id=%s)",
-            context_label,
-            chat_id,
-            message_id,
-            exc_info=True,
-        )
-        return False
+    return await safe_delete_message(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        logger=LOGGER,
+    )
 
 
 async def ui_set_welcome_message(
@@ -91,40 +67,34 @@ async def ui_set_welcome_message(
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     if welcome_id is not None:
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=int(welcome_id),
-                text=text,
-            )
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(welcome_id),
+            text=text,
+            logger=LOGGER,
+        )
+        if edited:
             LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id)
             return int(welcome_id)
-        except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
-                LOGGER.info(
-                    "WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id
-                )
-                return int(welcome_id)
-            LOGGER.warning(
-                "Failed to edit welcome message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                welcome_id,
-                exc,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error editing welcome message (chat_id=%s, message_id=%s)",
-                chat_id,
-                welcome_id,
-                exc_info=True,
-            )
-    sent = await bot.send_message(chat_id=chat_id, text=text)
-    await state.update_data(
-        ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
-    )
-    LOGGER.info("WELCOME recreated (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
-    # DO NOT DELETE WITHOUT USER CONFIRMATION.
-    return int(sent.message_id)
+
+    if welcome_id is None:
+        db = get_db()
+        persisted = db.get_welcome_message_id(chat_id)
+        if persisted is not None:
+            await state.update_data(ui_chat_id=chat_id, ui_welcome_message_id=int(persisted))
+            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, persisted)
+            return int(persisted)
+
+    sent = await safe_send_message(bot, chat_id=chat_id, text=text, logger=LOGGER)
+    if sent:
+        await state.update_data(
+            ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
+        )
+        get_db().set_welcome_message_id(chat_id, int(sent.message_id))
+        LOGGER.info("WELCOME recreated (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
+        return int(sent.message_id)
+    return 0
 
 
 async def ui_set_settings_mode_message(
@@ -156,10 +126,12 @@ async def ui_cleanup_to_context(
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    keep_id_set = {int(welcome_id)} if welcome_id else set()
-    if keep_ids:
-        keep_id_set.update(int(item) for item in keep_ids if item is not None)
-    delete_ids = [int(mid) for mid in tracked_ids if int(mid) not in keep_id_set]
+    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
+    delete_ids = [
+        int(mid)
+        for mid in tracked_ids
+        if int(mid) not in keep_id_set and int(mid) != int(welcome_id or 0)
+    ]
     deleted_count = 0
     for message_id in delete_ids:
         deleted = await ui_safe_delete_message(
@@ -171,29 +143,14 @@ async def ui_cleanup_to_context(
         if deleted:
             deleted_count += 1
 
-    remaining_ids: List[int] = []
-    for message_id in tracked_ids:
-        normalized = int(message_id)
-        if normalized in keep_id_set and normalized not in remaining_ids:
-            remaining_ids.append(normalized)
-    if keep_ids:
-        for message_id in keep_ids:
-            normalized = int(message_id)
-            if normalized in keep_id_set and normalized not in remaining_ids:
-                remaining_ids.append(normalized)
-    if welcome_id is not None:
-        normalized = int(welcome_id)
-        if normalized not in remaining_ids:
-            remaining_ids.append(normalized)
-
     LOGGER.info(
         "UI_CLEANUP context=%s deleted=%s kept=%s",
         context_name,
         deleted_count,
-        len(remaining_ids),
+        len(keep_id_set),
     )
     await state.update_data(
-        ui_tracked_message_ids=remaining_ids,
+        ui_tracked_message_ids=list(keep_id_set),
     )
 
 
@@ -215,36 +172,30 @@ async def ui_render_screen(
 ) -> int:
     data = await state.get_data()
     screen_id = data.get("ui_screen_message_id")
-    if screen_id is not None:
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=int(screen_id),
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-            )
+    if screen_id is not None and not isinstance(
+        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
+    ):
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(screen_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            logger=LOGGER,
+        )
+        if edited:
             await ui_set_screen_message(state, chat_id, int(screen_id))
             return int(screen_id)
-        except TelegramBadRequest as exc:
-            if "message is not modified" in str(exc).lower():
-                await ui_set_screen_message(state, chat_id, int(screen_id))
-                return int(screen_id)
-            LOGGER.warning(
-                "Failed to edit screen message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                screen_id,
-                exc,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error editing screen message (chat_id=%s, message_id=%s)",
-                chat_id,
-                screen_id,
-                exc_info=True,
-            )
-    sent = await bot.send_message(
-        chat_id=chat_id, text=text, reply_markup=reply_markup, parse_mode=parse_mode
+    sent = await safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
     )
-    await ui_set_screen_message(state, chat_id, sent.message_id)
-    return int(sent.message_id)
+    if sent:
+        await ui_set_screen_message(state, chat_id, sent.message_id)
+        return int(sent.message_id)
+    return int(screen_id or 0)

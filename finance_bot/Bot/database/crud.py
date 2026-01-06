@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 from Bot.config.settings import get_settings
 from Bot.utils.datetime_utils import add_one_month, now_tz
+from Bot.utils.text_sanitizer import sanitize_income_title
 
 
 LOGGER = logging.getLogger(__name__)
@@ -42,25 +43,25 @@ DEFAULT_INCOME_CATEGORIES = [
     {"code": "долги", "title": "Убил боль?", "percent": 30, "position": 1},
     {
         "code": "быт",
-        "title": "бытовые расходы на Тиньк",
+        "title": "бытовые расходы",
         "percent": 20,
         "position": 2,
     },
     {
         "code": "инвестиции",
-        "title": "Инвестиции на Альфу",
+        "title": "Инвестиции",
         "percent": 20,
         "position": 3,
     },
     {
         "code": "сбережения",
-        "title": "Сбережения на Сбер",
+        "title": "Сбережения",
         "percent": 20,
         "position": 4,
     },
     {
         "code": "спонтанные траты",
-        "title": "спонтанные траты на Яндекс",
+        "title": "спонтанные траты",
         "percent": 10,
         "position": 5,
     },
@@ -188,6 +189,15 @@ class FinanceDatabase:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ui_pins (
+                chat_id INTEGER PRIMARY KEY,
+                welcome_message_id INTEGER,
+                updated_at TEXT
+            )
+            """
+        )
         self._add_column_if_missing(
             cursor, "household_payment_items", "paid_month", "TEXT"
         )
@@ -261,6 +271,7 @@ class FinanceDatabase:
         self._add_column_if_missing(cursor, "wishlist_categories", "purchased_mode", "TEXT DEFAULT 'days'")
         self._add_column_if_missing(cursor, "wishlist_categories", "purchased_days", "INTEGER DEFAULT 30")
         self.connection.commit()
+        self.sanitize_income_category_titles()
 
     def ensure_household_items_seeded(self, user_id: int) -> None:
         """No-op: household items are managed by user and stored in DB."""
@@ -407,7 +418,7 @@ class FinanceDatabase:
                     (
                         user_id,
                         item["code"],
-                        item["title"],
+                        sanitize_income_title(item["title"]),
                         item["percent"],
                         item["position"],
                     ),
@@ -416,6 +427,65 @@ class FinanceDatabase:
             LOGGER.info("Seeded default income categories for user %s", user_id)
         except sqlite3.Error as error:
             LOGGER.error("Failed to seed income categories for user %s: %s", user_id, error)
+
+    def sanitize_income_category_titles(self) -> None:
+        """Sanitize stored income category titles."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT id, title FROM income_categories")
+            rows = cursor.fetchall()
+            updates = []
+            for row in rows:
+                current_title = str(row["title"])
+                sanitized = sanitize_income_title(current_title)
+                if sanitized != current_title:
+                    updates.append((sanitized, int(row["id"])))
+            if updates:
+                cursor.executemany(
+                    "UPDATE income_categories SET title = ? WHERE id = ?",
+                    updates,
+                )
+                self.connection.commit()
+                LOGGER.info("Sanitized income category titles: %s", len(updates))
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to sanitize income category titles: %s", error)
+
+    def get_welcome_message_id(self, chat_id: int) -> int | None:
+        """Fetch persisted welcome message id for chat."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                "SELECT welcome_message_id FROM ui_pins WHERE chat_id = ?",
+                (chat_id,),
+            )
+            row = cursor.fetchone()
+            if row and row["welcome_message_id"] is not None:
+                return int(row["welcome_message_id"])
+            return None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to fetch welcome message id for chat %s: %s", chat_id, error)
+            return None
+
+    def set_welcome_message_id(self, chat_id: int, message_id: int) -> None:
+        """Persist welcome message id for chat."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                """
+                INSERT INTO ui_pins (chat_id, welcome_message_id, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(chat_id) DO UPDATE SET
+                    welcome_message_id=excluded.welcome_message_id,
+                    updated_at=excluded.updated_at
+                """,
+                (chat_id, message_id, datetime.utcnow().isoformat()),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to persist welcome message id for chat %s: %s", chat_id, error)
 
     def list_active_income_categories(self, user_id: int) -> List[Dict[str, Any]]:
         """Return active income categories ordered by position."""

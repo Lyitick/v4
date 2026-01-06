@@ -6,7 +6,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message, ReplyKeyboardMarkup
 
 from Bot.config import settings
-from Bot.database.crud import FinanceDatabase
+from Bot.database.get_db import get_db
 from Bot.keyboards.main import main_menu_keyboard
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.ui_cleanup import ui_register_message
@@ -19,7 +19,7 @@ router = Router()
 async def build_main_menu_for_user(user_id: int) -> ReplyKeyboardMarkup:
     """Construct main menu keyboard with optional household button."""
 
-    db = FinanceDatabase()
+    db = get_db()
     from Bot.handlers.household_payments import reset_household_cycle_if_needed
 
     await reset_household_cycle_if_needed(user_id, db)

@@ -27,17 +27,13 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     # Это сообщение защищено и НЕ должно удаляться массовыми чистками.
     # Автоматическое удаление запрещено. Удаление допускается только в отдельной задаче
     # после явного подтверждения пользователя.
-    greeting = "Поработаем бл"
+    greeting = "Поработаем бл"  # DO_NOT_DELETE_WELCOME_WITHOUT_USER_CONFIRMATION
     await ui_set_welcome_message(message.bot, state, message.chat.id, greeting)
-    data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
-    keep_ids = [int(welcome_id)] if welcome_id is not None else []
     await ui_cleanup_to_context(
         message.bot,
         state,
         message.chat.id,
         "MAIN_MENU",
-        keep_ids=keep_ids,
     )
     await ui_render_screen(
         message.bot,
@@ -98,15 +94,11 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
         log_context="back_to_main_user_msg",
     )
     LOGGER.info("BACK_TO_MAIN user_msg_deleted=%s", str(deleted).lower())
-    data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
-    keep_ids = [int(welcome_id)] if welcome_id is not None else []
     await ui_cleanup_to_context(
         message.bot,
         state,
         message.chat.id,
         "MAIN_MENU",
-        keep_ids=keep_ids,
     )
     await ui_render_screen(
         message.bot,

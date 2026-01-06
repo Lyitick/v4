@@ -18,6 +18,7 @@ from aiogram.types import (
 )
 
 from Bot.database.crud import FinanceDatabase
+from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import (
     back_only_keyboard,
@@ -28,6 +29,13 @@ from Bot.keyboards.main import (
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import BytDeferState, WishlistState
 from Bot.utils.datetime_utils import now_tz
+from Bot.utils.telegram_safe import (
+    safe_answer,
+    safe_callback_answer,
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
 from Bot.utils.ui_cleanup import ui_register_message, ui_register_user_message
 
 LOGGER = logging.getLogger(__name__)
@@ -91,12 +99,14 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
 
     await delete_welcome_message_if_exists(message, state)
     await ui_register_user_message(state, message.chat.id, message.message_id)
-    try:
-        await message.delete()
-    except Exception:
-        LOGGER.warning("Failed to delete user menu message (Вишлист)", exc_info=True)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
     await state.clear()
-    db = FinanceDatabase()
+    db = get_db()
     wishes = db.get_wishes_by_user(message.from_user.id)
     categories = _get_user_wishlist_categories(db, message.from_user.id)
     has_active_wishes = any(not wish.get("is_purchased") for wish in wishes)
@@ -181,10 +191,12 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
         amount_str = current_sum.strip()
         if not amount_str:
             await message.answer("Нужно ввести число. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         normalized = amount_str.replace(",", ".")
@@ -192,18 +204,22 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
             price = float(normalized)
         except (TypeError, ValueError):
             await message.answer("Нужно ввести число. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         if price <= 0:
             await message.answer("Цена должна быть больше нуля. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         await state.update_data(price=price)
@@ -213,10 +229,12 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
         await _push_wl_step(state, "url")
         await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
 
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
         return
     else:
         if current_sum == "0":
@@ -225,21 +243,22 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
             new_sum = current_sum + message.text
 
     if price_message_id:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=price_message_id,
-                text=f": {new_sum}",
-            )
-        except Exception:
-            pass
+        await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=price_message_id,
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
 
     await state.update_data(price_sum=new_sum, price_message_id=price_message_id)
 
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
 
 
 @router.message(WishlistState.waiting_for_url, F.text != "⬅️ Назад")
@@ -251,7 +270,7 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
     await state.update_data(url=url)
     await state.set_state(WishlistState.waiting_for_category)
     await _push_wl_step(state, "category")
-    db = FinanceDatabase()
+    db = get_db()
     categories = _get_user_wishlist_categories(db, message.from_user.id)
     await message.answer(
         "Выбери категорию желания.", reply_markup=wishlist_categories_keyboard(categories)
@@ -263,7 +282,7 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
 async def show_purchases(message: Message, state: FSMContext | None = None) -> None:
     """Show purchased items grouped by category with pretty headers."""
 
-    db = FinanceDatabase()
+    db = get_db()
     purchases = db.get_purchases_by_user(message.from_user.id)
 
     # Если покупок нет — сразу выходим
@@ -397,7 +416,7 @@ async def add_wish_back_from_category(message: Message, state: FSMContext) -> No
 async def waiting_category_text(message: Message) -> None:
     """Prompt to use inline keyboard for category."""
 
-    db = FinanceDatabase()
+    db = get_db()
     categories = _get_user_wishlist_categories(db, message.from_user.id)
     await message.answer(
         "Выбери категорию через кнопки ниже.",
@@ -460,22 +479,18 @@ async def _refresh_byt_reminder_message(
 ) -> None:
     """Refresh reminder message with current BYT items."""
 
-    db = FinanceDatabase()
+    db = get_db()
     items = db.list_active_byt_items_for_reminder(user_id, now_tz())
     settings_row = db.get_user_settings(user_id)
     allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
     if not items:
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id, message_id=message_id, text="Ок."
-            )
-        except Exception:
-            try:
-                await bot.edit_message_reply_markup(
-                    chat_id=chat_id, message_id=message_id, reply_markup=None
-                )
-            except Exception:
-                pass
+        await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="Ок.",
+            logger=LOGGER,
+        )
         return
 
 
@@ -484,15 +499,15 @@ async def _start_byt_defer_flow(
 ) -> bool:
     """Validate and start BYT defer input flow for specific item."""
 
-    db = FinanceDatabase()
+    db = get_db()
     wish = db.get_wish(wish_id)
     if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
-        await callback.answer("Элемент не найден.", show_alert=True)
+        await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
         return False
 
     settings_row = db.get_user_settings(callback.from_user.id)
     if not bool(settings_row.get("byt_defer_enabled", 1)):
-        await callback.answer("Отключено в настройках", show_alert=True)
+        await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
         await state.clear()
         return False
 
@@ -503,35 +518,36 @@ async def _start_byt_defer_flow(
         reminder_message_id=callback.message.message_id if callback.message else None,
     )
 
-    await callback.answer()
+    await safe_callback_answer(callback, logger=LOGGER)
     target_chat_id = callback.message.chat.id if callback.message else callback.from_user.id
-    question_message = await callback.bot.send_message(
-        target_chat_id, "На сколько дней отложить?"
+    question_message = await safe_send_message(
+        callback.bot,
+        chat_id=target_chat_id,
+        text="На сколько дней отложить?",
+        logger=LOGGER,
     )
-    prompt = await callback.bot.send_message(
-        target_chat_id, ": 0", reply_markup=income_calculator_keyboard()
+    prompt = await safe_send_message(
+        callback.bot,
+        chat_id=target_chat_id,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
+        logger=LOGGER,
     )
     await state.update_data(
-        defer_display_chat_id=question_message.chat.id,
-        defer_display_message_id=prompt.message_id,
+        defer_display_chat_id=question_message.chat.id if question_message else target_chat_id,
+        defer_display_message_id=prompt.message_id if prompt else None,
     )
     return True
 
     keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
-    try:
-        await bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Что ты купил?",
-            reply_markup=keyboard,
-        )
-    except Exception:
-        try:
-            await bot.edit_message_reply_markup(
-                chat_id=chat_id, message_id=message_id, reply_markup=keyboard
-            )
-        except Exception:
-            pass
+    await safe_edit_message_text(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Что ты купил?",
+        reply_markup=keyboard,
+        logger=LOGGER,
+    )
 
 
 async def run_byt_timer_check(
@@ -632,19 +648,19 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
 
     data = callback.data.split(":", maxsplit=1)
     if len(data) != 2:
-        await callback.answer("Некорректный формат.", show_alert=True)
+        await safe_callback_answer(callback, "Некорректный формат.", show_alert=True, logger=LOGGER)
         return
 
     try:
         item_id = int(data[1])
     except ValueError:
-        await callback.answer("Некорректный элемент.", show_alert=True)
+        await safe_callback_answer(callback, "Некорректный элемент.", show_alert=True, logger=LOGGER)
         return
 
-    db = FinanceDatabase()
+    db = get_db()
     wish = db.get_wish(item_id)
     if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
-        await callback.answer("Элемент не найден.", show_alert=True)
+        await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
         return
 
     price = float(wish.get("price", 0) or 0)
@@ -659,7 +675,7 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
         purchased_at=purchase_time,
     )
 
-    await callback.answer()
+    await safe_callback_answer(callback, logger=LOGGER)
     if callback.message:
         await _refresh_byt_reminder_message(
             callback.bot,
@@ -689,10 +705,10 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
         except (TypeError, ValueError):
             wish_id = None
 
-    db = FinanceDatabase()
+    db = get_db()
     settings_row = db.get_user_settings(callback.from_user.id)
     if not bool(settings_row.get("byt_defer_enabled", 1)):
-        await callback.answer("Отключено в настройках", show_alert=True)
+        await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
         return
     now_dt = now_tz()
     items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
@@ -705,24 +721,39 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
     if not items:
         await state.clear()
         if callback.message:
-            await callback.message.answer("Нет бытовых покупок для отложки.")
+            await safe_answer(callback.message, "Нет бытовых покупок для отложки.", logger=LOGGER)
         else:
-            await callback.bot.send_message(
-                callback.from_user.id, "Нет бытовых покупок для отложки."
+            await safe_send_message(
+                callback.bot,
+                chat_id=callback.from_user.id,
+                text="Нет бытовых покупок для отложки.",
+                logger=LOGGER,
             )
-        await callback.answer()
+        await safe_callback_answer(callback, logger=LOGGER)
         return
 
     keyboard = _build_byt_defer_keyboard(items)
     await state.clear()
     if callback.message:
-        try:
-            await callback.message.edit_text("ЧТО?", reply_markup=keyboard)
-        except Exception:
-            await callback.message.answer("ЧТО?", reply_markup=keyboard)
+        edited = await safe_edit_message_text(
+            callback.message.bot,
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            text="ЧТО?",
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+        if not edited:
+            await safe_answer(callback.message, "ЧТО?", reply_markup=keyboard, logger=LOGGER)
     else:
-        await callback.bot.send_message(callback.from_user.id, "ЧТО?", reply_markup=keyboard)
-    await callback.answer()
+        await safe_send_message(
+            callback.bot,
+            chat_id=callback.from_user.id,
+            text="ЧТО?",
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+    await safe_callback_answer(callback, logger=LOGGER)
 
 
 @router.callback_query(F.data.startswith("byt_defer_pick:"))
@@ -747,7 +778,7 @@ async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> N
         except (TypeError, ValueError):
             wish_id = None
     if wish_id is None:
-        await callback.answer("Ошибка: не найден item_id", show_alert=True)
+        await safe_callback_answer(callback, "Ошибка: не найден item_id", show_alert=True, logger=LOGGER)
         return
 
     started = await _start_byt_defer_flow(callback, state, wish_id)
@@ -781,7 +812,7 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
     current_sum = str(data.get("defer_days_str", "0"))
     display_chat_id = data.get("defer_display_chat_id", message.chat.id)
     display_message_id = data.get("defer_display_message_id")
-    db = FinanceDatabase()
+    db = get_db()
 
     if message.text == "Очистить":
         new_sum = "0"
@@ -793,10 +824,12 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 message.from_user.id if message.from_user else "unknown",
             )
             await message.answer("Нужно ввести число дней. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
         try:
             days = int(amount_str)
@@ -807,10 +840,12 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 amount_str,
             )
             await message.answer("Нужно ввести число. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         if days <= 0:
@@ -820,10 +855,12 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 days,
             )
             await message.answer("Нужно ввести число дней. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         try:
@@ -835,18 +872,22 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 exc_info=exc,
             )
             await message.answer("Ошибка БД")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
         max_days = int(settings_row.get("byt_defer_max_days", 365) or 365)
         if days < 1 or days > max_days:
             await message.answer(f"Количество дней должно быть от 1 до {max_days}.")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         raw_defer_item_id = data.get("defer_item_id")
@@ -861,10 +902,12 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
             )
             await message.answer("Не выбран товар для отсрочки.")
             await state.clear()
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
         reminder_message_id = data.get("reminder_message_id")
         deferred_until = now_tz() + timedelta(days=days)
@@ -882,10 +925,12 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 exc_info=exc,
             )
             await message.answer("Ошибка БД")
-            try:
-                await message.delete()
-            except Exception:
-                pass
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         LOGGER.info(
@@ -908,10 +953,12 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 message.from_user.id,
             )
 
-        try:
-            await message.delete()
-        except Exception:
-            pass
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
         return
     else:
         if current_sum == "0":
@@ -922,26 +969,21 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
     new_display_message_id = display_message_id
     new_display_chat_id = display_chat_id
     if display_message_id:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=f": {new_sum}",
-            )
-        except Exception:
-            try:
-                prompt = await message.answer(f": {new_sum}")
-                new_display_message_id = prompt.message_id
-                new_display_chat_id = message.chat.id
-            except Exception:
-                pass
-    else:
-        try:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=display_chat_id,
+            message_id=int(display_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+        if not edited:
             prompt = await message.answer(f": {new_sum}")
             new_display_message_id = prompt.message_id
             new_display_chat_id = message.chat.id
-        except Exception:
-            pass
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        new_display_message_id = prompt.message_id
+        new_display_chat_id = message.chat.id
 
     await state.update_data(
         defer_days_str=new_sum,
@@ -949,10 +991,12 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
         defer_display_chat_id=new_display_chat_id,
     )
 
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
 
 
 @router.message(BytDeferState.waiting_for_days)

@@ -6,6 +6,7 @@ import logging
 
 from aiohttp import ClientConnectionError, ClientOSError
 from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ def _log_network_error(
     retries: int,
 ) -> None:
     logger.warning(
-        "%s failed due to network error (attempt %s/%s): %s",
+        "NETWORK_RETRY action=%s attempt=%s/%s error=%s",
         action,
         attempt,
         retries + 1,
@@ -126,6 +127,10 @@ async def safe_edit_message_text(
     """Safely edit a message text without raising exceptions."""
 
     log = _get_logger(logger)
+    if isinstance(reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)):
+        log.warning("Safe edit skipped due to reply keyboard markup")
+        return False
+
     for attempt in range(retries + 1):
         try:
             await bot.edit_message_text(
@@ -175,6 +180,49 @@ async def safe_edit_message_text(
                 log.debug("Safe edit unexpected error details", exc_info=True)
             return False
     return False
+
+
+async def safe_send_message(
+    bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+):
+    """Safely send a message using bot.send_message without raising exceptions."""
+
+    log = _get_logger(logger)
+    for attempt in range(retries + 1):
+        try:
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+        except TelegramBadRequest as exc:
+            log.warning("Safe send failed: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe send failure details", exc_info=True)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "send_message", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return None
+            log.warning("Safe send unexpected error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe send unexpected error details", exc_info=True)
+            return None
+    return None
 
 
 async def safe_answer(

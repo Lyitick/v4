@@ -10,6 +10,7 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from Bot.config import settings
 from Bot.database.crud import FinanceDatabase
+from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.handlers.wishlist import run_byt_timer_check
 from Bot.keyboards.calculator import income_calculator_keyboard
@@ -86,7 +87,7 @@ def _log_event(user_id: int, action: str, state: str | None, **meta: str) -> Non
 async def _send_main_menu_summary(
     bot, state: FSMContext, chat_id: int, user_id: int
 ) -> None:
-    db = FinanceDatabase()
+    db = get_db()
     savings = db.get_user_savings(user_id)
     summary = format_savings_summary(savings)
     menu = await build_main_menu_for_user(user_id)
@@ -212,7 +213,7 @@ async def open_household_settings(message: Message, state: FSMContext) -> None:
         return
 
     await state.clear()
-    db = FinanceDatabase()
+    db = get_db()
     sent_id = await safe_answer(
         message,
         "⚙️ Бытовые платежи ⚙️",
@@ -315,7 +316,7 @@ async def household_add_amount_calc(message: Message, state: FSMContext) -> None
             return
 
         user_id = message.from_user.id
-        db = FinanceDatabase()
+        db = get_db()
         position = db.get_next_household_position(user_id)
         title = str(data.get("title", "")).strip() or "Платёж"
         code = f"custom_{time.time_ns()}"
@@ -377,7 +378,7 @@ async def household_remove_prompt(callback: CallbackQuery, state: FSMContext) ->
         return
 
     await state.clear()
-    db = FinanceDatabase()
+    db = get_db()
     db.ensure_household_items_seeded(callback.from_user.id)
     items = db.list_active_household_items(callback.from_user.id)
     if not items:
@@ -406,7 +407,7 @@ async def household_remove_item(callback: CallbackQuery, state: FSMContext) -> N
     if len(parts) != 3:
         return
     code = parts[2]
-    db = FinanceDatabase()
+    db = get_db()
     db.deactivate_household_payment_item(callback.from_user.id, code)
     await reset_household_cycle_if_needed(callback.from_user.id, db)
     await _send_household_settings_overview(callback.message, db, callback.from_user.id)
@@ -425,7 +426,7 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
     )
 
     user_id = message.from_user.id
-    db = FinanceDatabase()
+    db = get_db()
 
     await reset_household_cycle_if_needed(user_id, db)
     db.ensure_household_items_seeded(user_id)
@@ -526,8 +527,9 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     """Trigger BYT purchases check (household wishlist) as if timer fired."""
 
     user_id = message.from_user.id
-    db = FinanceDatabase()
+    db = get_db()
     _log_event(user_id, "BYT_MANUAL_CHECK", None)
+    LOGGER.info("BYT manual check pressed user_id=%s", user_id)
 
     db.ensure_byt_timer_defaults(user_id)
     data = await state.get_data()
@@ -739,7 +741,7 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     code = str(question.get("code", ""))
     amount = question.get("amount")
     amount_value = float(amount) if amount is not None else 0.0
-    db = FinanceDatabase()
+    db = get_db()
 
     if action not in {"yes", "no"}:
         await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)

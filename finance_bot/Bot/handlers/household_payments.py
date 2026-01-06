@@ -5,7 +5,6 @@ import time
 from typing import Dict, List
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
@@ -31,12 +30,19 @@ from Bot.services.household import (
     get_current_question,
     get_next_index,
     get_previous_index,
+    normalize_processed_steps,
     should_ignore_answer,
     update_flow_state,
 )
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
 from Bot.utils.datetime_utils import current_month_str, now_tz
 from Bot.utils.savings import format_savings_summary
+from Bot.utils.telegram_safe import (
+    safe_answer,
+    safe_callback_answer,
+    safe_delete_message,
+    safe_edit_message_text,
+)
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
     ui_register_message,
@@ -93,6 +99,46 @@ async def _send_main_menu_summary(
     )
 
 
+async def _update_household_question_message(
+    bot,
+    state: FSMContext,
+    chat_id: int,
+    ui_message_id: int | None,
+    message_context: Message | None,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+) -> int | None:
+    if ui_message_id:
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(ui_message_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            logger=LOGGER,
+        )
+        if edited:
+            return int(ui_message_id)
+
+    if message_context is None:
+        return None
+
+    sent_id = await safe_answer(
+        message_context,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
+    )
+    if sent_id:
+        await ui_register_message(state, chat_id, sent_id)
+        await state.update_data(hh_ui_message_id=sent_id)
+    return sent_id
+
+
 async def reset_household_cycle_if_needed(
     user_id: int, db: FinanceDatabase, now: datetime | None = None
 ) -> None:
@@ -135,9 +181,11 @@ async def _send_household_settings_overview(
             None,
             source="list_active_household_items",
         )
-    await message.answer(
+    await safe_answer(
+        message,
         _format_household_items(items, unpaid_set),
         reply_markup=household_settings_inline_keyboard(),
+        logger=LOGGER,
     )
 
 
@@ -146,24 +194,33 @@ async def open_household_settings(message: Message, state: FSMContext) -> None:
     """Open household payments settings menu."""
 
     await ui_register_user_message(state, message.chat.id, message.message_id)
-    try:
-        await message.delete()
-    except Exception:
-        LOGGER.warning("Failed to delete user menu message (⚙️ Бытовые платежи ⚙️)", exc_info=True)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
     if message.from_user.id != settings.ADMIN_ID:
-        sent = await message.answer(
+        sent_id = await safe_answer(
+            message,
             "Что-то пошло не так. Вернёмся в главное меню.",
             reply_markup=await build_main_menu_for_user(message.from_user.id),
+            logger=LOGGER,
         )
-        await ui_register_message(state, sent.chat.id, sent.message_id)
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
         return
 
     await state.clear()
     db = FinanceDatabase()
-    sent = await message.answer(
-        "⚙️ Бытовые платежи ⚙️", reply_markup=settings_menu_keyboard()
+    sent_id = await safe_answer(
+        message,
+        "⚙️ Бытовые платежи ⚙️",
+        reply_markup=settings_menu_keyboard(),
+        logger=LOGGER,
     )
-    await ui_register_message(state, sent.chat.id, sent.message_id)
+    if sent_id:
+        await ui_register_message(state, message.chat.id, sent_id)
     await _send_household_settings_overview(message, db, message.from_user.id)
 
 
@@ -171,13 +228,14 @@ async def open_household_settings(message: Message, state: FSMContext) -> None:
 async def household_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
     """Prompt for new household payment title."""
 
-    await callback.answer()
+    await safe_callback_answer(callback, logger=LOGGER)
     if callback.from_user.id != settings.ADMIN_ID:
         return
 
     await state.clear()
     await state.set_state(HouseholdSettingsState.waiting_for_title)
-    await callback.message.answer("Введи название платежа")
+    if callback.message:
+        await safe_answer(callback.message, "Введи название платежа", logger=LOGGER)
 
 
 @router.message(HouseholdSettingsState.waiting_for_title)
@@ -186,22 +244,24 @@ async def household_add_set_title(message: Message, state: FSMContext) -> None:
 
     title = (message.text or "").strip()
     if not title:
-        await message.answer("Нужно ввести название платежа.")
+        await safe_answer(message, "Нужно ввести название платежа.", logger=LOGGER)
         return
 
     await state.update_data(title=title)
     await state.set_state(HouseholdSettingsState.waiting_for_amount)
 
-    question = await message.answer(
+    question_id = await safe_answer(
+        message,
         "Введи сумму (используй кнопки ниже).",
         reply_markup=income_calculator_keyboard(),
+        logger=LOGGER,
     )
-    prompt = await message.answer(": 0")
+    prompt_id = await safe_answer(message, ": 0", logger=LOGGER)
 
     await state.update_data(
         amount_sum="0",
-        amount_message_id=prompt.message_id,
-        amount_question_message_id=question.message_id,
+        amount_message_id=prompt_id,
+        amount_question_message_id=question_id,
     )
 
 
@@ -221,29 +281,37 @@ async def household_add_amount_calc(message: Message, state: FSMContext) -> None
     elif message.text == "✅ Газ":
         amount_str = current_sum.strip()
         if not amount_str:
-            await message.answer("Нужно ввести число. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                LOGGER.warning("Failed to delete amount prompt message", exc_info=True)
+            await safe_answer(message, "Нужно ввести число. Попробуй снова.", logger=LOGGER)
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         try:
             amount = int(amount_str)
         except (TypeError, ValueError):
-            await message.answer("Нужно ввести число. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                LOGGER.warning("Failed to delete amount prompt message", exc_info=True)
+            await safe_answer(message, "Нужно ввести число. Попробуй снова.", logger=LOGGER)
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         if amount <= 0:
-            await message.answer("Сумма должна быть больше нуля. Попробуй снова.")
-            try:
-                await message.delete()
-            except Exception:
-                LOGGER.warning("Failed to delete amount prompt message", exc_info=True)
+            await safe_answer(
+                message, "Сумма должна быть больше нуля. Попробуй снова.", logger=LOGGER
+            )
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
             return
 
         user_id = message.from_user.id
@@ -255,17 +323,25 @@ async def household_add_amount_calc(message: Message, state: FSMContext) -> None
         db.add_household_payment_item(user_id, code, text, amount, position)
         await reset_household_cycle_if_needed(user_id, db)
         await state.clear()
-        await message.answer(
-            "Платёж добавлен.", reply_markup=ReplyKeyboardRemove()
+        await safe_answer(
+            message,
+            "Платёж добавлен.",
+            reply_markup=ReplyKeyboardRemove(),
+            logger=LOGGER,
         )
-        await message.answer(
-            "⚙️ Бытовые платежи ⚙️", reply_markup=settings_menu_keyboard()
+        await safe_answer(
+            message,
+            "⚙️ Бытовые платежи ⚙️",
+            reply_markup=settings_menu_keyboard(),
+            logger=LOGGER,
         )
         await _send_household_settings_overview(message, db, user_id)
-        try:
-            await message.delete()
-        except Exception:
-            LOGGER.warning("Failed to delete amount confirmation message", exc_info=True)
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
         return
     else:
         if current_sum == "0":
@@ -274,28 +350,29 @@ async def household_add_amount_calc(message: Message, state: FSMContext) -> None
             new_sum = current_sum + message.text
 
     if amount_message_id:
-        try:
-            await message.bot.edit_message_text(
-                chat_id=message.chat.id,
-                message_id=amount_message_id,
-                text=f": {new_sum}",
-            )
-        except Exception:
-            LOGGER.warning("Failed to edit amount message", exc_info=True)
+        await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=amount_message_id,
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
 
     await state.update_data(amount_sum=new_sum, amount_message_id=amount_message_id)
 
-    try:
-        await message.delete()
-    except Exception:
-        LOGGER.warning("Failed to delete calculator message", exc_info=True)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
 
 
 @router.callback_query(F.data == "hh_set:del")
 async def household_remove_prompt(callback: CallbackQuery, state: FSMContext) -> None:
     """Show list of household payments for removal."""
 
-    await callback.answer()
+    await safe_callback_answer(callback, logger=LOGGER)
     if callback.from_user.id != settings.ADMIN_ID:
         return
 
@@ -304,20 +381,24 @@ async def household_remove_prompt(callback: CallbackQuery, state: FSMContext) ->
     db.ensure_household_items_seeded(callback.from_user.id)
     items = db.list_active_household_items(callback.from_user.id)
     if not items:
-        await callback.message.answer("Список платежей пуст.")
+        if callback.message:
+            await safe_answer(callback.message, "Список платежей пуст.", logger=LOGGER)
         return
 
-    await callback.message.answer(
-        "Выбери платеж для удаления:",
-        reply_markup=household_remove_keyboard(items),
-    )
+    if callback.message:
+        await safe_answer(
+            callback.message,
+            "Выбери платеж для удаления:",
+            reply_markup=household_remove_keyboard(items),
+            logger=LOGGER,
+        )
 
 
 @router.callback_query(F.data.startswith("hh_set:remove:"))
 async def household_remove_item(callback: CallbackQuery, state: FSMContext) -> None:
     """Deactivate selected household payment item."""
 
-    await callback.answer()
+    await safe_callback_answer(callback, logger=LOGGER)
     if callback.from_user.id != settings.ADMIN_ID:
         return
 
@@ -336,12 +417,12 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
     """Start household payments flow."""
 
     await ui_register_user_message(state, message.chat.id, message.message_id)
-    try:
-        await message.delete()
-    except Exception:  # noqa: BLE001
-        LOGGER.warning(
-            "Failed to delete user menu message (Бытовые платежи)", exc_info=True
-        )
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
 
     user_id = message.from_user.id
     db = FinanceDatabase()
@@ -420,15 +501,18 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
     text = render_household_questions_text(
         month, hh_questions, answers, current_index=0
     )
-    sent = await message.answer(
+    sent_id = await safe_answer(
+        message,
         text,
         reply_markup=build_household_question_keyboard(
             flow_state.current_question_code, show_back=False
         ),
         parse_mode="HTML",
+        logger=LOGGER,
     )
-    await state.update_data(hh_ui_message_id=sent.message_id)
-    await ui_register_message(state, message.chat.id, sent.message_id)
+    if sent_id:
+        await state.update_data(hh_ui_message_id=sent_id)
+        await ui_register_message(state, message.chat.id, sent_id)
     _log_event(
         user_id,
         "HOUSEHOLD_START",
@@ -450,17 +534,22 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     last_ts = data.get("byt_manual_check_ts")
     current_ts = time.time()
     if last_ts is not None and current_ts - float(last_ts) < 2:
-        sent = await message.answer(
+        sent_id = await safe_answer(
+            message,
             "Уже проверил. Попробуй ещё раз через пару секунд.",
             reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
         )
-        await ui_register_message(state, sent.chat.id, sent.message_id)
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
         return
     await state.update_data(byt_manual_check_ts=current_ts)
-    try:
-        await message.delete()
-    except TelegramBadRequest:
-        LOGGER.warning("Failed to delete BYT manual check message", exc_info=True)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
 
     times = db.list_active_byt_timer_times(user_id)
     simulated_time = None
@@ -516,10 +605,14 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
                 text = (
                     f"{text}\nЕсть отложенные покупки: {len(deferred_items)} шт."
                 )
-        sent = await message.answer(
-            text, reply_markup=await build_main_menu_for_user(user_id)
+        sent_id = await safe_answer(
+            message,
+            text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
         )
-        await ui_register_message(state, sent.chat.id, sent.message_id)
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
         return
 
     await run_byt_timer_check(
@@ -540,25 +633,27 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     index = int(data.get("current_step_index") or data.get("hh_index") or 0)
     answers = dict(data.get("hh_answers") or {})
     ui_message_id = data.get("hh_ui_message_id")
-    processed_steps = set(data.get("processed_steps") or [])
+    processed_steps = normalize_processed_steps(data.get("processed_steps"))
     user_id = callback.from_user.id
 
     if callback.message is None or callback.message.message_id != ui_message_id:
-        await callback.answer("Сообщение устарело", show_alert=False)
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
         return
 
     callback_parts = callback.data.split(":") if callback.data else []
     if len(callback_parts) < 2:
-        await callback.answer("Сообщение устарело", show_alert=False)
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
         return
     action = callback_parts[1]
     callback_code = callback_parts[2] if len(callback_parts) > 2 else None
 
     if action == "back" and index == 0:
-        await callback.answer("Назад нельзя — это первый вопрос", show_alert=True)
+        await safe_callback_answer(
+            callback, "Назад нельзя — это первый вопрос", show_alert=True, logger=LOGGER
+        )
         return
 
-    await callback.answer()
+    await safe_callback_answer(callback, logger=LOGGER)
 
     if not month or not questions:
         await ui_cleanup_messages(callback.bot, state)
@@ -585,8 +680,13 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         text = render_household_questions_text(
             month, questions, answers, current_index=index
         )
-        await callback.message.edit_text(
-            text,
+        await _update_household_question_message(
+            callback.bot,
+            state,
+            chat_id=callback.message.chat.id,
+            ui_message_id=ui_message_id,
+            message_context=callback.message,
+            text=text,
             reply_markup=build_household_question_keyboard(
                 current_code, show_back=index > 0
             ),
@@ -606,8 +706,13 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         final_text = render_household_questions_text(
             month, questions, answers, current_index=None
         )
-        await callback.message.edit_text(
-            final_text,
+        await _update_household_question_message(
+            callback.bot,
+            state,
+            chat_id=callback.message.chat.id,
+            ui_message_id=ui_message_id,
+            message_context=callback.message,
+            text=final_text,
             reply_markup=None,
             parse_mode="HTML",
         )
@@ -621,14 +726,14 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
 
     if target_code and target_code != current_code:
         if target_code in processed_steps:
-            await callback.answer("Уже учтено", show_alert=False)
+            await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
             return
-        await callback.answer("Сообщение устарело", show_alert=False)
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
         return
 
     question = current_question
     if not question:
-        await callback.answer("Сообщение устарело", show_alert=False)
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
         return
 
     code = str(question.get("code", ""))
@@ -637,20 +742,27 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     db = FinanceDatabase()
 
     if action not in {"yes", "no"}:
-        await callback.answer("Сообщение устарело", show_alert=False)
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    if code in processed_steps:
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
         return
 
     if should_ignore_answer(answers, processed_steps, code, action):
-        await callback.answer("Уже учтено", show_alert=False)
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
         return
 
-    db.apply_household_payment_answer(
+    changed = db.apply_household_payment_answer(
         user_id=user_id,
         month=str(month),
         question_code=code,
         amount=amount_value if amount is not None else None,
         answer=action,
     )
+    if not changed:
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+        return
     answers[code] = "yes" if action == "yes" else "no"
     processed_steps.add(code)
 
@@ -677,8 +789,13 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         text = render_household_questions_text(
             month, questions, answers, current_index=index
         )
-        await callback.message.edit_text(
-            text,
+        await _update_household_question_message(
+            callback.bot,
+            state,
+            chat_id=callback.message.chat.id,
+            ui_message_id=ui_message_id,
+            message_context=callback.message,
+            text=text,
             reply_markup=build_household_question_keyboard(
                 next_code, show_back=index > 0
             ),
@@ -689,8 +806,13 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     final_text = render_household_questions_text(
         month, questions, answers, current_index=None
     )
-    await callback.message.edit_text(
-        final_text,
+    await _update_household_question_message(
+        callback.bot,
+        state,
+        chat_id=callback.message.chat.id,
+        ui_message_id=ui_message_id,
+        message_context=callback.message,
+        text=final_text,
         reply_markup=None,
         parse_mode="HTML",
     )

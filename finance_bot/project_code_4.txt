@@ -1,3 +1,139 @@
+
+        title = (data.get("new_income_category_title") or "").strip()
+        if not title:
+            error_message = error_message or "Название категории не задано."
+
+        if error_message is None:
+            db = FinanceDatabase()
+            category_id = db.create_income_category(message.from_user.id, title)
+            if category_id is not None:
+                db.update_income_category_percent(
+                    message.from_user.id, category_id, percent
+                )
+
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="new_income_display_chat_id",
+            display_message_key="new_income_display_message_id",
+        )
+        await _remove_calculator_keyboard(message)
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "st:income"
+        await render_settings_screen(
+            previous_screen, message=message, state=state, error_message=error_message
+        )
+
+
+@router.message(HouseholdSettingsState.waiting_for_title)
+async def household_payment_title(message: Message, state: FSMContext) -> None:
+    await _register_user_message(state, message)
+    title = (message.text or "").strip()
+    if not title:
+        await _send_and_register(
+            message=message,
+            state=state,
+            text="Нужно ввести название платежа.",
+        )
+        return
+
+    await state.update_data(hp_new_title=title, hp_amount_str="0")
+    await state.set_state(HouseholdSettingsState.waiting_for_amount)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=f'Сколько платить за "{title}"?',
+        reply_markup=None,
+    )
+    prompt = await _send_and_register(
+        message=message,
+        state=state,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
+    )
+    await state.update_data(
+        hp_amount_display_chat_id=prompt.chat.id,
+        hp_amount_display_message_id=prompt.message_id,
+    )
+
+
+@router.message(
+    HouseholdSettingsState.waiting_for_amount, F.text.in_(PERCENT_INPUT_BUTTONS)
+)
+async def household_payment_amount(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    amount_str = data.get("hp_amount_str", "0")
+    display_chat_id = data.get("hp_amount_display_chat_id", message.chat.id)
+    display_message_id = data.get("hp_amount_display_message_id")
+
+    if text in PERCENT_DIGITS:
+        amount_str = amount_str.lstrip("0") if amount_str != "0" else ""
+        amount_str = f"{amount_str}{text}" or "0"
+        try:
+            await message.bot.edit_message_text(
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {amount_str}",
+            )
+        except Exception:
+            fallback = await message.bot.send_message(
+                chat_id=display_chat_id, text=f": {amount_str}"
+            )
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            hp_amount_str=amount_str,
+            hp_amount_display_chat_id=display_chat_id,
+            hp_amount_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "Очистить":
+        amount_str = "0"
+        try:
+            await message.bot.edit_message_text(
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=": 0",
+            )
+        except Exception:
+            fallback = await message.bot.send_message(chat_id=display_chat_id, text=": 0")
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            hp_amount_str=amount_str,
+            hp_amount_display_chat_id=display_chat_id,
+            hp_amount_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "✅ Газ":
+        error_message = None
+        try:
+            amount = int(amount_str or "0")
+        except ValueError:
+            error_message = "Нужно ввести число."
+            amount = 0
+        else:
+            if amount <= 0:
+                error_message = "Сумма должна быть больше нуля."
+
+        title = (data.get("hp_new_title") or "").strip()
+        db = FinanceDatabase()
+
+        if not title:
+            error_message = error_message or "Название платежа не задано."
+
+        if error_message is None:
+            position = db.get_next_household_position(message.from_user.id)
+            code = f"custom_{time.time_ns()}"
+            text_value = f"{title} {amount}р?"
             db.add_household_payment_item(
                 message.from_user.id, code, text_value, amount, position
             )
@@ -913,6 +1049,7 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
     )
     LOGGER.info("User %s returned to main menu", message.from_user.id if message.from_user else "unknown")
 
+
 ===== Bot/handlers/wishlist.py =====
 
 """Handlers for wishlist flow."""
@@ -945,7 +1082,7 @@ from Bot.keyboards.main import (
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import BytDeferState, WishlistState
 from Bot.utils.datetime_utils import now_tz
-from Bot.utils.ui_cleanup import ui_register_message
+from Bot.utils.ui_cleanup import ui_register_message, ui_register_user_message
 
 LOGGER = logging.getLogger(__name__)
 
@@ -1007,6 +1144,11 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
     """Open wishlist menu."""
 
     await delete_welcome_message_if_exists(message, state)
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    try:
+        await message.delete()
+    except Exception:
+        LOGGER.warning("Failed to delete user menu message (Вишлист)", exc_info=True)
     await state.clear()
     db = FinanceDatabase()
     wishes = db.get_wishes_by_user(message.from_user.id)
@@ -1856,144 +1998,3 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
             pass
 
     await state.update_data(
-        defer_days_str=new_sum,
-        defer_display_message_id=new_display_message_id,
-        defer_display_chat_id=new_display_chat_id,
-    )
-
-    try:
-        await message.delete()
-    except Exception:
-        pass
-
-
-@router.message(BytDeferState.waiting_for_days)
-async def handle_byt_defer_days_invalid(message: Message) -> None:
-    """Prompt to use calculator buttons for defer days."""
-
-    await message.answer("Используй кнопки калькулятора ниже.")
-
-
-===== Bot/keyboards/__init__.py =====
-
-
-
-===== Bot/keyboards/calculator.py =====
-
-"""Calculator keyboard definitions."""
-
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
-
-
-def income_calculator_keyboard() -> ReplyKeyboardMarkup:
-    """Общая цифровая клавиатура для ввода сумм."""
-
-    keyboard = [
-        [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
-        [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
-        [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
-        [
-            KeyboardButton(text="Очистить"),
-            KeyboardButton(text="0"),
-            KeyboardButton(text="✅ Газ"),
-        ],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
-
-
-===== Bot/keyboards/household.py =====
-
-"""Keyboards for household payments."""
-from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-)
-
-
-def household_payments_answer_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard with Yes/No and Back options for household payments."""
-
-    buttons = [
-        [
-            KeyboardButton(text="✅ Да"),
-            KeyboardButton(text="❌ Нет"),
-            KeyboardButton(text="⬅️ Назад"),
-        ]
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard=buttons,
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
-
-
-def household_payments_inline_keyboard(
-    show_back: bool, question_code: str | None = None
-) -> InlineKeyboardMarkup:
-    """Inline keyboard with Yes/No/Back options for household payments."""
-
-    suffix = f":{question_code}" if question_code else ""
-    buttons = [
-        [
-            InlineKeyboardButton(text="Да", callback_data=f"hh_pay:yes{suffix}"),
-            InlineKeyboardButton(text="Нет", callback_data=f"hh_pay:no{suffix}"),
-        ]
-    ]
-    if show_back:
-        buttons[0].append(
-            InlineKeyboardButton(text="Назад", callback_data=f"hh_pay:back{suffix}")
-        )
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-===== Bot/keyboards/main.py =====
-
-"""Keyboard definitions."""
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
-
-
-def main_menu_keyboard(
-    show_household: bool = False,
-    show_test_button: bool = False,
-    show_settings: bool = True,
-) -> ReplyKeyboardMarkup:
-    """Create main menu keyboard."""
-
-    buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
-    if show_household:
-        buttons.append([KeyboardButton(text="Бытовые платежи")])
-    if show_settings:
-        buttons.append([KeyboardButton(text="⚙️")])
-    if show_test_button:
-        buttons.append([KeyboardButton(text="Проверить быт")])  # TODO: удалить после тестов
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def yes_no_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard with Yes/No options."""
-
-    buttons = [[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
-
-
-def yes_no_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard with Yes/No options to avoid opening system keyboard."""
-
-    buttons = [
-        [
-            InlineKeyboardButton(text="Да", callback_data="confirm_yes"),
-            InlineKeyboardButton(text="Нет", callback_data="confirm_no"),
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def back_to_main_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard with back to main option."""

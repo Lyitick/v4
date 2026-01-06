@@ -1,3 +1,8 @@
+===== .env =====
+
+BOT_TOKEN=
+
+
 ===== AUDIT_household_payments_ui.md =====
 
 # Audit: household payments UI
@@ -23,7 +28,10 @@
 
 """Package initializer for finance bot modules."""
 
+
+
 ===== Bot/config/__init__.py =====
+
 
 
 ===== Bot/config/logging_config.py =====
@@ -57,6 +65,7 @@ def setup_logging() -> None:
     root_logger.handlers.clear()
     root_logger.addHandler(file_handler)
     root_logger.addHandler(console_handler)
+
 
 ===== Bot/config/settings.py =====
 
@@ -120,7 +129,9 @@ def get_settings() -> Settings:
 
     return Settings()
 
+
 ===== Bot/database/__init__.py =====
+
 
 
 ===== Bot/database/crud.py =====
@@ -169,25 +180,25 @@ DEFAULT_INCOME_CATEGORIES = [
     {"code": "долги", "title": "Убил боль?", "percent": 30, "position": 1},
     {
         "code": "быт",
-        "title": "бытовые расходы на Тиньк",
+        "title": "бытовые расходы",
         "percent": 20,
         "position": 2,
     },
     {
         "code": "инвестиции",
-        "title": "Инвестиции на Альфу",
+        "title": "Инвестиции",
         "percent": 20,
         "position": 3,
     },
     {
         "code": "сбережения",
-        "title": "Сбережения на Сбер",
+        "title": "Сбережения",
         "percent": 20,
         "position": 4,
     },
     {
         "code": "спонтанные траты",
-        "title": "спонтанные траты на Яндекс",
+        "title": "спонтанные траты",
         "percent": 10,
         "position": 5,
     },
@@ -1987,8 +1998,3 @@ class FinanceDatabase:
             return cursor.lastrowid
         except sqlite3.Error as error:
             LOGGER.error("Failed to add BYT timer time for user %s: %s", user_id, error)
-            return None
-
-    def deactivate_byt_timer_time(self, user_id: int, timer_id: int) -> None:
-        """Deactivate specific BYT timer time."""
-

@@ -1,5 +1,5 @@
 """Integration tests for database operations."""
-from Bot.database.crud import FinanceDatabase
+from Bot.database.crud import FinanceDatabase, TABLES
 
 
 def setup_module(module) -> None:  # noqa: D401
@@ -7,9 +7,9 @@ def setup_module(module) -> None:  # noqa: D401
 
     db = FinanceDatabase()
     cursor = db.connection.cursor()
-    cursor.execute("DELETE FROM wishes")
-    cursor.execute("DELETE FROM purchases")
-    cursor.execute("DELETE FROM savings")
+    cursor.execute(f"DELETE FROM {TABLES.wishes}")
+    cursor.execute(f"DELETE FROM {TABLES.purchases}")
+    cursor.execute(f"DELETE FROM {TABLES.savings}")
     db.connection.commit()
 
 

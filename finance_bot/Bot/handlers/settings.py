@@ -2962,7 +2962,7 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
             )
         except Exception:
             prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=f": {minute_str}")
-                        if prompt:
+            if prompt:
                 display_message_id = prompt.message_id
             await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(
@@ -2982,7 +2982,7 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
             )
         except Exception:
             prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=": 0")
-                        if prompt:
+            if prompt:
                 display_message_id = prompt.message_id
             await ui_register_message(state, display_chat_id, display_message_id)
         await state.update_data(

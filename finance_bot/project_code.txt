@@ -160,17 +160,17 @@ TARGET_SCHEMA_VERSION = 1
 
 @dataclass(frozen=True)
 class TableNames:
-    savings: str = "nakopleniya"
-    wishes: str = "zhelaniya"
-    purchases: str = "pokupki"
-    household_payments: str = "byt_platezhi"
-    household_payment_items: str = "byt_platezhi_pozitsii"
-    ui_pins: str = "ui_zakrepy"
-    income_categories: str = "dohod_kategorii"
-    expense_categories: str = "rashod_kategorii"
-    wishlist_categories: str = "kategorii_zhelaniy"
-    user_settings: str = "nastroyki_polzovatelya"
-    byt_timer_times: str = "byt_taimer_vremya"
+    savings: str = "накопления"
+    wishes: str = "желания"
+    purchases: str = "покупки"
+    household_payments: str = "бытовые_платежи"
+    household_payment_items: str = "позиции_бытовых_платежей"
+    ui_pins: str = "закрепы_интерфейса"
+    income_categories: str = "категории_доходов"
+    expense_categories: str = "категории_расходов"
+    wishlist_categories: str = "категории_желаний"
+    user_settings: str = "настройки_пользователя"
+    byt_timer_times: str = "время_быт_таймера"
 
 
 TABLES = TableNames()

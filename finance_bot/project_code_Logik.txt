@@ -22,3 +22,4 @@
 Обновление (2026-01-07): стабилизированы UI-cleanup/protected, safe edit retry для household, safe delete в settings/ui_flow, расширены тесты, обновлены project_code*.txt.
 Обновление (2026-01-07): исправлен household 'no' UI flow и тесты идемпотентности, обновлены project_code_*.txt.
 Обновление (2026-01-07): переименованы таблицы SQLite на транслит с миграцией и user_version, добавлен тест миграции, обновлены project_code*.txt.
+Обновление (2026-01-07): переименованы таблицы SQLite на русские имена в схеме и миграции, обновлен project_code.txt.

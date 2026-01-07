@@ -73,34 +73,6 @@ DEFAULT_HOUSEHOLD_ITEMS = [
     {"code": "training_495", "text": "Оплатил тренировки 495 - 5000р?", "amount": 5000},
 ]
 
-DEFAULT_INCOME_CATEGORIES = [
-    {"code": "долги", "title": "Убил боль?", "percent": 30, "position": 1},
-    {
-        "code": "быт",
-        "title": "бытовые расходы",
-        "percent": 20,
-        "position": 2,
-    },
-    {
-        "code": "инвестиции",
-        "title": "Инвестиции",
-        "percent": 20,
-        "position": 3,
-    },
-    {
-        "code": "сбережения",
-        "title": "Сбережения",
-        "percent": 20,
-        "position": 4,
-    },
-    {
-        "code": "спонтанные траты",
-        "title": "спонтанные траты",
-        "percent": 10,
-        "position": 5,
-    },
-]
-
 DEFAULT_EXPENSE_CATEGORIES = [
     {"code": "базовые", "title": "Базовые расходы", "percent": 40, "position": 1},
     {"code": "жилье", "title": "Жилье и ЖКУ", "percent": 20, "position": 2},
@@ -514,39 +486,6 @@ class FinanceDatabase:
                 user_id,
                 error,
             )
-
-    def ensure_income_categories_seeded(self, user_id: int) -> None:
-        """Seed default income categories if user has none."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"SELECT 1 FROM {TABLES.income_categories} WHERE user_id = ? AND is_active = 1 LIMIT 1",
-                (user_id,),
-            )
-            if cursor.fetchone():
-                return
-
-            for item in DEFAULT_INCOME_CATEGORIES:
-                cursor.execute(
-                    f"""
-                    INSERT INTO {TABLES.income_categories} (
-                        user_id, code, title, percent, position, is_active
-                    )
-                    VALUES (?, ?, ?, ?, ?, 1)
-                    """,
-                    (
-                        user_id,
-                        item["code"],
-                        sanitize_income_title(item["title"]),
-                        item["percent"],
-                        item["position"],
-                    ),
-                )
-            self.connection.commit()
-            LOGGER.info("Seeded default income categories for user %s", user_id)
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to seed income categories for user %s: %s", user_id, error)
 
     def sanitize_income_category_titles(self) -> None:
         """Sanitize stored income category titles."""

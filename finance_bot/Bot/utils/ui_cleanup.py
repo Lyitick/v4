@@ -36,7 +36,17 @@ async def ui_register_protected_message(
 ) -> None:
     """Track a UI message id that should never be deleted."""
 
-    await ui_register_message(state, chat_id, message_id)
+    data = await state.get_data()
+    ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    if message_id not in ids:
+        ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
+    current_chat_id = data.get("ui_chat_id")
+    await state.update_data(
+        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
+        ui_protected_message_ids=ids,
+    )
 
 
 async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
@@ -126,7 +136,10 @@ async def ui_cleanup_to_context(
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
     keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
+    for protected_id in protected_ids:
+        keep_id_set.add(int(protected_id))
     delete_ids = [
         int(mid)
         for mid in tracked_ids
@@ -150,7 +163,9 @@ async def ui_cleanup_to_context(
         len(keep_id_set),
     )
     await state.update_data(
-        ui_tracked_message_ids=list(keep_id_set),
+        ui_tracked_message_ids=list(
+            {int(item) for item in (keep_ids or []) if item is not None}
+        ),
     )
 
 

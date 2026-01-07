@@ -43,7 +43,9 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
     LOGGER.info(
-        "User %s started bot", message.from_user.id if message.from_user else "unknown"
+        "USER=%s ACTION=START STATE=%s META=-",
+        message.from_user.id if message.from_user else "unknown",
+        await state.get_state(),
     )
 
 
@@ -80,7 +82,11 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
         "Операция отменена. Вы в главном меню.",
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
-    LOGGER.info("User %s cancelled current operation", message.from_user.id if message.from_user else "unknown")
+    LOGGER.info(
+        "USER=%s ACTION=CANCEL STATE=%s META=-",
+        message.from_user.id if message.from_user else "unknown",
+        await state.get_state(),
+    )
 
 
 @router.message(F.text == "⏪ На главную")
@@ -93,7 +99,12 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
         message_id=message.message_id,
         log_context="back_to_main_user_msg",
     )
-    LOGGER.info("BACK_TO_MAIN user_msg_deleted=%s", str(deleted).lower())
+    LOGGER.info(
+        "USER=%s ACTION=BACK_TO_MAIN_DELETE STATE=%s META=user_msg_deleted=%s",
+        message.from_user.id if message.from_user else "unknown",
+        await state.get_state(),
+        str(deleted).lower(),
+    )
     await ui_cleanup_to_context(
         message.bot,
         state,
@@ -107,4 +118,8 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
         "Главное меню",
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
-    LOGGER.info("User %s returned to main menu", message.from_user.id if message.from_user else "unknown")
+    LOGGER.info(
+        "USER=%s ACTION=BACK_TO_MAIN STATE=%s META=-",
+        message.from_user.id if message.from_user else "unknown",
+        await state.get_state(),
+    )

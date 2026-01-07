@@ -182,6 +182,77 @@ async def safe_edit_message_text(
     return False
 
 
+async def safe_edit_message_text_with_status(
+    bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+) -> tuple[bool, bool]:
+    """Safely edit a message text, reporting network failures."""
+
+    log = _get_logger(logger)
+    if isinstance(reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)):
+        log.warning("Safe edit skipped due to reply keyboard markup")
+        return False, False
+
+    for attempt in range(retries + 1):
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+            return True, False
+        except TelegramBadRequest as exc:
+            lowered = str(exc).lower()
+            if "message is not modified" in lowered:
+                return True, False
+            if "message to edit not found" in lowered:
+                log.debug(
+                    "Safe edit skipped (chat_id=%s, message_id=%s): %s",
+                    chat_id,
+                    message_id,
+                    exc,
+                )
+                return False, False
+            log.warning(
+                "Safe edit failed (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit failure details", exc_info=True)
+            return False, False
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "edit_message_text", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return False, True
+            log.warning(
+                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit unexpected error details", exc_info=True)
+            return False, False
+    return False, False
+
+
 async def safe_send_message(
     bot,
     chat_id: int,

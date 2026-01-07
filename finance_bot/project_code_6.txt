@@ -1,5 +1,150 @@
-                exc_info=True,
-            )
+) -> None:
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
+    for protected_id in protected_ids:
+        keep_id_set.add(int(protected_id))
+    delete_ids = [
+        int(mid)
+        for mid in tracked_ids
+        if int(mid) not in keep_id_set and int(mid) != int(welcome_id or 0)
+    ]
+    deleted_count = 0
+    for message_id in delete_ids:
+        deleted = await ui_safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            log_context=f"context={context_name}",
+        )
+        if deleted:
+            deleted_count += 1
+
+    LOGGER.info(
+        "UI_CLEANUP context=%s deleted=%s kept=%s",
+        context_name,
+        deleted_count,
+        len(keep_id_set),
+    )
+    await state.update_data(
+        ui_tracked_message_ids=list(
+            {int(item) for item in (keep_ids or []) if item is not None}
+        ),
+    )
+
+
+async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
+    data = await state.get_data()
+    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
+    if chat_id is None:
+        return
+    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
+
+
+async def ui_render_screen(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> int:
+    data = await state.get_data()
+    screen_id = data.get("ui_screen_message_id")
+    if screen_id is not None and not isinstance(
+        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
+    ):
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(screen_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            logger=LOGGER,
+        )
+        if edited:
+            await ui_set_screen_message(state, chat_id, int(screen_id))
+            return int(screen_id)
+    sent = await safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
+    )
+    if sent:
+        await ui_set_screen_message(state, chat_id, sent.message_id)
+        return int(sent.message_id)
+    return int(screen_id or 0)
+
+
+===== Bot/utils/ui_flow.py =====
+
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
+
+from Bot.utils.telegram_safe import safe_delete_message
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_get(state: FSMContext) -> dict[str, Any]:
+    data = await state.get_data()
+    return {
+        "greeting_id": data.get("ui_welcome_message_id"),
+        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
+    }
+
+
+async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
+    ui = await ui_get(state)
+    if ui.get("greeting_id") is not None:
+        return
+    # greeting_id не удаляем никогда
+    await state.update_data(ui_welcome_message_id=int(message_id))
+
+
+async def ui_track(
+    state: FSMContext, message_id: int, kind: str, screen: str | None
+) -> None:
+    ui = await ui_get(state)
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    tracked.append(int(message_id))
+    if len(tracked) > 300:
+        tracked = tracked[-300:]
+    await state.update_data(ui_tracked_message_ids=tracked)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, screen: str, message_id: int
+) -> None:
+    await ui_track(state, message_id, kind="ui", screen=screen)
+
+
+async def ui_cleanup_for_transition(
+    bot: Bot, state: FSMContext, chat_id: int, keep_greeting: bool = True
+) -> None:
+    ui = await ui_get(state)
+    greeting_id = ui.get("greeting_id") if keep_greeting else None
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    ids = [int(item) for item in tracked]
+    for message_id in ids:
+        if greeting_id and message_id == greeting_id:
+            continue
+        await safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            logger=LOGGER,
+        )
     await state.update_data(ui_tracked_message_ids=[])
 
 
@@ -56,6 +201,779 @@ python Bot/main.py
 ```bash
 pytest
 ```
+
+
+===== finance_bot.log =====
+
+[2025-11-25 14:56:00,395] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-11-25 14:56:00,396] [INFO] [__main__] Starting bot polling
+[2025-11-25 14:56:00,397] [INFO] [aiogram.dispatcher] Start polling
+[2025-11-25 14:56:00,637] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 14:56:00,876] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:56:00,877] [INFO] [aiogram.event] Update id=131879015 is handled. Duration 180 ms by bot id=8440100118
+[2025-11-25 14:56:00,897] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:56:00,898] [INFO] [aiogram.event] Update id=131879016 is handled. Duration 199 ms by bot id=8440100118
+[2025-11-25 14:56:00,919] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:56:00,919] [INFO] [aiogram.event] Update id=131879017 is handled. Duration 219 ms by bot id=8440100118
+[2025-11-25 14:56:00,937] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:56:00,937] [INFO] [aiogram.event] Update id=131879018 is handled. Duration 236 ms by bot id=8440100118
+[2025-11-25 14:57:27,080] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:57:27,081] [INFO] [aiogram.event] Update id=131879019 is handled. Duration 84 ms by bot id=8440100118
+[2025-11-25 14:57:56,254] [INFO] [handlers.finances] User 838347504 started income calculation
+[2025-11-25 14:57:56,255] [INFO] [aiogram.event] Update id=131879020 is handled. Duration 95 ms by bot id=8440100118
+[2025-11-25 14:58:00,888] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 14:58:00,888] [INFO] [aiogram.event] Update id=131879021 is handled. Duration 105 ms by bot id=8440100118
+[2025-11-25 14:58:02,102] [INFO] [handlers.finances] User 838347504 started income calculation
+[2025-11-25 14:58:02,102] [INFO] [aiogram.event] Update id=131879022 is handled. Duration 79 ms by bot id=8440100118
+[2025-11-25 14:58:10,082] [INFO] [aiogram.event] Update id=131879023 is handled. Duration 103 ms by bot id=8440100118
+[2025-11-25 14:58:14,297] [INFO] [database.crud] Updated saving for user 838347504 category долги by 3000.0
+[2025-11-25 14:58:14,480] [INFO] [aiogram.event] Update id=131879024 is handled. Duration 213 ms by bot id=8440100118
+[2025-11-25 14:58:22,837] [INFO] [database.crud] Updated saving for user 838347504 category быт by 2000.0
+[2025-11-25 14:58:23,038] [INFO] [aiogram.event] Update id=131879025 is handled. Duration 228 ms by bot id=8440100118
+[2025-11-25 14:58:26,322] [INFO] [database.crud] Updated saving for user 838347504 category инвестиции by 2000.0
+[2025-11-25 14:58:26,464] [INFO] [aiogram.event] Update id=131879026 is handled. Duration 161 ms by bot id=8440100118
+[2025-11-25 14:58:33,379] [INFO] [database.crud] Updated saving for user 838347504 category сбережения by 2000.0
+[2025-11-25 14:58:33,586] [INFO] [aiogram.event] Update id=131879027 is handled. Duration 238 ms by bot id=8440100118
+[2025-11-25 14:58:36,150] [INFO] [database.crud] Updated saving for user 838347504 category спонтанные траты by 1000.0
+[2025-11-25 14:58:36,237] [INFO] [database.crud] Fetched savings for user 838347504
+[2025-11-25 14:58:36,314] [INFO] [aiogram.event] Update id=131879028 is handled. Duration 180 ms by bot id=8440100118
+[2025-11-25 14:58:53,690] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 14:58:53,690] [INFO] [aiogram.event] Update id=131879029 is handled. Duration 161 ms by bot id=8440100118
+[2025-11-25 14:58:57,875] [INFO] [database.crud] Fetched purchases for user 838347504
+[2025-11-25 14:58:57,947] [INFO] [aiogram.event] Update id=131879030 is handled. Duration 75 ms by bot id=8440100118
+[2025-11-25 14:58:59,960] [INFO] [aiogram.event] Update id=131879031 is handled. Duration 69 ms by bot id=8440100118
+[2025-11-25 14:59:02,045] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:02,117] [INFO] [aiogram.event] Update id=131879032 is handled. Duration 73 ms by bot id=8440100118
+[2025-11-25 14:59:08,043] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 14:59:08,044] [INFO] [aiogram.event] Update id=131879033 is handled. Duration 70 ms by bot id=8440100118
+[2025-11-25 14:59:10,023] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 14:59:10,023] [INFO] [aiogram.event] Update id=131879034 is handled. Duration 160 ms by bot id=8440100118
+[2025-11-25 14:59:14,674] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:14,749] [INFO] [aiogram.event] Update id=131879035 is handled. Duration 75 ms by bot id=8440100118
+[2025-11-25 14:59:17,760] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:17,829] [INFO] [aiogram.event] Update id=131879036 is not handled. Duration 69 ms by bot id=8440100118
+[2025-11-25 14:59:17,830] [ERROR] [aiogram.event] Cause exception while process update id=131879036 by bot id=8440100118
+TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
+    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 166, in _propagate_event
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 36, in handle_category_selection
+    await _send_wishes_list(callback, category)
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 66, in _send_wishes_list
+    await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\methods\base.py", line 84, in emit
+    return await bot(self)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\bot.py", line 485, in __call__
+    return await self.session(self, method, timeout=request_timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 254, in __call__
+    return cast(TelegramType, await middleware(bot, method))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\aiohttp.py", line 185, in make_request
+    response = self.check_response(
+        bot=bot, method=method, status_code=resp.status, content=raw_result
+    )
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 120, in check_response
+    raise TelegramBadRequest(method=method, message=description)
+aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+[2025-11-25 14:59:18,336] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:18,397] [INFO] [aiogram.event] Update id=131879037 is not handled. Duration 62 ms by bot id=8440100118
+[2025-11-25 14:59:18,397] [ERROR] [aiogram.event] Cause exception while process update id=131879037 by bot id=8440100118
+TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
+    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 166, in _propagate_event
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 36, in handle_category_selection
+    await _send_wishes_list(callback, category)
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 66, in _send_wishes_list
+    await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\methods\base.py", line 84, in emit
+    return await bot(self)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\bot.py", line 485, in __call__
+    return await self.session(self, method, timeout=request_timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 254, in __call__
+    return cast(TelegramType, await middleware(bot, method))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\aiohttp.py", line 185, in make_request
+    response = self.check_response(
+        bot=bot, method=method, status_code=resp.status, content=raw_result
+    )
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 120, in check_response
+    raise TelegramBadRequest(method=method, message=description)
+aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+[2025-11-25 14:59:19,441] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:19,514] [INFO] [aiogram.event] Update id=131879038 is not handled. Duration 73 ms by bot id=8440100118
+[2025-11-25 14:59:19,514] [ERROR] [aiogram.event] Cause exception while process update id=131879038 by bot id=8440100118
+TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
+    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 166, in _propagate_event
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 36, in handle_category_selection
+    await _send_wishes_list(callback, category)
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 66, in _send_wishes_list
+    await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\methods\base.py", line 84, in emit
+    return await bot(self)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\bot.py", line 485, in __call__
+    return await self.session(self, method, timeout=request_timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 254, in __call__
+    return cast(TelegramType, await middleware(bot, method))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\aiohttp.py", line 185, in make_request
+    response = self.check_response(
+        bot=bot, method=method, status_code=resp.status, content=raw_result
+    )
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 120, in check_response
+    raise TelegramBadRequest(method=method, message=description)
+aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+[2025-11-25 14:59:32,729] [INFO] [aiogram.event] Update id=131879039 is handled. Duration 76 ms by bot id=8440100118
+[2025-11-25 14:59:34,323] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:34,386] [INFO] [aiogram.event] Update id=131879040 is not handled. Duration 63 ms by bot id=8440100118
+[2025-11-25 14:59:34,387] [ERROR] [aiogram.event] Cause exception while process update id=131879040 by bot id=8440100118
+TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
+    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 166, in _propagate_event
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 36, in handle_category_selection
+    await _send_wishes_list(callback, category)
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 66, in _send_wishes_list
+    await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\methods\base.py", line 84, in emit
+    return await bot(self)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\bot.py", line 485, in __call__
+    return await self.session(self, method, timeout=request_timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 254, in __call__
+    return cast(TelegramType, await middleware(bot, method))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\aiohttp.py", line 185, in make_request
+    response = self.check_response(
+        bot=bot, method=method, status_code=resp.status, content=raw_result
+    )
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 120, in check_response
+    raise TelegramBadRequest(method=method, message=description)
+aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+[2025-11-25 14:59:36,388] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 14:59:36,388] [INFO] [aiogram.event] Update id=131879041 is handled. Duration 80 ms by bot id=8440100118
+[2025-11-25 14:59:37,547] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 14:59:37,547] [INFO] [aiogram.event] Update id=131879042 is handled. Duration 147 ms by bot id=8440100118
+[2025-11-25 14:59:41,835] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:41,912] [INFO] [aiogram.event] Update id=131879043 is handled. Duration 77 ms by bot id=8440100118
+[2025-11-25 15:00:33,523] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-11-25 15:00:33,524] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 15:00:33,525] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 15:00:33,785] [INFO] [__main__] Bot shutdown complete
+[2025-11-25 15:00:33,786] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 15:00:38,045] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-11-25 15:00:38,045] [INFO] [__main__] Starting bot polling
+[2025-11-25 15:00:38,045] [INFO] [aiogram.dispatcher] Start polling
+[2025-11-25 15:00:38,212] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 15:00:52,677] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 15:00:52,677] [INFO] [aiogram.event] Update id=131879044 is handled. Duration 219 ms by bot id=8440100118
+[2025-11-25 15:00:54,702] [INFO] [handlers.finances] User 838347504 started income calculation
+[2025-11-25 15:00:54,702] [INFO] [aiogram.event] Update id=131879045 is handled. Duration 108 ms by bot id=8440100118
+[2025-11-25 15:00:56,190] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 15:00:56,190] [INFO] [aiogram.event] Update id=131879046 is handled. Duration 75 ms by bot id=8440100118
+[2025-11-25 15:00:57,615] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 15:00:57,615] [INFO] [aiogram.event] Update id=131879047 is handled. Duration 360 ms by bot id=8440100118
+[2025-11-25 15:00:58,671] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 15:00:58,752] [INFO] [aiogram.event] Update id=131879048 is handled. Duration 81 ms by bot id=8440100118
+[2025-11-25 15:01:01,909] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 15:01:01,976] [INFO] [aiogram.event] Update id=131879049 is not handled. Duration 68 ms by bot id=8440100118
+[2025-11-25 15:01:01,976] [ERROR] [aiogram.event] Cause exception while process update id=131879049 by bot id=8440100118
+TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
+    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 166, in _propagate_event
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 36, in handle_category_selection
+    await _send_wishes_list(callback, category)
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 66, in _send_wishes_list
+    await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\methods\base.py", line 84, in emit
+    return await bot(self)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\bot.py", line 485, in __call__
+    return await self.session(self, method, timeout=request_timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 254, in __call__
+    return cast(TelegramType, await middleware(bot, method))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\aiohttp.py", line 185, in make_request
+    response = self.check_response(
+        bot=bot, method=method, status_code=resp.status, content=raw_result
+    )
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 120, in check_response
+    raise TelegramBadRequest(method=method, message=description)
+aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+[2025-11-25 15:01:03,671] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 15:01:03,766] [INFO] [aiogram.event] Update id=131879050 is not handled. Duration 95 ms by bot id=8440100118
+[2025-11-25 15:01:03,767] [ERROR] [aiogram.event] Cause exception while process update id=131879050 by bot id=8440100118
+TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
+    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 166, in _propagate_event
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 36, in handle_category_selection
+    await _send_wishes_list(callback, category)
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 66, in _send_wishes_list
+    await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\methods\base.py", line 84, in emit
+    return await bot(self)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\bot.py", line 485, in __call__
+    return await self.session(self, method, timeout=request_timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 254, in __call__
+    return cast(TelegramType, await middleware(bot, method))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\aiohttp.py", line 185, in make_request
+    response = self.check_response(
+        bot=bot, method=method, status_code=resp.status, content=raw_result
+    )
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 120, in check_response
+    raise TelegramBadRequest(method=method, message=description)
+aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+[2025-11-25 15:01:05,107] [INFO] [aiogram.event] Update id=131879051 is handled. Duration 128 ms by bot id=8440100118
+[2025-11-25 15:01:16,920] [INFO] [aiogram.event] Update id=131879052 is handled. Duration 86 ms by bot id=8440100118
+[2025-11-25 15:01:20,646] [INFO] [aiogram.event] Update id=131879053 is handled. Duration 86 ms by bot id=8440100118
+[2025-11-25 15:01:27,803] [INFO] [aiogram.event] Update id=131879054 is handled. Duration 83 ms by bot id=8440100118
+[2025-11-25 15:01:30,081] [INFO] [database.crud] Added wish 1 for user 838347504
+[2025-11-25 15:01:30,163] [INFO] [handlers.callbacks] User 838347504 added wish 1
+[2025-11-25 15:01:30,163] [INFO] [aiogram.event] Update id=131879055 is handled. Duration 115 ms by bot id=8440100118
+[2025-11-25 15:01:37,618] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 15:01:37,618] [INFO] [aiogram.event] Update id=131879056 is handled. Duration 140 ms by bot id=8440100118
+[2025-11-25 15:01:39,178] [INFO] [handlers.finances] User 838347504 started income calculation
+[2025-11-25 15:01:39,178] [INFO] [aiogram.event] Update id=131879057 is handled. Duration 162 ms by bot id=8440100118
+[2025-11-25 15:01:40,278] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 15:01:40,279] [INFO] [aiogram.event] Update id=131879058 is handled. Duration 81 ms by bot id=8440100118
+[2025-11-25 15:01:42,094] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 15:01:42,094] [INFO] [aiogram.event] Update id=131879059 is handled. Duration 198 ms by bot id=8440100118
+[2025-11-25 15:01:43,222] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 15:01:43,308] [INFO] [aiogram.event] Update id=131879060 is handled. Duration 86 ms by bot id=8440100118
+[2025-11-25 15:01:48,363] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 15:01:48,442] [INFO] [aiogram.event] Update id=131879061 is handled. Duration 79 ms by bot id=8440100118
+[2025-11-25 15:03:48,606] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-11-25 15:03:48,608] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 15:03:48,608] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 15:03:48,867] [INFO] [__main__] Bot shutdown complete
+[2025-11-25 15:03:48,868] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 15:03:53,203] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-11-25 15:03:53,204] [INFO] [__main__] Starting bot polling
+[2025-11-25 15:03:53,204] [INFO] [aiogram.dispatcher] Start polling
+[2025-11-25 15:03:53,356] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 15:03:56,005] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 15:03:56,005] [INFO] [aiogram.event] Update id=131879062 is handled. Duration 176 ms by bot id=8440100118
+[2025-11-25 15:03:58,443] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 15:03:58,443] [INFO] [aiogram.event] Update id=131879063 is handled. Duration 151 ms by bot id=8440100118
+[2025-11-25 15:03:59,386] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 15:03:59,471] [INFO] [aiogram.event] Update id=131879064 is handled. Duration 86 ms by bot id=8440100118
+[2025-11-25 15:04:04,361] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 15:04:04,432] [INFO] [aiogram.event] Update id=131879065 is handled. Duration 72 ms by bot id=8440100118
+[2025-11-25 15:04:07,009] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 15:04:07,076] [INFO] [aiogram.event] Update id=131879066 is not handled. Duration 68 ms by bot id=8440100118
+[2025-11-25 15:04:07,076] [ERROR] [aiogram.event] Cause exception while process update id=131879066 by bot id=8440100118
+TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
+    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 166, in _propagate_event
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 36, in handle_category_selection
+    await _send_wishes_list(callback, category)
+  File "C:\Users\admin\PycharmProjects\v4\finance_bot\Bot\handlers\callbacks.py", line 66, in _send_wishes_list
+    await callback.message.edit_text("Желаний в этой категории пока нет.", reply_markup=wishlist_categories_keyboard())
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\methods\base.py", line 84, in emit
+    return await bot(self)
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\bot.py", line 485, in __call__
+    return await self.session(self, method, timeout=request_timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 254, in __call__
+    return cast(TelegramType, await middleware(bot, method))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\aiohttp.py", line 185, in make_request
+    response = self.check_response(
+        bot=bot, method=method, status_code=resp.status, content=raw_result
+    )
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\client\session\base.py", line 120, in check_response
+    raise TelegramBadRequest(method=method, message=description)
+aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+[2025-11-25 16:18:28,663] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-11-25 16:18:28,665] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 16:18:28,665] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 16:18:28,929] [INFO] [__main__] Bot shutdown complete
+[2025-11-25 16:18:28,929] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 16:22:08,148] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-11-25 16:22:08,148] [INFO] [__main__] Starting bot polling
+[2025-11-25 16:22:08,148] [INFO] [aiogram.dispatcher] Start polling
+[2025-11-25 16:22:08,311] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 16:22:37,723] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 16:22:37,723] [INFO] [aiogram.event] Update id=131879067 is handled. Duration 264 ms by bot id=8440100118
+[2025-11-25 16:22:44,393] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 16:22:44,394] [INFO] [aiogram.event] Update id=131879068 is handled. Duration 145 ms by bot id=8440100118
+[2025-11-25 16:22:46,433] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 16:22:46,509] [INFO] [aiogram.event] Update id=131879069 is handled. Duration 77 ms by bot id=8440100118
+[2025-11-25 16:22:56,829] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 16:22:56,887] [INFO] [aiogram.event] Update id=131879070 is handled. Duration 59 ms by bot id=8440100118
+[2025-11-25 16:23:03,206] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 16:23:03,308] [INFO] [aiogram.event] Update id=131879071 is handled. Duration 103 ms by bot id=8440100118
+[2025-11-25 16:23:05,570] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 16:23:05,658] [INFO] [aiogram.event] Update id=131879072 is handled. Duration 88 ms by bot id=8440100118
+[2025-11-25 16:23:07,180] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 16:23:07,258] [INFO] [aiogram.event] Update id=131879073 is handled. Duration 78 ms by bot id=8440100118
+[2025-11-25 16:23:16,044] [INFO] [database.crud] Fetched wish 1
+[2025-11-25 16:23:16,044] [INFO] [database.crud] Fetched savings for user 838347504
+[2025-11-25 16:23:16,179] [INFO] [aiogram.event] Update id=131879074 is handled. Duration 135 ms by bot id=8440100118
+[2025-11-25 16:23:19,804] [INFO] [database.crud] Fetched wish 1
+[2025-11-25 16:23:19,804] [INFO] [database.crud] Fetched savings for user 838347504
+[2025-11-25 16:23:19,861] [INFO] [aiogram.event] Update id=131879075 is handled. Duration 58 ms by bot id=8440100118
+[2025-11-25 16:23:38,225] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 16:23:38,225] [INFO] [aiogram.event] Update id=131879076 is handled. Duration 134 ms by bot id=8440100118
+[2025-11-25 16:23:45,038] [INFO] [handlers.finances] User 838347504 started income calculation
+[2025-11-25 16:23:45,038] [INFO] [aiogram.event] Update id=131879077 is handled. Duration 76 ms by bot id=8440100118
+[2025-11-25 16:23:50,008] [INFO] [aiogram.event] Update id=131879078 is handled. Duration 86 ms by bot id=8440100118
+[2025-11-25 16:23:51,364] [INFO] [database.crud] Updated saving for user 838347504 category долги by 300000.0
+[2025-11-25 16:23:51,518] [INFO] [aiogram.event] Update id=131879079 is handled. Duration 171 ms by bot id=8440100118
+[2025-11-25 16:23:52,687] [INFO] [database.crud] Updated saving for user 838347504 category быт by 200000.0
+[2025-11-25 16:23:52,833] [INFO] [aiogram.event] Update id=131879080 is handled. Duration 164 ms by bot id=8440100118
+[2025-11-25 16:23:53,859] [INFO] [database.crud] Updated saving for user 838347504 category инвестиции by 200000.0
+[2025-11-25 16:23:54,019] [INFO] [aiogram.event] Update id=131879081 is handled. Duration 190 ms by bot id=8440100118
+[2025-11-25 16:23:54,966] [INFO] [database.crud] Updated saving for user 838347504 category сбережения by 200000.0
+[2025-11-25 16:23:55,293] [INFO] [aiogram.event] Update id=131879082 is handled. Duration 349 ms by bot id=8440100118
+[2025-11-25 16:23:57,121] [INFO] [database.crud] Updated saving for user 838347504 category спонтанные траты by 100000.0
+[2025-11-25 16:23:57,188] [INFO] [database.crud] Fetched savings for user 838347504
+[2025-11-25 16:23:57,259] [INFO] [aiogram.event] Update id=131879083 is handled. Duration 144 ms by bot id=8440100118
+[2025-11-25 16:24:07,221] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 16:24:07,221] [INFO] [aiogram.event] Update id=131879084 is handled. Duration 155 ms by bot id=8440100118
+[2025-11-25 16:24:08,753] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 16:24:08,822] [INFO] [aiogram.event] Update id=131879085 is handled. Duration 70 ms by bot id=8440100118
+[2025-11-25 16:24:20,015] [INFO] [database.crud] Fetched wish 1
+[2025-11-25 16:24:20,015] [INFO] [database.crud] Fetched savings for user 838347504
+[2025-11-25 16:24:20,110] [INFO] [aiogram.event] Update id=131879086 is handled. Duration 96 ms by bot id=8440100118
+[2025-11-25 16:24:45,843] [INFO] [handlers.common] Fallback triggered. User: 838347504 State: None Text: None
+[2025-11-25 16:24:45,922] [INFO] [aiogram.event] Update id=131879087 is handled. Duration 81 ms by bot id=8440100118
+[2025-11-25 16:52:04,024] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 16:52:04,025] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 16:52:15,199] [INFO] [aiogram.dispatcher] Connection established (tryings = 1, bot id = 8440100118)
+[2025-11-25 16:52:15,200] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 16:52:15,200] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 16:52:26,359] [INFO] [aiogram.dispatcher] Connection established (tryings = 1, bot id = 8440100118)
+[2025-11-25 17:13:12,505] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-11-25 17:13:12,507] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 17:13:12,507] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 17:13:12,768] [INFO] [__main__] Bot shutdown complete
+[2025-11-25 17:13:12,769] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 17:25:52,747] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-11-25 17:25:52,748] [INFO] [__main__] Starting bot polling
+[2025-11-25 17:25:52,748] [INFO] [aiogram.dispatcher] Start polling
+[2025-11-25 17:25:52,929] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 17:34:36,059] [INFO] [aiogram.dispatcher] Polling stopped
+[2025-11-25 17:34:36,060] [ERROR] [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2025-11-25 17:34:36,060] [WARNING] [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8440100118)
+[2025-11-25 17:34:36,314] [INFO] [__main__] Bot shutdown complete
+[2025-11-25 17:34:36,315] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
 
 
 ===== tests/__init__.py =====
@@ -456,6 +1374,24 @@ def test_import_handlers() -> None:
     import Bot.handlers.common  # noqa: F401
 
 
+def test_register_routers_smoke() -> None:
+    """Ensure register_routers includes key routers."""
+
+    from aiogram import Dispatcher
+
+    from Bot.handlers import household_payments, settings, start, wishlist
+    from Bot.main import register_routers
+
+    dp = Dispatcher()
+    register_routers(dp)
+    routers = list(getattr(dp, "sub_routers", []))
+
+    assert start.router in routers
+    assert household_payments.router in routers
+    assert settings.router in routers
+    assert wishlist.router in routers
+
+
 ===== tests/unit/test_telegram_safe.py =====
 
 """Tests for telegram_safe utilities."""
@@ -648,6 +1584,16 @@ def test_sanitize_income_title_trims_separators() -> None:
     assert sanitize_income_title(text) == "Инвестиции"
 
 
+def test_sanitize_income_title_removes_tinkoff_suffix() -> None:
+    text = "убил боль — на тиньк"
+    assert sanitize_income_title(text) == "убил боль"
+
+
+def test_sanitize_income_title_removes_ozon_suffix() -> None:
+    text = "что-то (озон)"
+    assert sanitize_income_title(text) == "что-то"
+
+
 ===== tests/unit/test_ui_cleanup.py =====
 
 """Tests for UI cleanup utilities."""
@@ -757,6 +1703,7 @@ from Bot.handlers.start import back_to_main
 from Bot.utils.ui_cleanup import (
     ui_cleanup_to_context,
     ui_register_message,
+    ui_register_protected_message,
     ui_set_welcome_message,
     ui_track_message,
 )
@@ -816,6 +1763,19 @@ def test_ui_cleanup_keeps_welcome() -> None:
         assert deleted_ids == {10, 12}
         data = await state.get_data()
         assert data["ui_tracked_message_ids"] == []
+
+    asyncio.run(run_test())
+
+
+def test_ui_register_protected_not_tracked() -> None:
+    """Protected messages are stored separately from tracked list."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_register_protected_message(state, 1, 55)
+        data = await state.get_data()
+        assert data.get("ui_protected_message_ids") == [55]
+        assert data.get("ui_tracked_message_ids") in (None, [])
 
     asyncio.run(run_test())
 
@@ -894,3 +1854,5 @@ from Bot.utils import *  # noqa: F401,F403
 ===== utils/logging.py =====
 
 from Bot.utils.logging import *  # noqa: F401,F403
+
+

@@ -105,6 +105,7 @@ from Bot.handlers.start import back_to_main
 from Bot.utils.ui_cleanup import (
     ui_cleanup_to_context,
     ui_register_message,
+    ui_register_protected_message,
     ui_set_welcome_message,
     ui_track_message,
 )
@@ -164,6 +165,19 @@ def test_ui_cleanup_keeps_welcome() -> None:
         assert deleted_ids == {10, 12}
         data = await state.get_data()
         assert data["ui_tracked_message_ids"] == []
+
+    asyncio.run(run_test())
+
+
+def test_ui_register_protected_not_tracked() -> None:
+    """Protected messages are stored separately from tracked list."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_register_protected_message(state, 1, 55)
+        data = await state.get_data()
+        assert data.get("ui_protected_message_ids") == [55]
+        assert data.get("ui_tracked_message_ids") in (None, [])
 
     asyncio.run(run_test())
 

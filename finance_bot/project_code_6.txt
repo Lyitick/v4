@@ -986,8 +986,139 @@ aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: messa
 
 ===== tests/integration/test_database.py =====
 
+===== tests/integration/test_schema_migration.py =====
+
+"""Integration tests for schema migration."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from Bot.database.crud import TABLES, migrate_schema
+
+
+def test_schema_migration_renames_tables(tmp_path: Path) -> None:
+    """Rename legacy tables without losing data."""
+
+    db_path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(db_path)
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE savings (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            category TEXT,
+            current REAL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE wishes (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            name TEXT,
+            price REAL,
+            category TEXT,
+            is_purchased INTEGER,
+            saved_amount REAL,
+            purchased_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE purchases (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            wish_name TEXT,
+            price REAL,
+            category TEXT,
+            purchased_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE household_payment_items (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            code TEXT,
+            text TEXT,
+            amount INTEGER,
+            position INTEGER,
+            is_active INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE household_payments (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            month TEXT,
+            question_code TEXT,
+            is_paid INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        "INSERT INTO savings (user_id, category, current) VALUES (?,?,?)",
+        (1, "БЫТ", 500.0),
+    )
+    cursor.execute(
+        """
+        INSERT INTO wishes (user_id, name, price, category, is_purchased, saved_amount, purchased_at)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (1, "Чайник", 1200.0, "БЫТ", 0, 0, None),
+    )
+    cursor.execute(
+        "INSERT INTO purchases (user_id, wish_name, price, category, purchased_at) VALUES (?,?,?,?,?)",
+        (1, "Тест", 100.0, "БЫТ", "2025-01-01"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO household_payment_items (user_id, code, text, amount, position, is_active)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (1, "rent", "Квартплата", 4000, 1, 1),
+    )
+    cursor.execute(
+        """
+        INSERT INTO household_payments (user_id, month, question_code, is_paid)
+        VALUES (?,?,?,?)
+        """,
+        (1, "2025-01", "rent", 0),
+    )
+    connection.commit()
+
+    migrate_schema(connection)
+    migrate_schema(connection)
+
+    cursor.execute(f"SELECT category, current FROM {TABLES.savings}")
+    savings_row = cursor.fetchone()
+    assert savings_row == ("БЫТ", 500.0)
+
+    cursor.execute(f"SELECT name FROM {TABLES.wishes}")
+    assert cursor.fetchone()[0] == "Чайник"
+
+    cursor.execute(f"SELECT wish_name FROM {TABLES.purchases}")
+    assert cursor.fetchone()[0] == "Тест"
+
+    cursor.execute(f"SELECT code FROM {TABLES.household_payment_items}")
+    assert cursor.fetchone()[0] == "rent"
+
+    cursor.execute(f"SELECT question_code FROM {TABLES.household_payments}")
+    assert cursor.fetchone()[0] == "rent"
+
+    connection.close()
+
+
+
 """Integration tests for database operations."""
-from Bot.database.crud import FinanceDatabase
+from Bot.database.crud import FinanceDatabase, TABLES
 
 
 def setup_module(module) -> None:  # noqa: D401
@@ -995,9 +1126,9 @@ def setup_module(module) -> None:  # noqa: D401
 
     db = FinanceDatabase()
     cursor = db.connection.cursor()
-    cursor.execute("DELETE FROM wishes")
-    cursor.execute("DELETE FROM purchases")
-    cursor.execute("DELETE FROM savings")
+    cursor.execute(f"DELETE FROM {TABLES.wishes}")
+    cursor.execute(f"DELETE FROM {TABLES.purchases}")
+    cursor.execute(f"DELETE FROM {TABLES.savings}")
     db.connection.commit()
 
 
@@ -1021,7 +1152,6 @@ def test_update_saving_and_purchase() -> None:
     db.add_purchase(1, "Test", 10.0, "Инструменты")
     purchases = db.get_purchases_by_user(1)
     assert len(purchases) == 1
-
 
 ===== tests/run_all_tests.py =====
 
@@ -1255,7 +1385,7 @@ from datetime import datetime
 import pytest
 
 from Bot.config import settings
-from Bot.database.crud import FinanceDatabase
+from Bot.database.crud import FinanceDatabase, TABLES
 from Bot.handlers.household_payments import reset_household_cycle_if_needed
 from Bot.utils.datetime_utils import current_month_str
 
@@ -1267,9 +1397,13 @@ async def test_reset_cycle_creates_statuses_after_threshold() -> None:
     db = FinanceDatabase()
     user_id = 99991
     month = "2025-01"
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
     db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
     )
     db.connection.commit()
     db.ensure_household_items_seeded(user_id)
@@ -1285,7 +1419,7 @@ async def test_reset_cycle_creates_statuses_after_threshold() -> None:
 
     await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
     cursor = db.connection.execute(
-        "SELECT COUNT(*) FROM household_payments WHERE user_id = ? AND month = ?",
+        f"SELECT COUNT(*) FROM {TABLES.household_payments} WHERE user_id = ? AND month = ?",
         (user_id, month),
     )
     assert cursor.fetchone()[0] == len(items)
@@ -1298,9 +1432,13 @@ async def test_mark_and_check_unpaid_questions() -> None:
     db = FinanceDatabase()
     user_id = 99992
     month = current_month_str(datetime(2025, 2, 6, 12, 0, tzinfo=settings.TIMEZONE))
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
     db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
     )
     db.connection.commit()
     db.ensure_household_items_seeded(user_id)
@@ -1321,10 +1459,17 @@ async def test_question_flow_and_savings_update() -> None:
     db = FinanceDatabase()
     user_id = 99993
     month = current_month_str(datetime(2025, 3, 6, 12, 0, tzinfo=settings.TIMEZONE))
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
-    db.connection.execute("DELETE FROM savings WHERE user_id = ? AND category = 'быт'", (user_id,))
     db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.savings} WHERE user_id = ? AND category = 'быт'",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
     )
     db.connection.commit()
     db.ensure_household_items_seeded(user_id)
@@ -1370,7 +1515,6 @@ async def test_question_flow_and_savings_update() -> None:
     assert changed_back is True
     savings_map = db.get_user_savings_map(user_id)
     assert savings_map.get("быт") == 5000
-
 
 ===== tests/unit/test_household_renderers.py =====
 

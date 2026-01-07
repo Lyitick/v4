@@ -2163,10 +2163,9 @@ class FinanceDatabase:
                     ids_to_delete.append(int(purchase["id"]))
 
             if ids_to_delete:
+                placeholders = ",".join("?" * len(ids_to_delete))
                 cursor.execute(
-                    f"DELETE FROM {TABLES.purchases} WHERE id IN ({})".format(
-                        ",".join("?" * len(ids_to_delete))
-                    ),
+                    f"DELETE FROM {TABLES.purchases} WHERE id IN ({placeholders})",
                     ids_to_delete,
                 )
 
@@ -2189,10 +2188,9 @@ class FinanceDatabase:
                     wish_ids.append(int(wish["id"]))
 
             if wish_ids:
+                placeholders = ",".join("?" * len(wish_ids))
                 cursor.execute(
-                    f"DELETE FROM {TABLES.wishes} WHERE id IN ({})".format(
-                        ",".join("?" * len(wish_ids))
-                    ),
+                    f"DELETE FROM {TABLES.wishes} WHERE id IN ({placeholders})",
                     wish_ids,
                 )
             if ids_to_delete or wish_ids:

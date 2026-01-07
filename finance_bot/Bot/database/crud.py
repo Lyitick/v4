@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
@@ -16,6 +17,39 @@ from Bot.utils.text_sanitizer import sanitize_income_title
 
 LOGGER = logging.getLogger(__name__)
 DB_PATH = Path(__file__).resolve().parents[2] / "finance.db"
+TARGET_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True)
+class TableNames:
+    savings: str = "накопления"
+    wishes: str = "желания"
+    purchases: str = "покупки"
+    household_payments: str = "бытовые_платежи"
+    household_payment_items: str = "позиции_бытовых_платежей"
+    ui_pins: str = "закрепы_интерфейса"
+    income_categories: str = "категории_доходов"
+    expense_categories: str = "категории_расходов"
+    wishlist_categories: str = "категории_желаний"
+    user_settings: str = "настройки_пользователя"
+    byt_timer_times: str = "время_быт_таймера"
+
+
+TABLES = TableNames()
+TABLE_RENAMES: dict[str, str] = {
+    "savings": TABLES.savings,
+    "wishes": TABLES.wishes,
+    "purchases": TABLES.purchases,
+    "household_payments": TABLES.household_payments,
+    "household_payment_items": TABLES.household_payment_items,
+    "ui_pins": TABLES.ui_pins,
+    "income_categories": TABLES.income_categories,
+    "expense_categories": TABLES.expense_categories,
+    "wishlist_categories": TABLES.wishlist_categories,
+    "user_settings": TABLES.user_settings,
+    "byt_timer_times": TABLES.byt_timer_times,
+}
+LEGACY_TABLE_NAMES = tuple(TABLE_RENAMES.keys())
 
 
 def _get_bot_user_id() -> int | None:
@@ -83,6 +117,85 @@ DEFAULT_WISHLIST_CATEGORIES = [
 ]
 
 
+def _get_user_version(cursor: sqlite3.Cursor) -> int:
+    cursor.execute("PRAGMA user_version")
+    row = cursor.fetchone()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def _list_user_tables(cursor: sqlite3.Cursor) -> list[str]:
+    cursor.execute(
+        """
+        SELECT name
+        FROM sqlite_master
+        WHERE type='table' AND name NOT LIKE 'sqlite_%'
+        ORDER BY name
+        """
+    )
+    return [str(row[0]) for row in cursor.fetchall()]
+
+
+def _fetch_schema_definitions(cursor: sqlite3.Cursor) -> list[tuple[str, str]]:
+    cursor.execute(
+        """
+        SELECT name, sql
+        FROM sqlite_master
+        WHERE type IN ('table', 'index', 'trigger', 'view') AND sql IS NOT NULL
+        """
+    )
+    return [(str(row[0]), str(row[1])) for row in cursor.fetchall()]
+
+
+def _assert_no_legacy_table_names(cursor: sqlite3.Cursor) -> None:
+    schema_rows = _fetch_schema_definitions(cursor)
+    for name, sql in schema_rows:
+        for legacy_name in LEGACY_TABLE_NAMES:
+            if legacy_name in sql:
+                raise RuntimeError(
+                    f"Legacy table name '{legacy_name}' found in schema object '{name}'"
+                )
+
+
+def migrate_schema(connection: sqlite3.Connection) -> None:
+    cursor = connection.cursor()
+    current_version = _get_user_version(cursor)
+    if current_version >= TARGET_SCHEMA_VERSION:
+        return
+
+    existing_tables = set(_list_user_tables(cursor))
+    LOGGER.info(
+        "DB_MIGRATION start from_version=%s to_version=%s",
+        current_version,
+        TARGET_SCHEMA_VERSION,
+    )
+    renamed = 0
+    try:
+        cursor.execute("BEGIN IMMEDIATE")
+        cursor.execute("PRAGMA foreign_keys = OFF")
+        for old_name, new_name in TABLE_RENAMES.items():
+            if old_name in existing_tables and new_name not in existing_tables:
+                cursor.execute(
+                    f'ALTER TABLE "{old_name}" RENAME TO "{new_name}"'
+                )
+                renamed += 1
+                LOGGER.info("DB_MIGRATION rename %s->%s", old_name, new_name)
+                existing_tables.discard(old_name)
+                existing_tables.add(new_name)
+        cursor.execute("PRAGMA foreign_keys = ON")
+        cursor.execute("PRAGMA foreign_key_check")
+        fk_issues = cursor.fetchall()
+        if fk_issues:
+            raise RuntimeError(f"Foreign key issues after migration: {fk_issues}")
+        _assert_no_legacy_table_names(cursor)
+        cursor.execute(f"PRAGMA user_version = {TARGET_SCHEMA_VERSION}")
+        cursor.execute("COMMIT")
+        LOGGER.info("DB_MIGRATION success renamed=%s", renamed)
+    except Exception:
+        cursor.execute("ROLLBACK")
+        LOGGER.error("DB_MIGRATION failed", exc_info=True)
+        raise
+
+
 class FinanceDatabase:
     """Singleton class handling all database interactions."""
 
@@ -103,6 +216,7 @@ class FinanceDatabase:
         DB_PATH.touch(exist_ok=True)
         self.connection = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        migrate_schema(self.connection)
         self.init_db()
         LOGGER.info("Database initialized at %s", DB_PATH)
 
@@ -120,8 +234,8 @@ class FinanceDatabase:
 
         cursor = self.connection.cursor()
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS savings (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.savings}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 category TEXT,
@@ -132,8 +246,8 @@ class FinanceDatabase:
             """
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS wishes (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.wishes}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 name TEXT,
@@ -148,8 +262,8 @@ class FinanceDatabase:
             """
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS purchases (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.purchases}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 wish_name TEXT,
@@ -159,10 +273,12 @@ class FinanceDatabase:
             )
             """
         )
-        self._add_column_if_missing(cursor, "wishes", "deferred_until", "TEXT")
+        self._add_column_if_missing(
+            cursor, TABLES.wishes, "deferred_until", "TEXT"
+        )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS household_payments (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.household_payments}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 month TEXT,
@@ -173,8 +289,8 @@ class FinanceDatabase:
             """
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS household_payment_items (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.household_payment_items}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER,
                 code TEXT,
@@ -190,8 +306,8 @@ class FinanceDatabase:
             """
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ui_pins (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.ui_pins}" (
                 chat_id INTEGER PRIMARY KEY,
                 welcome_message_id INTEGER,
                 updated_at TEXT
@@ -199,14 +315,14 @@ class FinanceDatabase:
             """
         )
         self._add_column_if_missing(
-            cursor, "household_payment_items", "paid_month", "TEXT"
+            cursor, TABLES.household_payment_items, "paid_month", "TEXT"
         )
         self._add_column_if_missing(
-            cursor, "household_payment_items", "is_paid", "INTEGER DEFAULT 0"
+            cursor, TABLES.household_payment_items, "is_paid", "INTEGER DEFAULT 0"
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS income_categories (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.income_categories}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 code TEXT NOT NULL,
@@ -219,8 +335,8 @@ class FinanceDatabase:
             """
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS expense_categories (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.expense_categories}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 code TEXT NOT NULL,
@@ -233,8 +349,8 @@ class FinanceDatabase:
             """
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS wishlist_categories (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.wishlist_categories}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 title TEXT NOT NULL,
@@ -246,8 +362,8 @@ class FinanceDatabase:
             """
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS user_settings (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.user_settings}" (
                 user_id INTEGER PRIMARY KEY,
                 purchased_keep_days INTEGER NOT NULL DEFAULT 30,
                 byt_reminders_enabled INTEGER NOT NULL DEFAULT 1,
@@ -257,8 +373,8 @@ class FinanceDatabase:
             """
         )
         cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS byt_timer_times (
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.byt_timer_times}" (
                 id INTEGER PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 hour INTEGER NOT NULL,
@@ -267,9 +383,13 @@ class FinanceDatabase:
             )
             """
         )
-        self._add_column_if_missing(cursor, "wishes", "purchased_at", "TEXT")
-        self._add_column_if_missing(cursor, "wishlist_categories", "purchased_mode", "TEXT DEFAULT 'days'")
-        self._add_column_if_missing(cursor, "wishlist_categories", "purchased_days", "INTEGER DEFAULT 30")
+        self._add_column_if_missing(cursor, TABLES.wishes, "purchased_at", "TEXT")
+        self._add_column_if_missing(
+            cursor, TABLES.wishlist_categories, "purchased_mode", "TEXT DEFAULT 'days'"
+        )
+        self._add_column_if_missing(
+            cursor, TABLES.wishlist_categories, "purchased_days", "INTEGER DEFAULT 30"
+        )
         self.connection.commit()
         self.sanitize_income_category_titles()
 
@@ -283,9 +403,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT code, text, amount, position
-                FROM household_payment_items
+                FROM {TABLES.household_payment_items}
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY position, id
                 """,
@@ -309,9 +429,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT code, text, amount, position
-                FROM household_payment_items
+                FROM {TABLES.household_payment_items}
                 WHERE user_id = ? AND code = ? AND is_active = 1
                 LIMIT 1
                 """,
@@ -334,7 +454,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT MAX(position) FROM household_payment_items WHERE user_id = ?",
+                f"SELECT MAX(position) FROM {TABLES.household_payment_items} WHERE user_id = ?",
                 (user_id,),
             )
             row = cursor.fetchone()
@@ -354,8 +474,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                INSERT INTO household_payment_items (
+                f"""
+                INSERT INTO {TABLES.household_payment_items} (
                     user_id, code, text, amount, position, is_active, created_at
                 )
                 VALUES (?, ?, ?, ?, ?, 1, ?)
@@ -378,8 +498,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE household_payment_items
+                f"""
+                UPDATE {TABLES.household_payment_items}
                 SET is_active = 0
                 WHERE user_id = ? AND code = ?
                 """,
@@ -401,7 +521,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT 1 FROM income_categories WHERE user_id = ? AND is_active = 1 LIMIT 1",
+                f"SELECT 1 FROM {TABLES.income_categories} WHERE user_id = ? AND is_active = 1 LIMIT 1",
                 (user_id,),
             )
             if cursor.fetchone():
@@ -409,8 +529,8 @@ class FinanceDatabase:
 
             for item in DEFAULT_INCOME_CATEGORIES:
                 cursor.execute(
-                    """
-                    INSERT INTO income_categories (
+                    f"""
+                    INSERT INTO {TABLES.income_categories} (
                         user_id, code, title, percent, position, is_active
                     )
                     VALUES (?, ?, ?, ?, ?, 1)
@@ -433,7 +553,7 @@ class FinanceDatabase:
 
         try:
             cursor = self.connection.cursor()
-            cursor.execute("SELECT id, title FROM income_categories")
+            cursor.execute(f"SELECT id, title FROM {TABLES.income_categories}")
             rows = cursor.fetchall()
             updates = []
             for row in rows:
@@ -443,7 +563,7 @@ class FinanceDatabase:
                     updates.append((sanitized, int(row["id"])))
             if updates:
                 cursor.executemany(
-                    "UPDATE income_categories SET title = ? WHERE id = ?",
+                    f"UPDATE {TABLES.income_categories} SET title = ? WHERE id = ?",
                     updates,
                 )
                 self.connection.commit()
@@ -457,7 +577,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT welcome_message_id FROM ui_pins WHERE chat_id = ?",
+                f"SELECT welcome_message_id FROM {TABLES.ui_pins} WHERE chat_id = ?",
                 (chat_id,),
             )
             row = cursor.fetchone()
@@ -474,8 +594,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                INSERT INTO ui_pins (chat_id, welcome_message_id, updated_at)
+                f"""
+                INSERT INTO {TABLES.ui_pins} (chat_id, welcome_message_id, updated_at)
                 VALUES (?, ?, ?)
                 ON CONFLICT(chat_id) DO UPDATE SET
                     welcome_message_id=excluded.welcome_message_id,
@@ -493,9 +613,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, code, title, percent, position
-                FROM income_categories
+                FROM {TABLES.income_categories}
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY position, id
                 """,
@@ -517,7 +637,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT 1 FROM expense_categories WHERE user_id = ? AND is_active = 1 LIMIT 1",
+                f"SELECT 1 FROM {TABLES.expense_categories} WHERE user_id = ? AND is_active = 1 LIMIT 1",
                 (user_id,),
             )
             if cursor.fetchone():
@@ -525,8 +645,8 @@ class FinanceDatabase:
 
             for item in DEFAULT_EXPENSE_CATEGORIES:
                 cursor.execute(
-                    """
-                    INSERT INTO expense_categories (
+                    f"""
+                    INSERT INTO {TABLES.expense_categories} (
                         user_id, code, title, percent, position, is_active
                     )
                     VALUES (?, ?, ?, ?, ?, 1)
@@ -551,22 +671,22 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             self.ensure_user_settings(user_id)
             cursor.execute(
-                "SELECT 1 FROM wishlist_categories WHERE user_id = ? AND is_active = 1 LIMIT 1",
+                f"SELECT 1 FROM {TABLES.wishlist_categories} WHERE user_id = ? AND is_active = 1 LIMIT 1",
                 (user_id,),
             )
             if cursor.fetchone():
                 cursor.execute(
-                    "SELECT purchased_keep_days FROM user_settings WHERE user_id = ?",
+                    f"SELECT purchased_keep_days FROM {TABLES.user_settings} WHERE user_id = ?",
                     (user_id,),
                 )
                 row = cursor.fetchone()
                 default_days = int(row[0]) if row and row[0] is not None else 30
                 cursor.execute(
-                    "UPDATE wishlist_categories SET purchased_mode = COALESCE(purchased_mode, 'days') WHERE user_id = ?",
+                    f"UPDATE {TABLES.wishlist_categories} SET purchased_mode = COALESCE(purchased_mode, 'days') WHERE user_id = ?",
                     (user_id,),
                 )
                 cursor.execute(
-                    "UPDATE wishlist_categories SET purchased_days = COALESCE(purchased_days, ?) WHERE user_id = ?",
+                    f"UPDATE {TABLES.wishlist_categories} SET purchased_days = COALESCE(purchased_days, ?) WHERE user_id = ?",
                     (default_days, user_id),
                 )
                 self.connection.commit()
@@ -574,15 +694,15 @@ class FinanceDatabase:
 
             self.ensure_user_settings(user_id)
             cursor.execute(
-                "SELECT purchased_keep_days FROM user_settings WHERE user_id = ?",
+                f"SELECT purchased_keep_days FROM {TABLES.user_settings} WHERE user_id = ?",
                 (user_id,),
             )
             row = cursor.fetchone()
             default_days = int(row[0]) if row and row[0] is not None else 30
             for item in DEFAULT_WISHLIST_CATEGORIES:
                 cursor.execute(
-                    """
-                    INSERT INTO wishlist_categories (
+                    f"""
+                    INSERT INTO {TABLES.wishlist_categories} (
                         user_id, title, position, is_active, purchased_mode, purchased_days
                     )
                     VALUES (?, ?, ?, 1, 'days', ?)
@@ -604,13 +724,16 @@ class FinanceDatabase:
 
         try:
             cursor = self.connection.cursor()
-            cursor.execute("SELECT 1 FROM user_settings WHERE user_id = ?", (user_id,))
+            cursor.execute(
+                f"SELECT 1 FROM {TABLES.user_settings} WHERE user_id = ?",
+                (user_id,),
+            )
             if cursor.fetchone():
                 return
 
             cursor.execute(
-                """
-                INSERT OR IGNORE INTO user_settings (
+                f"""
+                INSERT OR IGNORE INTO {TABLES.user_settings} (
                     user_id, purchased_keep_days, byt_reminders_enabled, byt_defer_enabled, byt_defer_max_days
                 )
                 VALUES (?, 30, 1, 1, 365)
@@ -627,7 +750,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT 1 FROM byt_timer_times WHERE user_id = ? AND is_active = 1 LIMIT 1",
+                f"SELECT 1 FROM {TABLES.byt_timer_times} WHERE user_id = ? AND is_active = 1 LIMIT 1",
                 (user_id,),
             )
             if cursor.fetchone():
@@ -635,8 +758,8 @@ class FinanceDatabase:
 
             for hour, minute in [(12, 0), (18, 0)]:
                 cursor.execute(
-                    """
-                    INSERT INTO byt_timer_times (user_id, hour, minute, is_active)
+                    f"""
+                    INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
                     VALUES (?, ?, ?, 1)
                     """,
                     (user_id, hour, minute),
@@ -652,9 +775,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, code, title, percent, position
-                FROM expense_categories
+                FROM {TABLES.expense_categories}
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY position, id
                 """,
@@ -676,9 +799,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, title, position, is_active, purchased_mode, purchased_days
-                FROM wishlist_categories
+                FROM {TABLES.wishlist_categories}
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY position, id
                 """,
@@ -700,14 +823,14 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT COALESCE(MAX(position), 0) FROM income_categories WHERE user_id = ?",
+                f"SELECT COALESCE(MAX(position), 0) FROM {TABLES.income_categories} WHERE user_id = ?",
                 (user_id,),
             )
             current_position = cursor.fetchone()[0] or 0
             code = f"custom_{time.time_ns()}"
             cursor.execute(
-                """
-                INSERT INTO income_categories (user_id, code, title, percent, position)
+                f"""
+                INSERT INTO {TABLES.income_categories} (user_id, code, title, percent, position)
                 VALUES (?, ?, ?, 0, ?)
                 """,
                 (user_id, code, title, current_position + 1),
@@ -724,14 +847,14 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT COALESCE(MAX(position), 0) FROM expense_categories WHERE user_id = ?",
+                f"SELECT COALESCE(MAX(position), 0) FROM {TABLES.expense_categories} WHERE user_id = ?",
                 (user_id,),
             )
             current_position = cursor.fetchone()[0] or 0
             code = f"custom_{time.time_ns()}"
             cursor.execute(
-                """
-                INSERT INTO expense_categories (user_id, code, title, percent, position)
+                f"""
+                INSERT INTO {TABLES.expense_categories} (user_id, code, title, percent, position)
                 VALUES (?, ?, ?, 0, ?)
                 """,
                 (user_id, code, title, current_position + 1),
@@ -748,19 +871,20 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT COALESCE(MAX(position), 0) FROM wishlist_categories WHERE user_id = ?",
+                f"SELECT COALESCE(MAX(position), 0) FROM {TABLES.wishlist_categories} WHERE user_id = ?",
                 (user_id,),
             )
             current_position = cursor.fetchone()[0] or 0
             self.ensure_user_settings(user_id)
             cursor.execute(
-                "SELECT purchased_keep_days FROM user_settings WHERE user_id = ?", (user_id,)
+                f"SELECT purchased_keep_days FROM {TABLES.user_settings} WHERE user_id = ?",
+                (user_id,),
             )
             row = cursor.fetchone()
             default_days = int(row[0]) if row and row[0] is not None else 30
             cursor.execute(
-                """
-                INSERT INTO wishlist_categories (user_id, title, position, purchased_mode, purchased_days)
+                f"""
+                INSERT INTO {TABLES.wishlist_categories} (user_id, title, position, purchased_mode, purchased_days)
                 VALUES (?, ?, ?, 'days', ?)
                 """,
                 (user_id, title, current_position + 1, default_days),
@@ -777,8 +901,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE income_categories
+                f"""
+                UPDATE {TABLES.income_categories}
                 SET is_active = 0
                 WHERE user_id = ? AND id = ?
                 """,
@@ -799,8 +923,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE expense_categories
+                f"""
+                UPDATE {TABLES.expense_categories}
                 SET is_active = 0
                 WHERE user_id = ? AND id = ?
                 """,
@@ -821,8 +945,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE income_categories
+                f"""
+                UPDATE {TABLES.income_categories}
                 SET percent = ?
                 WHERE user_id = ? AND id = ?
                 """,
@@ -845,8 +969,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE expense_categories
+                f"""
+                UPDATE {TABLES.expense_categories}
                 SET percent = ?
                 WHERE user_id = ? AND id = ?
                 """,
@@ -867,7 +991,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT COALESCE(SUM(percent), 0) FROM income_categories WHERE user_id = ? AND is_active = 1",
+                f"SELECT COALESCE(SUM(percent), 0) FROM {TABLES.income_categories} WHERE user_id = ? AND is_active = 1",
                 (user_id,),
             )
             result = cursor.fetchone()
@@ -886,7 +1010,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT COALESCE(SUM(percent), 0) FROM expense_categories WHERE user_id = ? AND is_active = 1",
+                f"SELECT COALESCE(SUM(percent), 0) FROM {TABLES.expense_categories} WHERE user_id = ? AND is_active = 1",
                 (user_id,),
             )
             result = cursor.fetchone()
@@ -905,9 +1029,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, code, title, percent, position
-                FROM income_categories
+                FROM {TABLES.income_categories}
                 WHERE user_id = ? AND id = ? AND is_active = 1
                 LIMIT 1
                 """,
@@ -932,9 +1056,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, code, title, percent, position
-                FROM expense_categories
+                FROM {TABLES.expense_categories}
                 WHERE user_id = ? AND id = ? AND is_active = 1
                 LIMIT 1
                 """,
@@ -958,9 +1082,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT user_id, purchased_keep_days, byt_reminders_enabled, byt_defer_enabled, byt_defer_max_days
-                FROM user_settings
+                FROM {TABLES.user_settings}
                 WHERE user_id = ?
                 LIMIT 1
                 """,
@@ -979,7 +1103,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "UPDATE user_settings SET purchased_keep_days = ? WHERE user_id = ?",
+                f"UPDATE {TABLES.user_settings} SET purchased_keep_days = ? WHERE user_id = ?",
                 (days, user_id),
             )
             self.connection.commit()
@@ -996,7 +1120,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "UPDATE wishlist_categories SET purchased_mode = ? WHERE user_id = ? AND id = ?",
+                f"UPDATE {TABLES.wishlist_categories} SET purchased_mode = ? WHERE user_id = ? AND id = ?",
                 (mode, user_id, category_id),
             )
             self.connection.commit()
@@ -1016,7 +1140,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "UPDATE wishlist_categories SET purchased_days = ? WHERE user_id = ? AND id = ?",
+                f"UPDATE {TABLES.wishlist_categories} SET purchased_days = ? WHERE user_id = ? AND id = ?",
                 (days, user_id, category_id),
             )
             self.connection.commit()
@@ -1035,7 +1159,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "UPDATE user_settings SET byt_reminders_enabled = ? WHERE user_id = ?",
+                f"UPDATE {TABLES.user_settings} SET byt_reminders_enabled = ? WHERE user_id = ?",
                 (1 if enabled else 0, user_id),
             )
             self.connection.commit()
@@ -1051,7 +1175,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "UPDATE user_settings SET byt_defer_enabled = ? WHERE user_id = ?",
+                f"UPDATE {TABLES.user_settings} SET byt_defer_enabled = ? WHERE user_id = ?",
                 (1 if enabled else 0, user_id),
             )
             self.connection.commit()
@@ -1067,7 +1191,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "UPDATE user_settings SET byt_defer_max_days = ? WHERE user_id = ?",
+                f"UPDATE {TABLES.user_settings} SET byt_defer_max_days = ? WHERE user_id = ?",
                 (max_days, user_id),
             )
             self.connection.commit()
@@ -1089,9 +1213,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, title, position, is_active, purchased_mode, purchased_days
-                FROM wishlist_categories
+                FROM {TABLES.wishlist_categories}
                 WHERE user_id = ? AND id = ?
                 LIMIT 1
                 """,
@@ -1114,8 +1238,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE wishlist_categories
+                f"""
+                UPDATE {TABLES.wishlist_categories}
                 SET is_active = 0
                 WHERE user_id = ? AND id = ?
                 """,
@@ -1134,7 +1258,7 @@ class FinanceDatabase:
     def _column_exists(cursor: sqlite3.Cursor, table: str, column: str) -> bool:
         """Return True if column exists in table."""
 
-        cursor.execute(f"PRAGMA table_info({table})")
+        cursor.execute(f'PRAGMA table_info("{table}")')
         return any(row[1] == column for row in cursor.fetchall())
 
     def _add_column_if_missing(
@@ -1143,7 +1267,7 @@ class FinanceDatabase:
         """Add column to table if it does not already exist."""
 
         if not self._column_exists(cursor, table, column):
-            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+            cursor.execute(f'ALTER TABLE "{table}" ADD COLUMN {column} {definition}')
 
     def get_user_savings(self, user_id: int) -> Dict[str, Dict[str, Any]]:
         """Get all savings for a user.
@@ -1158,7 +1282,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT category, current, goal, purpose FROM savings WHERE user_id = ?",
+                f"SELECT category, current, goal, purpose FROM {TABLES.savings} WHERE user_id = ?",
                 (user_id,),
             )
             rows = cursor.fetchall()
@@ -1190,7 +1314,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT category, current FROM savings WHERE user_id = ?",
+                f"SELECT category, current FROM {TABLES.savings} WHERE user_id = ?",
                 (user_id,),
             )
             rows = cursor.fetchall()
@@ -1215,7 +1339,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, current FROM savings WHERE user_id = ? AND category = ?",
+                f"SELECT id, current FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
                 (user_id, category),
             )
             row = cursor.fetchone()
@@ -1224,12 +1348,12 @@ class FinanceDatabase:
                 current = self._to_float(row["current"])
                 new_value = current + delta
                 cursor.execute(
-                    "UPDATE savings SET current = ? WHERE id = ?",
+                    f"UPDATE {TABLES.savings} SET current = ? WHERE id = ?",
                     (new_value, row["id"]),
                 )
             else:
                 cursor.execute(
-                    "INSERT INTO savings (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
+                    f"INSERT INTO {TABLES.savings} (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
                     (user_id, category, delta),
                 )
             self.connection.commit()
@@ -1255,7 +1379,7 @@ class FinanceDatabase:
         amount_delta: float,
     ) -> None:
         cursor.execute(
-            "SELECT id, current FROM savings WHERE user_id = ? AND category = ?",
+            f"SELECT id, current FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
             (user_id, category),
         )
         row = cursor.fetchone()
@@ -1264,12 +1388,12 @@ class FinanceDatabase:
             current = self._to_float(row["current"])
             new_value = current + delta
             cursor.execute(
-                "UPDATE savings SET current = ? WHERE id = ?",
+                f"UPDATE {TABLES.savings} SET current = ? WHERE id = ?",
                 (new_value, row["id"]),
             )
         else:
             cursor.execute(
-                "INSERT INTO savings (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
+                f"INSERT INTO {TABLES.savings} (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
                 (user_id, category, delta),
             )
 
@@ -1284,18 +1408,18 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id FROM savings WHERE user_id = ? AND category = ?",
+                f"SELECT id FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
                 (user_id, category),
             )
             row = cursor.fetchone()
             if row:
                 cursor.execute(
-                    "UPDATE savings SET goal = ?, purpose = ? WHERE id = ?",
+                    f"UPDATE {TABLES.savings} SET goal = ?, purpose = ? WHERE id = ?",
                     (goal, purpose, row["id"]),
                 )
             else:
                 cursor.execute(
-                    "INSERT INTO savings (user_id, category, current, goal, purpose) VALUES (?, ?, 0, ?, ?)",
+                    f"INSERT INTO {TABLES.savings} (user_id, category, current, goal, purpose) VALUES (?, ?, 0, ?, ?)",
                     (user_id, category, goal, goal, purpose),
                 )
             self.connection.commit()
@@ -1308,7 +1432,10 @@ class FinanceDatabase:
 
         try:
             cursor = self.connection.cursor()
-            cursor.execute("UPDATE savings SET goal = 0, purpose = '' WHERE user_id = ?", (user_id,))
+            cursor.execute(
+                f"UPDATE {TABLES.savings} SET goal = 0, purpose = '' WHERE user_id = ?",
+                (user_id,),
+            )
             self.connection.commit()
             LOGGER.info("Reset goals for user %s", user_id)
         except sqlite3.Error as error:
@@ -1320,7 +1447,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "INSERT INTO wishes (user_id, name, price, url, category, is_purchased, saved_amount, purchased_at) VALUES (?, ?, ?, ?, ?, 0, 0, NULL)",
+                f"INSERT INTO {TABLES.wishes} (user_id, name, price, url, category, is_purchased, saved_amount, purchased_at) VALUES (?, ?, ?, ?, ?, 0, 0, NULL)",
                 (user_id, name, price, url, category),
             )
             self.connection.commit()
@@ -1337,9 +1464,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
-                FROM wishes
+                FROM {TABLES.wishes}
                 WHERE user_id = ?
                 """,
                 (user_id,),
@@ -1357,9 +1484,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
-                FROM wishes
+                FROM {TABLES.wishes}
                 WHERE id = ?
                 """,
                 (wish_id,),
@@ -1377,9 +1504,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
-                FROM wishes
+                FROM {TABLES.wishes}
                 WHERE user_id = ? AND category IN ('byt', 'БЫТ') AND (is_purchased = 0 OR is_purchased IS NULL)
                 ORDER BY id
                 """,
@@ -1400,9 +1527,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
-                FROM wishes
+                FROM {TABLES.wishes}
                 WHERE user_id = ?
                   AND category IN ('byt', 'БЫТ')
                   AND (is_purchased = 0 OR is_purchased IS NULL)
@@ -1427,8 +1554,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE wishes
+                f"""
+                UPDATE {TABLES.wishes}
                 SET deferred_until = ?
                 WHERE id = ? AND user_id = ?
                 """,
@@ -1456,8 +1583,8 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             purchased_value = (purchased_at or now_tz()).isoformat()
             cursor.execute(
-                """
-                UPDATE wishes
+                f"""
+                UPDATE {TABLES.wishes}
                 SET is_purchased = 1, purchased_at = ?, deferred_until = NULL
                 WHERE id = ?
                 """,
@@ -1482,7 +1609,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             purchased_value = (purchased_at or now_tz()).isoformat()
             cursor.execute(
-                "INSERT INTO purchases (user_id, wish_name, price, category, purchased_at) VALUES (?, ?, ?, ?, ?)",
+                f"INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at) VALUES (?, ?, ?, ?, ?)",
                 (user_id, wish_name, price, category, purchased_value),
             )
             self.connection.commit()
@@ -1496,7 +1623,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT 1 FROM household_payments WHERE user_id = ? AND month = ? LIMIT 1",
+                f"SELECT 1 FROM {TABLES.household_payments} WHERE user_id = ? AND month = ? LIMIT 1",
                 (user_id, month),
             )
             return cursor.fetchone() is not None
@@ -1520,10 +1647,10 @@ class FinanceDatabase:
                 return
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                INSERT OR IGNORE INTO household_payments (user_id, month, question_code, is_paid)
+                f"""
+                INSERT OR IGNORE INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
                 SELECT ?, ?, code, 0
-                FROM household_payment_items
+                FROM {TABLES.household_payment_items}
                 WHERE user_id = ? AND is_active = 1
                 """,
                 (user_id, month, user_id),
@@ -1548,8 +1675,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                INSERT INTO household_payments (user_id, month, question_code, is_paid)
+                f"""
+                INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
                 VALUES (?, ?, ?, 1)
                 ON CONFLICT(user_id, month, question_code)
                 DO UPDATE SET is_paid = excluded.is_paid
@@ -1580,8 +1707,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                INSERT INTO household_payments (user_id, month, question_code, is_paid)
+                f"""
+                INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
                 VALUES (?, ?, ?, 0)
                 ON CONFLICT(user_id, month, question_code)
                 DO UPDATE SET is_paid = excluded.is_paid
@@ -1621,9 +1748,9 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             self.connection.execute("BEGIN")
             cursor.execute(
-                """
+                f"""
                 SELECT is_paid
-                FROM household_payments
+                FROM {TABLES.household_payments}
                 WHERE user_id = ? AND month = ? AND question_code = ?
                 """,
                 (user_id, month, question_code),
@@ -1631,8 +1758,8 @@ class FinanceDatabase:
             row = cursor.fetchone()
             if row is None:
                 cursor.execute(
-                    """
-                    INSERT INTO household_payments (user_id, month, question_code, is_paid)
+                    f"""
+                    INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
                     VALUES (?, ?, ?, 0)
                     """,
                     (user_id, month, question_code),
@@ -1647,8 +1774,8 @@ class FinanceDatabase:
                 return False
 
             cursor.execute(
-                """
-                UPDATE household_payments
+                f"""
+                UPDATE {TABLES.household_payments}
                 SET is_paid = ?
                 WHERE user_id = ? AND month = ? AND question_code = ?
                 """,
@@ -1676,10 +1803,10 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT items.code
-                FROM household_payment_items AS items
-                LEFT JOIN household_payments AS payments
+                FROM {TABLES.household_payment_items} AS items
+                LEFT JOIN {TABLES.household_payments} AS payments
                   ON payments.user_id = items.user_id
                  AND payments.month = ?
                  AND payments.question_code = items.code
@@ -1709,10 +1836,10 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT items.code, COALESCE(payments.is_paid, 0) AS is_paid
-                FROM household_payment_items AS items
-                LEFT JOIN household_payments AS payments
+                FROM {TABLES.household_payment_items} AS items
+                LEFT JOIN {TABLES.household_payments} AS payments
                   ON payments.user_id = items.user_id
                  AND payments.month = ?
                  AND payments.question_code = items.code
@@ -1737,10 +1864,10 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT 1
-                FROM household_payment_items AS items
-                LEFT JOIN household_payments AS payments
+                FROM {TABLES.household_payment_items} AS items
+                LEFT JOIN {TABLES.household_payments} AS payments
                   ON payments.user_id = items.user_id
                  AND payments.month = ?
                  AND payments.question_code = items.code
@@ -1769,10 +1896,10 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT 1
-                FROM household_payment_items AS items
-                LEFT JOIN household_payments AS payments
+                FROM {TABLES.household_payment_items} AS items
+                LEFT JOIN {TABLES.household_payments} AS payments
                   ON payments.user_id = items.user_id
                  AND payments.month = ?
                  AND payments.question_code = items.code
@@ -1799,18 +1926,18 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE household_payments
+                f"""
+                UPDATE {TABLES.household_payments}
                 SET is_paid = 0
                 WHERE user_id = ? AND month = ?
                 """,
                 (user_id, month),
             )
             cursor.execute(
-                """
-                INSERT OR IGNORE INTO household_payments (user_id, month, question_code, is_paid)
+                f"""
+                INSERT OR IGNORE INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
                 SELECT ?, ?, code, 0
-                FROM household_payment_items
+                FROM {TABLES.household_payment_items}
                 WHERE user_id = ? AND is_active = 1
                 """,
                 (user_id, month, user_id),
@@ -1835,7 +1962,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, wish_name, price, category, purchased_at FROM purchases WHERE user_id = ? ORDER BY purchased_at DESC",
+                f"SELECT id, wish_name, price, category, purchased_at FROM {TABLES.purchases} WHERE user_id = ? ORDER BY purchased_at DESC",
                 (user_id,),
             )
             rows = cursor.fetchall()
@@ -1885,9 +2012,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT id, hour, minute
-                FROM byt_timer_times
+                FROM {TABLES.byt_timer_times}
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY hour, minute, id
                 """,
@@ -1908,8 +2035,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                SELECT id FROM byt_timer_times
+                f"""
+                SELECT id FROM {TABLES.byt_timer_times}
                 WHERE user_id = ? AND hour = ? AND minute = ? AND is_active = 1
                 LIMIT 1
                 """,
@@ -1920,8 +2047,8 @@ class FinanceDatabase:
                 return int(existing["id"])
 
             cursor.execute(
-                """
-                INSERT INTO byt_timer_times (user_id, hour, minute, is_active)
+                f"""
+                INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
                 VALUES (?, ?, ?, 1)
                 """,
                 (user_id, hour, minute),
@@ -1938,8 +2065,8 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
-                UPDATE byt_timer_times
+                f"""
+                UPDATE {TABLES.byt_timer_times}
                 SET is_active = 0
                 WHERE user_id = ? AND id = ?
                 """,
@@ -1960,13 +2087,13 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "UPDATE byt_timer_times SET is_active = 0 WHERE user_id = ?",
+                f"UPDATE {TABLES.byt_timer_times} SET is_active = 0 WHERE user_id = ?",
                 (user_id,),
             )
             for hour, minute in [(12, 0), (18, 0)]:
                 cursor.execute(
-                    """
-                    INSERT INTO byt_timer_times (user_id, hour, minute, is_active)
+                    f"""
+                    INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
                     VALUES (?, ?, ?, 1)
                     """,
                     (user_id, hour, minute),
@@ -1981,9 +2108,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT DISTINCT user_id
-                FROM byt_timer_times
+                FROM {TABLES.byt_timer_times}
                 WHERE is_active = 1
                 """
             )
@@ -1999,9 +2126,9 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                """
+                f"""
                 SELECT DISTINCT user_id
-                FROM wishes
+                FROM {TABLES.wishes}
                 WHERE category IN ('byt', 'БЫТ') AND (is_purchased = 0 OR is_purchased IS NULL)
                 """
             )
@@ -2018,7 +2145,7 @@ class FinanceDatabase:
         try:
             cursor = self.connection.cursor()
             cursor.execute(
-                "SELECT id, purchased_at FROM purchases WHERE category IN ('byt', 'БЫТ')"
+                f"SELECT id, purchased_at FROM {TABLES.purchases} WHERE category IN ('byt', 'БЫТ')"
             )
             purchases = cursor.fetchall()
             ids_to_delete: list[int] = []
@@ -2037,14 +2164,14 @@ class FinanceDatabase:
 
             if ids_to_delete:
                 cursor.execute(
-                    "DELETE FROM purchases WHERE id IN ({})".format(
+                    f"DELETE FROM {TABLES.purchases} WHERE id IN ({})".format(
                         ",".join("?" * len(ids_to_delete))
                     ),
                     ids_to_delete,
                 )
 
             cursor.execute(
-                "SELECT id, purchased_at FROM wishes WHERE category IN ('byt', 'БЫТ') AND is_purchased = 1"
+                f"SELECT id, purchased_at FROM {TABLES.wishes} WHERE category IN ('byt', 'БЫТ') AND is_purchased = 1"
             )
             wish_rows = cursor.fetchall()
             wish_ids: list[int] = []
@@ -2063,7 +2190,9 @@ class FinanceDatabase:
 
             if wish_ids:
                 cursor.execute(
-                    "DELETE FROM wishes WHERE id IN ({})".format(",".join("?" * len(wish_ids))),
+                    f"DELETE FROM {TABLES.wishes} WHERE id IN ({})".format(
+                        ",".join("?" * len(wish_ids))
+                    ),
                     wish_ids,
                 )
             if ids_to_delete or wish_ids:

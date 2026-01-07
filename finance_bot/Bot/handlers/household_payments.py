@@ -798,7 +798,7 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         amount=amount_value if amount is not None else None,
         answer=action,
     )
-    if not changed:
+    if not changed and action == "yes":
         await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
         return
     answers[code] = "yes" if action == "yes" else "no"

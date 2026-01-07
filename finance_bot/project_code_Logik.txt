@@ -20,3 +20,4 @@
 Обновление (2025-02-12): исправлены отступы в обработчике ввода минут таймера и обновлены project_code_4.txt.
 
 Обновление (2026-01-07): стабилизированы UI-cleanup/protected, safe edit retry для household, safe delete в settings/ui_flow, расширены тесты, обновлены project_code*.txt.
+Обновление (2026-01-07): исправлен household 'no' UI flow и тесты идемпотентности, обновлены project_code_*.txt.

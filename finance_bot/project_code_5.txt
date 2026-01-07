@@ -1,3 +1,73 @@
+        return
+
+    try:
+        item_id = int(data[1])
+    except ValueError:
+        await safe_callback_answer(callback, "Некорректный элемент.", show_alert=True, logger=LOGGER)
+        return
+
+    db = get_db()
+    wish = db.get_wish(item_id)
+    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+        await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
+        return
+
+    price = float(wish.get("price", 0) or 0)
+    purchase_time = now_tz()
+    db.decrease_savings(callback.from_user.id, "быт", price)
+    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
+    db.add_purchase(
+        callback.from_user.id,
+        wish.get("name", ""),
+        price,
+        humanize_wishlist_category(wish.get("category", "")),
+        purchased_at=purchase_time,
+    )
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    if callback.message:
+        await _refresh_byt_reminder_message(
+            callback.bot,
+            callback.message.chat.id,
+            callback.message.message_id,
+            callback.from_user.id,
+        )
+
+
+@router.callback_query(F.data.startswith("byt_defer_menu"))
+async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show BYT items to choose which to defer."""
+
+    wish_id: int | None = None
+    if callback.data and ":" in callback.data:
+        parts = callback.data.split(":", maxsplit=1)
+        if len(parts) == 2:
+            try:
+                wish_id = int(parts[1])
+            except ValueError:
+                wish_id = None
+    if wish_id is None:
+        data = await state.get_data()
+        stored_id = data.get("current_byt_item_id")
+        try:
+            wish_id = int(stored_id) if stored_id is not None else None
+        except (TypeError, ValueError):
+            wish_id = None
+
+    db = get_db()
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
+        return
+    now_dt = now_tz()
+    items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
+    if wish_id is not None:
+        await state.update_data(current_byt_item_id=wish_id)
+        started = await _start_byt_defer_flow(callback, state, wish_id)
+        if not started:
+            await state.clear()
+        return
+    if not items:
         await state.clear()
         if callback.message:
             await safe_answer(callback.message, "Нет бытовых покупок для отложки.", logger=LOGGER)
@@ -1587,6 +1657,77 @@ async def safe_edit_message_text(
     return False
 
 
+async def safe_edit_message_text_with_status(
+    bot,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+) -> tuple[bool, bool]:
+    """Safely edit a message text, reporting network failures."""
+
+    log = _get_logger(logger)
+    if isinstance(reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)):
+        log.warning("Safe edit skipped due to reply keyboard markup")
+        return False, False
+
+    for attempt in range(retries + 1):
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+            return True, False
+        except TelegramBadRequest as exc:
+            lowered = str(exc).lower()
+            if "message is not modified" in lowered:
+                return True, False
+            if "message to edit not found" in lowered:
+                log.debug(
+                    "Safe edit skipped (chat_id=%s, message_id=%s): %s",
+                    chat_id,
+                    message_id,
+                    exc,
+                )
+                return False, False
+            log.warning(
+                "Safe edit failed (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit failure details", exc_info=True)
+            return False, False
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "edit_message_text", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return False, True
+            log.warning(
+                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit unexpected error details", exc_info=True)
+            return False, False
+    return False, False
+
+
 async def safe_send_message(
     bot,
     chat_id: int,
@@ -1761,7 +1902,17 @@ async def ui_register_protected_message(
 ) -> None:
     """Track a UI message id that should never be deleted."""
 
-    await ui_register_message(state, chat_id, message_id)
+    data = await state.get_data()
+    ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    if message_id not in ids:
+        ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
+    current_chat_id = data.get("ui_chat_id")
+    await state.update_data(
+        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
+        ui_protected_message_ids=ids,
+    )
 
 
 async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
@@ -1847,155 +1998,3 @@ async def ui_cleanup_to_context(
     chat_id: int,
     context_name: str,
     keep_ids: List[int] | None = None,
-) -> None:
-    data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
-    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
-    delete_ids = [
-        int(mid)
-        for mid in tracked_ids
-        if int(mid) not in keep_id_set and int(mid) != int(welcome_id or 0)
-    ]
-    deleted_count = 0
-    for message_id in delete_ids:
-        deleted = await ui_safe_delete_message(
-            bot,
-            chat_id=chat_id,
-            message_id=message_id,
-            log_context=f"context={context_name}",
-        )
-        if deleted:
-            deleted_count += 1
-
-    LOGGER.info(
-        "UI_CLEANUP context=%s deleted=%s kept=%s",
-        context_name,
-        deleted_count,
-        len(keep_id_set),
-    )
-    await state.update_data(
-        ui_tracked_message_ids=list(keep_id_set),
-    )
-
-
-async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
-    data = await state.get_data()
-    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
-    if chat_id is None:
-        return
-    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
-
-
-async def ui_render_screen(
-    bot: Bot,
-    state: FSMContext,
-    chat_id: int,
-    text: str,
-    reply_markup=None,
-    parse_mode: str | None = None,
-) -> int:
-    data = await state.get_data()
-    screen_id = data.get("ui_screen_message_id")
-    if screen_id is not None and not isinstance(
-        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
-    ):
-        edited = await safe_edit_message_text(
-            bot,
-            chat_id=chat_id,
-            message_id=int(screen_id),
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            logger=LOGGER,
-        )
-        if edited:
-            await ui_set_screen_message(state, chat_id, int(screen_id))
-            return int(screen_id)
-    sent = await safe_send_message(
-        bot,
-        chat_id=chat_id,
-        text=text,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode,
-        logger=LOGGER,
-    )
-    if sent:
-        await ui_set_screen_message(state, chat_id, sent.message_id)
-        return int(sent.message_id)
-    return int(screen_id or 0)
-
-
-
-===== Bot/utils/ui_flow.py =====
-
-import logging
-from collections.abc import Awaitable, Callable
-from typing import Any
-
-from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
-
-LOGGER = logging.getLogger(__name__)
-
-
-async def ui_get(state: FSMContext) -> dict[str, Any]:
-    data = await state.get_data()
-    return {
-        "greeting_id": data.get("ui_welcome_message_id"),
-        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
-    }
-
-
-async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
-    ui = await ui_get(state)
-    if ui.get("greeting_id") is not None:
-        return
-    # greeting_id не удаляем никогда
-    await state.update_data(ui_welcome_message_id=int(message_id))
-
-
-async def ui_track(
-    state: FSMContext, message_id: int, kind: str, screen: str | None
-) -> None:
-    ui = await ui_get(state)
-    tracked: list[int] = list(ui.get("tracked_ids") or [])
-    tracked.append(int(message_id))
-    if len(tracked) > 300:
-        tracked = tracked[-300:]
-    await state.update_data(ui_tracked_message_ids=tracked)
-
-
-async def ui_set_screen_message(
-    state: FSMContext, screen: str, message_id: int
-) -> None:
-    await ui_track(state, message_id, kind="ui", screen=screen)
-
-
-async def ui_cleanup_for_transition(
-    bot: Bot, state: FSMContext, chat_id: int, keep_greeting: bool = True
-) -> None:
-    ui = await ui_get(state)
-    greeting_id = ui.get("greeting_id") if keep_greeting else None
-    tracked: list[int] = list(ui.get("tracked_ids") or [])
-    ids = [int(item) for item in tracked]
-    for message_id in ids:
-        if greeting_id and message_id == greeting_id:
-            continue
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except TelegramBadRequest as exc:
-            LOGGER.warning(
-                "Failed to delete message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-                exc_info=True,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error deleting message (chat_id=%s, message_id=%s)",
-                chat_id,
-                message_id,

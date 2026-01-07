@@ -3,10 +3,10 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from aiogram import Bot
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from Bot.utils.telegram_safe import safe_delete_message
 LOGGER = logging.getLogger(__name__)
 
 
@@ -53,23 +53,12 @@ async def ui_cleanup_for_transition(
     for message_id in ids:
         if greeting_id and message_id == greeting_id:
             continue
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=message_id)
-        except TelegramBadRequest as exc:
-            LOGGER.warning(
-                "Failed to delete message (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-                exc_info=True,
-            )
-        except Exception:
-            LOGGER.warning(
-                "Unexpected error deleting message (chat_id=%s, message_id=%s)",
-                chat_id,
-                message_id,
-                exc_info=True,
-            )
+        await safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            logger=LOGGER,
+        )
     await state.update_data(ui_tracked_message_ids=[])
 
 

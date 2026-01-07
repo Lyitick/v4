@@ -9,7 +9,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
 from Bot.config import settings
-from Bot.database.crud import FinanceDatabase
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.handlers.wishlist import run_byt_timer_check
@@ -43,6 +42,7 @@ from Bot.utils.telegram_safe import (
     safe_callback_answer,
     safe_delete_message,
     safe_edit_message_text,
+    safe_edit_message_text_with_status,
 )
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
@@ -110,22 +110,26 @@ async def _update_household_question_message(
     reply_markup=None,
     *,
     parse_mode: str | None = None,
-) -> int | None:
+) -> tuple[int | None, bool]:
     if ui_message_id:
-        edited = await safe_edit_message_text(
+        edited, network_failed = await safe_edit_message_text_with_status(
             bot,
             chat_id=chat_id,
             message_id=int(ui_message_id),
             text=text,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
+            retries=2,
+            base_delay=0.4,
             logger=LOGGER,
         )
         if edited:
-            return int(ui_message_id)
+            return int(ui_message_id), False
+        if network_failed:
+            return None, True
 
     if message_context is None:
-        return None
+        return None, False
 
     sent_id = await safe_answer(
         message_context,
@@ -137,11 +141,44 @@ async def _update_household_question_message(
     if sent_id:
         await ui_register_message(state, chat_id, sent_id)
         await state.update_data(hh_ui_message_id=sent_id)
-    return sent_id
+    return sent_id, False
+
+
+async def _update_household_question_message_for_callback(
+    *,
+    callback: CallbackQuery,
+    state: FSMContext,
+    ui_message_id: int | None,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> bool:
+    message_context = callback.message
+    if message_context is None:
+        return False
+    _, network_failed = await _update_household_question_message(
+        callback.bot,
+        state,
+        chat_id=message_context.chat.id,
+        ui_message_id=ui_message_id,
+        message_context=message_context,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
+    if network_failed:
+        await safe_callback_answer(
+            callback,
+            "Проблема с сетью, попробуй ещё раз",
+            show_alert=False,
+            logger=LOGGER,
+        )
+        return False
+    return True
 
 
 async def reset_household_cycle_if_needed(
-    user_id: int, db: FinanceDatabase, now: datetime | None = None
+    user_id: int, db, now: datetime | None = None
 ) -> None:
     """Lazily reset household payments cycle after 6th of month at noon."""
 
@@ -161,7 +198,7 @@ def _format_household_items(
 
 
 async def _send_household_settings_overview(
-    message: Message, db: FinanceDatabase, user_id: int
+    message: Message, db, user_id: int
 ) -> None:
     items = db.list_active_household_items(user_id)
     month = current_month_str()
@@ -528,8 +565,7 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
 
     user_id = message.from_user.id
     db = get_db()
-    _log_event(user_id, "BYT_MANUAL_CHECK", None)
-    LOGGER.info("BYT manual check pressed user_id=%s", user_id)
+    _log_event(user_id, "BYT_MANUAL_CHECK", await state.get_state())
 
     db.ensure_byt_timer_defaults(user_id)
     data = await state.get_data()
@@ -682,18 +718,18 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         text = render_household_questions_text(
             month, questions, answers, current_index=index
         )
-        await _update_household_question_message(
-            callback.bot,
-            state,
-            chat_id=callback.message.chat.id,
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
             ui_message_id=ui_message_id,
-            message_context=callback.message,
             text=text,
             reply_markup=build_household_question_keyboard(
                 current_code, show_back=index > 0
             ),
             parse_mode="HTML",
         )
+        if not updated:
+            return
         _log_event(
             user_id,
             "HOUSEHOLD_BACK",
@@ -708,16 +744,16 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         final_text = render_household_questions_text(
             month, questions, answers, current_index=None
         )
-        await _update_household_question_message(
-            callback.bot,
-            state,
-            chat_id=callback.message.chat.id,
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
             ui_message_id=ui_message_id,
-            message_context=callback.message,
             text=final_text,
             reply_markup=None,
             parse_mode="HTML",
         )
+        if not updated:
+            return
         await ui_cleanup_messages(callback.bot, state)
         await _log_state_transition(state, user_id, None)
         await state.clear()
@@ -791,33 +827,33 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         text = render_household_questions_text(
             month, questions, answers, current_index=index
         )
-        await _update_household_question_message(
-            callback.bot,
-            state,
-            chat_id=callback.message.chat.id,
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
             ui_message_id=ui_message_id,
-            message_context=callback.message,
             text=text,
             reply_markup=build_household_question_keyboard(
                 next_code, show_back=index > 0
             ),
             parse_mode="HTML",
         )
+        if not updated:
+            return
         return
 
     final_text = render_household_questions_text(
         month, questions, answers, current_index=None
     )
-    await _update_household_question_message(
-        callback.bot,
-        state,
-        chat_id=callback.message.chat.id,
+    updated = await _update_household_question_message_for_callback(
+        callback=callback,
+        state=state,
         ui_message_id=ui_message_id,
-        message_context=callback.message,
         text=final_text,
         reply_markup=None,
         parse_mode="HTML",
     )
+    if not updated:
+        return
     await ui_cleanup_messages(callback.bot, state)
     await _log_state_transition(state, user_id, None)
     await state.clear()

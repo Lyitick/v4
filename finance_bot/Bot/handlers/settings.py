@@ -8,7 +8,6 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
-from Bot.database.crud import FinanceDatabase
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import back_only_keyboard
@@ -35,7 +34,11 @@ from Bot.states.wishlist_states import (
 )
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
-from Bot.utils.telegram_safe import safe_edit_message_text, safe_send_message
+from Bot.utils.telegram_safe import (
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
     ui_cleanup_to_context,
@@ -70,39 +73,55 @@ async def _safe_edit(bot, **kwargs) -> None:
 async def _delete_message_safely(bot, chat_id: int | None, message_id: int | None) -> None:
     if chat_id is None or message_id is None:
         return
-    try:
-        await bot.delete_message(chat_id=chat_id, message_id=int(message_id))
-    except Exception:
-        pass
+    await safe_delete_message(
+        bot,
+        chat_id=chat_id,
+        message_id=int(message_id),
+        logger=LOGGER,
+    )
 
 
 async def _delete_user_message(message: Message) -> None:
-    try:
-        await message.delete()
-    except Exception:
-        pass
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
 
 
 async def _remove_calculator_keyboard(message: Message) -> None:
-    try:
-        temp = await message.answer(" ", reply_markup=ReplyKeyboardRemove())
-        try:
-            await temp.delete()
-        except Exception:
-            pass
-    except Exception:
-        pass
+    temp = await safe_send_message(
+        message.bot,
+        chat_id=message.chat.id,
+        text=" ",
+        reply_markup=ReplyKeyboardRemove(),
+        logger=LOGGER,
+    )
+    if temp:
+        await safe_delete_message(
+            message.bot,
+            chat_id=temp.chat.id,
+            message_id=temp.message_id,
+            logger=LOGGER,
+        )
 
 
 async def _apply_reply_keyboard(message: Message, reply_markup: ReplyKeyboardMarkup) -> None:
-    try:
-        temp = await message.answer(" ", reply_markup=reply_markup)
-        try:
-            await temp.delete()
-        except Exception:
-            pass
-    except Exception:
-        pass
+    temp = await safe_send_message(
+        message.bot,
+        chat_id=message.chat.id,
+        text=" ",
+        reply_markup=reply_markup,
+        logger=LOGGER,
+    )
+    if temp:
+        await safe_delete_message(
+            message.bot,
+            chat_id=temp.chat.id,
+            message_id=temp.message_id,
+            logger=LOGGER,
+        )
 
 
 def _parse_time_text(raw: str) -> tuple[int, int] | None:
@@ -329,7 +348,7 @@ async def _render_household_payments_settings(
     *,
     state: FSMContext,
     message: Message,
-    db: FinanceDatabase,
+    db,
     user_id: int,
     error_message: str | None = None,
     force_new_keyboard: bool = False,
@@ -359,7 +378,7 @@ async def _render_household_payments_settings(
 
 
 async def _render_household_delete_menu(
-    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+    *, state: FSMContext, message: Message, db, user_id: int
 ) -> None:
     items = db.list_active_household_items(user_id)
     await _render_reply_settings_page(
@@ -464,7 +483,7 @@ async def _render_income_settings(
     *,
     state: FSMContext,
     message: Message,
-    db: FinanceDatabase,
+    db,
     user_id: int,
     error_message: str | None = None,
 ) -> list[dict]:
@@ -487,7 +506,7 @@ async def _render_wishlist_settings(
     *,
     state: FSMContext,
     message: Message,
-    db: FinanceDatabase,
+    db,
     user_id: int,
     error_message: str | None = None,
 ) -> list[dict]:
@@ -508,7 +527,7 @@ async def _render_byt_rules_settings(
     *,
     state: FSMContext,
     message: Message,
-    db: FinanceDatabase,
+    db,
     user_id: int,
     error_message: str | None = None,
 ) -> dict:
@@ -531,7 +550,7 @@ async def _render_byt_timer_settings(
     *,
     state: FSMContext,
     message: Message,
-    db: FinanceDatabase,
+    db,
     user_id: int,
     error_message: str | None = None,
 ) -> list[dict]:
@@ -548,7 +567,7 @@ async def _render_byt_timer_settings(
 
 
 async def _render_income_delete_menu(
-    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+    *, state: FSMContext, message: Message, db, user_id: int
 ) -> None:
     categories = db.list_active_income_categories(user_id)
     await _render_reply_settings_page(
@@ -577,7 +596,7 @@ async def _render_income_percent_menu(
     *,
     state: FSMContext,
     message: Message,
-    db: FinanceDatabase,
+    db,
     user_id: int,
     error_message: str | None = None,
 ) -> None:
@@ -611,7 +630,7 @@ async def _render_income_percent_menu(
 
 
 async def _render_wishlist_delete_menu(
-    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+    *, state: FSMContext, message: Message, db, user_id: int
 ) -> None:
     categories = db.list_active_wishlist_categories(user_id)
     await _render_reply_settings_page(
@@ -632,7 +651,7 @@ async def _render_wishlist_delete_menu(
 
 
 async def _render_wishlist_purchased_select_menu(
-    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+    *, state: FSMContext, message: Message, db, user_id: int
 ) -> None:
     categories = db.list_active_wishlist_categories(user_id)
     await _render_reply_settings_page(
@@ -660,7 +679,7 @@ async def _render_wishlist_purchased_mode(
     *,
     state: FSMContext,
     message: Message,
-    db: FinanceDatabase,
+    db,
     user_id: int,
     category_id: int,
 ) -> None:
@@ -679,7 +698,7 @@ async def _render_wishlist_purchased_mode(
 
 
 async def _render_byt_timer_delete_menu(
-    *, state: FSMContext, message: Message, db: FinanceDatabase, user_id: int
+    *, state: FSMContext, message: Message, db, user_id: int
 ) -> None:
     times = db.list_active_byt_timer_times(user_id)
     await _render_reply_settings_page(

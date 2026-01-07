@@ -4,7 +4,7 @@ from datetime import datetime
 import pytest
 
 from Bot.config import settings
-from Bot.database.crud import FinanceDatabase
+from Bot.database.crud import FinanceDatabase, TABLES
 from Bot.handlers.household_payments import reset_household_cycle_if_needed
 from Bot.utils.datetime_utils import current_month_str
 
@@ -16,9 +16,13 @@ async def test_reset_cycle_creates_statuses_after_threshold() -> None:
     db = FinanceDatabase()
     user_id = 99991
     month = "2025-01"
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
     db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
     )
     db.connection.commit()
     db.ensure_household_items_seeded(user_id)
@@ -34,7 +38,7 @@ async def test_reset_cycle_creates_statuses_after_threshold() -> None:
 
     await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
     cursor = db.connection.execute(
-        "SELECT COUNT(*) FROM household_payments WHERE user_id = ? AND month = ?",
+        f"SELECT COUNT(*) FROM {TABLES.household_payments} WHERE user_id = ? AND month = ?",
         (user_id, month),
     )
     assert cursor.fetchone()[0] == len(items)
@@ -47,9 +51,13 @@ async def test_mark_and_check_unpaid_questions() -> None:
     db = FinanceDatabase()
     user_id = 99992
     month = current_month_str(datetime(2025, 2, 6, 12, 0, tzinfo=settings.TIMEZONE))
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
     db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
     )
     db.connection.commit()
     db.ensure_household_items_seeded(user_id)
@@ -70,10 +78,17 @@ async def test_question_flow_and_savings_update() -> None:
     db = FinanceDatabase()
     user_id = 99993
     month = current_month_str(datetime(2025, 3, 6, 12, 0, tzinfo=settings.TIMEZONE))
-    db.connection.execute("DELETE FROM household_payments WHERE user_id = ?", (user_id,))
-    db.connection.execute("DELETE FROM savings WHERE user_id = ? AND category = 'быт'", (user_id,))
     db.connection.execute(
-        "DELETE FROM household_payment_items WHERE user_id = ?", (user_id,)
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.savings} WHERE user_id = ? AND category = 'быт'",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
     )
     db.connection.commit()
     db.ensure_household_items_seeded(user_id)

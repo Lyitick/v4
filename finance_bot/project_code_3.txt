@@ -650,7 +650,6 @@ async def _render_income_settings(
     user_id: int,
     error_message: str | None = None,
 ) -> list[dict]:
-    db.ensure_income_categories_seeded(user_id)
     categories = db.list_active_income_categories(user_id)
     LOGGER.info("Open income settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(
@@ -1997,4 +1996,3 @@ async def byt_timer_delete_choice(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-

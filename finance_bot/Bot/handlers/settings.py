@@ -487,7 +487,6 @@ async def _render_income_settings(
     user_id: int,
     error_message: str | None = None,
 ) -> list[dict]:
-    db.ensure_income_categories_seeded(user_id)
     categories = db.list_active_income_categories(user_id)
     LOGGER.info("Open income settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(

@@ -56,6 +56,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
     await ui_safe_delete_message(
         message.bot,
+        state,
         chat_id=message.chat.id,
         message_id=message.message_id,
         log_context="cmd_start",
@@ -96,6 +97,7 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
 
     deleted = await ui_safe_delete_message(
         message.bot,
+        state,
         chat_id=message.chat.id,
         message_id=message.message_id,
         log_context="back_to_main_user_msg",

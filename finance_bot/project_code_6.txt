@@ -1,311 +1,3 @@
-) -> None:
-    data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
-    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
-    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
-    if welcome_id is not None:
-        keep_id_set.add(int(welcome_id))
-    for protected_id in protected_ids:
-        keep_id_set.add(int(protected_id))
-    delete_ids = []
-    for mid in tracked_ids:
-        mid_int = int(mid)
-        if welcome_id is not None and mid_int == int(welcome_id):
-            LOGGER.info("SKIP_DELETE_WELCOME message_id=%s", mid_int)
-            continue
-        if mid_int in keep_id_set:
-            continue
-        delete_ids.append(mid_int)
-    deleted_count = 0
-    for message_id in delete_ids:
-        deleted = await ui_safe_delete_message(
-            bot,
-            chat_id=chat_id,
-            message_id=message_id,
-            log_context=f"context={context_name}",
-        )
-        if deleted:
-            deleted_count += 1
-
-    LOGGER.info(
-        "UI_CLEANUP context=%s deleted=%s kept=%s welcome_id=%s",
-        context_name,
-        deleted_count,
-        len(keep_id_set),
-        welcome_id,
-    )
-    await state.update_data(
-        ui_tracked_message_ids=list(
-            {
-                int(item)
-                for item in (keep_ids or [])
-                if item is not None
-                and (welcome_id is None or int(item) != int(welcome_id))
-            }
-        ),
-    )
-
-
-async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
-    data = await state.get_data()
-    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
-    if chat_id is None:
-        return
-    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
-
-
-async def ui_render_screen(
-    bot: Bot,
-    state: FSMContext,
-    chat_id: int,
-    text: str,
-    reply_markup=None,
-    parse_mode: str | None = None,
-) -> int:
-    data = await state.get_data()
-    screen_id = data.get("ui_screen_message_id")
-    if screen_id is not None and not isinstance(
-        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
-    ):
-        edited = await safe_edit_message_text(
-            bot,
-            chat_id=chat_id,
-            message_id=int(screen_id),
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            logger=LOGGER,
-        )
-        if edited:
-            await ui_set_screen_message(state, chat_id, int(screen_id))
-            return int(screen_id)
-    sent = await safe_send_message(
-        bot,
-        chat_id=chat_id,
-        text=text,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode,
-        logger=LOGGER,
-    )
-    if sent:
-        await ui_set_screen_message(state, chat_id, sent.message_id)
-        return int(sent.message_id)
-    return int(screen_id or 0)
-
-
-===== Bot/utils/ui_flow.py =====
-
-import logging
-from collections.abc import Awaitable, Callable
-from typing import Any
-
-from aiogram import Bot
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
-
-from Bot.utils.telegram_safe import safe_delete_message
-LOGGER = logging.getLogger(__name__)
-
-
-async def ui_get(state: FSMContext) -> dict[str, Any]:
-    data = await state.get_data()
-    return {
-        "greeting_id": data.get("ui_welcome_message_id"),
-        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
-    }
-
-
-async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
-    ui = await ui_get(state)
-    if ui.get("greeting_id") is not None:
-        return
-    # greeting_id не удаляем никогда
-    await state.update_data(ui_welcome_message_id=int(message_id))
-
-
-async def ui_track(
-    state: FSMContext, message_id: int, kind: str, screen: str | None
-) -> None:
-    ui = await ui_get(state)
-    tracked: list[int] = list(ui.get("tracked_ids") or [])
-    tracked.append(int(message_id))
-    if len(tracked) > 300:
-        tracked = tracked[-300:]
-    await state.update_data(ui_tracked_message_ids=tracked)
-
-
-async def ui_set_screen_message(
-    state: FSMContext, screen: str, message_id: int
-) -> None:
-    await ui_track(state, message_id, kind="ui", screen=screen)
-
-
-async def ui_cleanup_for_transition(
-    bot: Bot, state: FSMContext, chat_id: int, keep_greeting: bool = True
-) -> None:
-    ui = await ui_get(state)
-    greeting_id = ui.get("greeting_id") if keep_greeting else None
-    tracked: list[int] = list(ui.get("tracked_ids") or [])
-    ids = [int(item) for item in tracked]
-    for message_id in ids:
-        if greeting_id and message_id == greeting_id:
-            continue
-        await safe_delete_message(
-            bot,
-            chat_id=chat_id,
-            message_id=message_id,
-            logger=LOGGER,
-        )
-    await state.update_data(ui_tracked_message_ids=[])
-
-
-async def ui_transition(
-    bot: Bot,
-    state: FSMContext,
-    chat_id: int,
-    new_screen: str,
-    send_screen: Callable[[], Awaitable[Message]],
-) -> Message:
-    await ui_cleanup_for_transition(bot, state, chat_id, keep_greeting=True)
-    sent = await send_screen()
-    await ui_set_screen_message(state, new_screen, sent.message_id)
-    return sent
-
-
-===== __init__.py =====
-
-
-
-===== docs/AUDIT_REPORT.md =====
-
-# Audit Report (finance_bot v4)
-
-## Found issues
-- UI cleanup tracked multiple message lists and could retain welcome in tracked ids.
-- Welcome message id was not persisted and could be duplicated after state loss.
-- Direct Telegram edit/delete calls could fail on network errors or invalid reply keyboards.
-- Income category titles contained bank/service suffixes and older rows were not sanitized.
-- Database access used direct `FinanceDatabase()` construction across handlers.
-
-## Fixes applied
-- Unified UI tracking to `ui_tracked_message_ids` and excluded welcome from tracked ids after cleanup.
-- Added persistent welcome id storage in `ui_pins` table and reused it on startup.
-- Implemented safe Telegram operations with retries and guarded edits against reply keyboards.
-- Added income title sanitizer and migration to update existing stored titles.
-- Introduced `get_db()` for a shared database instance and updated handlers.
-
-## Backlog / Follow-up
-- Expand safe Telegram wrapper adoption in remaining handlers and services.
-- Add safe reply markup editing helper if required by additional flows.
-
-
-===== docs/RUNBOOK.md =====
-
-# Runbook
-
-## Запуск бота
-```bash
-python Bot/main.py
-```
-
-## Прогон тестов
-```bash
-pytest
-```
-
-
-===== finance_bot.log =====
-
-[2025-11-25 14:56:00,395] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
-[2025-11-25 14:56:00,396] [INFO] [__main__] Starting bot polling
-[2025-11-25 14:56:00,397] [INFO] [aiogram.dispatcher] Start polling
-[2025-11-25 14:56:00,637] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
-[2025-11-25 14:56:00,876] [INFO] [handlers.start] User 838347504 started bot
-[2025-11-25 14:56:00,877] [INFO] [aiogram.event] Update id=131879015 is handled. Duration 180 ms by bot id=8440100118
-[2025-11-25 14:56:00,897] [INFO] [handlers.start] User 838347504 started bot
-[2025-11-25 14:56:00,898] [INFO] [aiogram.event] Update id=131879016 is handled. Duration 199 ms by bot id=8440100118
-[2025-11-25 14:56:00,919] [INFO] [handlers.start] User 838347504 started bot
-[2025-11-25 14:56:00,919] [INFO] [aiogram.event] Update id=131879017 is handled. Duration 219 ms by bot id=8440100118
-[2025-11-25 14:56:00,937] [INFO] [handlers.start] User 838347504 started bot
-[2025-11-25 14:56:00,937] [INFO] [aiogram.event] Update id=131879018 is handled. Duration 236 ms by bot id=8440100118
-[2025-11-25 14:57:27,080] [INFO] [handlers.start] User 838347504 started bot
-[2025-11-25 14:57:27,081] [INFO] [aiogram.event] Update id=131879019 is handled. Duration 84 ms by bot id=8440100118
-[2025-11-25 14:57:56,254] [INFO] [handlers.finances] User 838347504 started income calculation
-[2025-11-25 14:57:56,255] [INFO] [aiogram.event] Update id=131879020 is handled. Duration 95 ms by bot id=8440100118
-[2025-11-25 14:58:00,888] [INFO] [handlers.start] User 838347504 returned to main menu
-[2025-11-25 14:58:00,888] [INFO] [aiogram.event] Update id=131879021 is handled. Duration 105 ms by bot id=8440100118
-[2025-11-25 14:58:02,102] [INFO] [handlers.finances] User 838347504 started income calculation
-[2025-11-25 14:58:02,102] [INFO] [aiogram.event] Update id=131879022 is handled. Duration 79 ms by bot id=8440100118
-[2025-11-25 14:58:10,082] [INFO] [aiogram.event] Update id=131879023 is handled. Duration 103 ms by bot id=8440100118
-[2025-11-25 14:58:14,297] [INFO] [database.crud] Updated saving for user 838347504 category долги by 3000.0
-[2025-11-25 14:58:14,480] [INFO] [aiogram.event] Update id=131879024 is handled. Duration 213 ms by bot id=8440100118
-[2025-11-25 14:58:22,837] [INFO] [database.crud] Updated saving for user 838347504 category быт by 2000.0
-[2025-11-25 14:58:23,038] [INFO] [aiogram.event] Update id=131879025 is handled. Duration 228 ms by bot id=8440100118
-[2025-11-25 14:58:26,322] [INFO] [database.crud] Updated saving for user 838347504 category инвестиции by 2000.0
-[2025-11-25 14:58:26,464] [INFO] [aiogram.event] Update id=131879026 is handled. Duration 161 ms by bot id=8440100118
-[2025-11-25 14:58:33,379] [INFO] [database.crud] Updated saving for user 838347504 category сбережения by 2000.0
-[2025-11-25 14:58:33,586] [INFO] [aiogram.event] Update id=131879027 is handled. Duration 238 ms by bot id=8440100118
-[2025-11-25 14:58:36,150] [INFO] [database.crud] Updated saving for user 838347504 category спонтанные траты by 1000.0
-[2025-11-25 14:58:36,237] [INFO] [database.crud] Fetched savings for user 838347504
-[2025-11-25 14:58:36,314] [INFO] [aiogram.event] Update id=131879028 is handled. Duration 180 ms by bot id=8440100118
-[2025-11-25 14:58:53,690] [INFO] [handlers.wishlist] User 838347504 opened wishlist
-[2025-11-25 14:58:53,690] [INFO] [aiogram.event] Update id=131879029 is handled. Duration 161 ms by bot id=8440100118
-[2025-11-25 14:58:57,875] [INFO] [database.crud] Fetched purchases for user 838347504
-[2025-11-25 14:58:57,947] [INFO] [aiogram.event] Update id=131879030 is handled. Duration 75 ms by bot id=8440100118
-[2025-11-25 14:58:59,960] [INFO] [aiogram.event] Update id=131879031 is handled. Duration 69 ms by bot id=8440100118
-[2025-11-25 14:59:02,045] [INFO] [database.crud] Fetched wishes for user 838347504
-[2025-11-25 14:59:02,117] [INFO] [aiogram.event] Update id=131879032 is handled. Duration 73 ms by bot id=8440100118
-[2025-11-25 14:59:08,043] [INFO] [handlers.start] User 838347504 returned to main menu
-[2025-11-25 14:59:08,044] [INFO] [aiogram.event] Update id=131879033 is handled. Duration 70 ms by bot id=8440100118
-[2025-11-25 14:59:10,023] [INFO] [handlers.wishlist] User 838347504 opened wishlist
-[2025-11-25 14:59:10,023] [INFO] [aiogram.event] Update id=131879034 is handled. Duration 160 ms by bot id=8440100118
-[2025-11-25 14:59:14,674] [INFO] [database.crud] Fetched wishes for user 838347504
-[2025-11-25 14:59:14,749] [INFO] [aiogram.event] Update id=131879035 is handled. Duration 75 ms by bot id=8440100118
-[2025-11-25 14:59:17,760] [INFO] [database.crud] Fetched wishes for user 838347504
-[2025-11-25 14:59:17,829] [INFO] [aiogram.event] Update id=131879036 is not handled. Duration 69 ms by bot id=8440100118
-[2025-11-25 14:59:17,830] [ERROR] [aiogram.event] Cause exception while process update id=131879036 by bot id=8440100118
-TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
-Traceback (most recent call last):
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
-    response = await self.feed_update(bot, update, **kwargs)
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
-    response = await self.update.wrap_outer_middleware(
-               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    ...<7 lines>...
-    )
-    ^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
-    return await handler(event, data)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
-    return await handler(event, data)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
-    return await handler(event, data)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
-    return await wrapped_inner(event, kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
-    return await wrapped()
-           ^^^^^^^^^^^^^^^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
-    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
-    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
-    return await self._propagate_event(
-           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-        observer=observer, update_type=update_type, event=telegram_event, **data
-        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-    )
-    ^
-  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
-    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
     return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
@@ -988,7 +680,9 @@ aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: messa
 [2025-11-25 17:34:36,315] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
 
 
+
 ===== tests/__init__.py =====
+
 
 
 
@@ -996,7 +690,46 @@ aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: messa
 
 
 
+
 ===== tests/integration/test_database.py =====
+
+"""Integration tests for database operations."""
+from Bot.database.crud import FinanceDatabase, TABLES
+
+
+def setup_module(module) -> None:  # noqa: D401
+    """Clean database tables before tests."""
+
+    db = FinanceDatabase()
+    cursor = db.connection.cursor()
+    cursor.execute(f"DELETE FROM {TABLES.wishes}")
+    cursor.execute(f"DELETE FROM {TABLES.purchases}")
+    cursor.execute(f"DELETE FROM {TABLES.savings}")
+    db.connection.commit()
+
+
+def test_add_and_get_wish() -> None:
+    """Add wish and retrieve it."""
+
+    db = FinanceDatabase()
+    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
+    wish = db.get_wish(wish_id)
+    assert wish is not None
+    assert wish["name"] == "Test"
+
+
+def test_update_saving_and_purchase() -> None:
+    """Update savings and add purchase entry."""
+
+    db = FinanceDatabase()
+    db.update_saving(1, "Инструменты", 20.0)
+    savings = db.get_user_savings(1)
+    assert savings.get("Инструменты", {}).get("current") == 20.0
+    db.add_purchase(1, "Test", 10.0, "Инструменты")
+    purchases = db.get_purchases_by_user(1)
+    assert len(purchases) == 1
+
+
 
 ===== tests/integration/test_schema_migration.py =====
 
@@ -1129,42 +862,6 @@ def test_schema_migration_renames_tables(tmp_path: Path) -> None:
 
 
 
-"""Integration tests for database operations."""
-from Bot.database.crud import FinanceDatabase, TABLES
-
-
-def setup_module(module) -> None:  # noqa: D401
-    """Clean database tables before tests."""
-
-    db = FinanceDatabase()
-    cursor = db.connection.cursor()
-    cursor.execute(f"DELETE FROM {TABLES.wishes}")
-    cursor.execute(f"DELETE FROM {TABLES.purchases}")
-    cursor.execute(f"DELETE FROM {TABLES.savings}")
-    db.connection.commit()
-
-
-def test_add_and_get_wish() -> None:
-    """Add wish and retrieve it."""
-
-    db = FinanceDatabase()
-    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
-    wish = db.get_wish(wish_id)
-    assert wish is not None
-    assert wish["name"] == "Test"
-
-
-def test_update_saving_and_purchase() -> None:
-    """Update savings and add purchase entry."""
-
-    db = FinanceDatabase()
-    db.update_saving(1, "Инструменты", 20.0)
-    savings = db.get_user_savings(1)
-    assert savings.get("Инструменты", {}).get("current") == 20.0
-    db.add_purchase(1, "Test", 10.0, "Инструменты")
-    purchases = db.get_purchases_by_user(1)
-    assert len(purchases) == 1
-
 ===== tests/run_all_tests.py =====
 
 """Run all pytest suites."""
@@ -1173,6 +870,7 @@ import pytest
 
 if __name__ == "__main__":
     raise SystemExit(pytest.main(["-q", "tests"]))
+
 
 
 ===== tests/test_runner.py =====
@@ -1195,7 +893,9 @@ if __name__ == "__main__":
     raise SystemExit(main())
 
 
+
 ===== tests/unit/__init__.py =====
+
 
 
 
@@ -1223,68 +923,83 @@ def test_find_reached_goal() -> None:
     assert data["goal"] == 100
 
 
-===== tests/unit/test_income_categories.py =====
 
-"""Tests for income category seeding and flow guards."""
-import asyncio
-from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+===== tests/unit/test_household_debit_category.py =====
 
-import pytest
-
+"""Tests for household debit category settings."""
 from Bot.database import crud
 
 
-def test_income_categories_not_seeded(tmp_path, monkeypatch) -> None:
-    """Income categories should start empty for a new user."""
-
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
     db_path = tmp_path / "finance.db"
     monkeypatch.setattr(crud, "DB_PATH", db_path)
     crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
 
-    db = crud.FinanceDatabase()
+
+def test_set_and_get_household_debit_category(tmp_path, monkeypatch) -> None:
+    """Household debit category should persist in user settings."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
     try:
-        assert db.list_active_income_categories(12345) == []
+        db.set_household_debit_category(1, "alpha")
+        assert db.get_household_debit_category(1) == "alpha"
     finally:
         db.close()
         crud.FinanceDatabase._instance = None
 
 
-def test_start_income_flow_with_empty_categories(monkeypatch) -> None:
-    """Handler should stop flow when no income categories exist."""
+def test_apply_household_debit_category_updates_savings(tmp_path, monkeypatch) -> None:
+    """Yes answer should debit savings from selected category."""
 
-    pytest.importorskip("aiogram")
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.set_household_debit_category(2, "custom_cat")
+        changed = db.apply_household_payment_answer(
+            user_id=2,
+            month="2026-01",
+            question_code="q1",
+            amount=100.0,
+            answer="yes",
+            debit_category="custom_cat",
+        )
+        assert changed is True
+        savings_map = db.get_user_savings_map(2)
+        assert savings_map.get("custom_cat") == -100.0
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
 
-    from Bot.handlers import finances  # noqa: WPS433
 
-    db_stub = SimpleNamespace(list_active_income_categories=MagicMock(return_value=[]))
-    monkeypatch.setattr("Bot.handlers.finances.get_db", lambda: db_stub)
-    monkeypatch.setattr(
-        "Bot.handlers.finances.build_main_menu_for_user",
-        AsyncMock(return_value="menu"),
-    )
-    monkeypatch.setattr("Bot.handlers.finances.ui_register_message", AsyncMock())
-    monkeypatch.setattr("Bot.handlers.finances.safe_delete_message", AsyncMock())
+def test_resolve_household_debit_category_fallback(tmp_path, monkeypatch) -> None:
+    """Fallback should select first available income category."""
 
-    sent_message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
-    message = SimpleNamespace(
-        from_user=SimpleNamespace(id=1),
-        chat=SimpleNamespace(id=20),
-        message_id=5,
-        bot=SimpleNamespace(),
-        answer=AsyncMock(return_value=sent_message),
-    )
-    state = SimpleNamespace(clear=AsyncMock(), set_state=AsyncMock(), update_data=AsyncMock())
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute(
+            f"""
+            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (3, "alpha", "Alpha", 50, 1),
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (3, "beta", "Beta", 50, 2),
+        )
+        db.connection.commit()
 
-    async def _run() -> None:
-        await finances.start_income_flow(message, state)
+        code, title = db.resolve_household_debit_category(3)
+        assert code == "alpha"
+        assert title == "Alpha"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
 
-    asyncio.run(_run())
-
-    assert db_stub.list_active_income_categories.call_count == 1
-    state.set_state.assert_not_awaited()
-    message.answer.assert_awaited_once()
-    assert "Категории дохода не настроены" in message.answer.await_args.args[0]
 
 
 ===== tests/unit/test_household_idempotency.py =====
@@ -1453,161 +1168,7 @@ async def test_handle_household_answer_no_double_tap_is_idempotent(
     assert db_stub.apply_household_payment_answer.call_count == 1
     callback.bot.edit_message_text.assert_awaited_once()
 
-===== tests/unit/test_household_debit_category.py =====
 
-"""Tests for household debit category settings."""
-from Bot.database import crud
-
-
-def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
-    db_path = tmp_path / "finance.db"
-    monkeypatch.setattr(crud, "DB_PATH", db_path)
-    crud.FinanceDatabase._instance = None
-    return crud.FinanceDatabase()
-
-
-def test_set_and_get_household_debit_category(tmp_path, monkeypatch) -> None:
-    """Household debit category should persist in user settings."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        db.set_household_debit_category(1, "alpha")
-        assert db.get_household_debit_category(1) == "alpha"
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-
-def test_apply_household_debit_category_updates_savings(tmp_path, monkeypatch) -> None:
-    """Yes answer should debit savings from selected category."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        db.set_household_debit_category(2, "custom_cat")
-        changed = db.apply_household_payment_answer(
-            user_id=2,
-            month="2026-01",
-            question_code="q1",
-            amount=100.0,
-            answer="yes",
-            debit_category="custom_cat",
-        )
-        assert changed is True
-        savings_map = db.get_user_savings_map(2)
-        assert savings_map.get("custom_cat") == -100.0
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-
-def test_resolve_household_debit_category_fallback(tmp_path, monkeypatch) -> None:
-    """Fallback should select first available income category."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        cursor = db.connection.cursor()
-        cursor.execute(
-            f"""
-            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
-            VALUES (?, ?, ?, ?, ?, 1)
-            """,
-            (3, "alpha", "Alpha", 50, 1),
-        )
-        cursor.execute(
-            f"""
-            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
-            VALUES (?, ?, ?, ?, ?, 1)
-            """,
-            (3, "beta", "Beta", 50, 2),
-        )
-        db.connection.commit()
-
-        code, title = db.resolve_household_debit_category(3)
-        assert code == "alpha"
-        assert title == "Alpha"
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-===== tests/unit/test_wishlist_debit_category.py =====
-
-"""Tests for wishlist debit category settings."""
-from Bot.database import crud
-
-
-def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
-    db_path = tmp_path / "finance.db"
-    monkeypatch.setattr(crud, "DB_PATH", db_path)
-    crud.FinanceDatabase._instance = None
-    return crud.FinanceDatabase()
-
-
-def test_set_and_get_wishlist_debit_category(tmp_path, monkeypatch) -> None:
-    """Wishlist debit category should persist in user settings."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        db.set_wishlist_debit_category(1, "alpha")
-        assert db.get_wishlist_debit_category(1) == "alpha"
-        db.set_wishlist_debit_category(1, None)
-        assert db.get_wishlist_debit_category(1) is None
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-===== tests/unit/test_wishlist_purchase.py =====
-
-"""Tests for wishlist purchase flow."""
-from Bot.database import crud
-
-
-def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
-    db_path = tmp_path / "finance.db"
-    monkeypatch.setattr(crud, "DB_PATH", db_path)
-    crud.FinanceDatabase._instance = None
-    return crud.FinanceDatabase()
-
-
-def test_purchase_wishlist_without_debit(tmp_path, monkeypatch) -> None:
-    """Purchase without debit should not change savings."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        wish_id = db.add_wish(1, "Laptop", 100.0, None, "Work")
-        result = db.purchase_wish(1, wish_id, None)
-        assert result.get("status") == "no_debit"
-        wish = db.get_wish(wish_id)
-        assert wish is not None
-        assert wish.get("is_purchased") == 1
-        assert wish.get("debited_at") is None
-        savings_map = db.get_user_savings_map(1)
-        assert "alpha" not in savings_map
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-
-def test_purchase_wishlist_debit_idempotent(tmp_path, monkeypatch) -> None:
-    """Purchase should debit once and be idempotent."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        wish_id = db.add_wish(2, "Phone", 50.0, None, "Fun")
-        db.update_saving(2, "alpha", 100.0)
-        result = db.purchase_wish(2, wish_id, "alpha")
-        assert result.get("status") == "debited"
-        savings_map = db.get_user_savings_map(2)
-        assert savings_map.get("alpha") == 50.0
-        result_again = db.purchase_wish(2, wish_id, "alpha")
-        assert result_again.get("status") == "already"
-        savings_map_again = db.get_user_savings_map(2)
-        assert savings_map_again.get("alpha") == 50.0
-        wish = db.get_wish(wish_id)
-        assert wish is not None
-        assert wish.get("debited_at") is not None
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
 
 ===== tests/unit/test_household_payments.py =====
 
@@ -1751,6 +1312,8 @@ async def test_question_flow_and_savings_update() -> None:
     savings_map = db.get_user_savings_map(user_id)
     assert savings_map.get("быт") == 5000
 
+
+
 ===== tests/unit/test_household_renderers.py =====
 
 """Tests for household renderers."""
@@ -1779,6 +1342,7 @@ def test_format_household_items() -> None:
     assert "✅" in text
     assert "❌" in text
     assert "Интернет" in text
+
 
 
 ===== tests/unit/test_household_services.py =====
@@ -1825,6 +1389,7 @@ def test_idempotency_check() -> None:
     assert should_ignore_answer(answers, processed_steps, "q2", "yes") is False
 
 
+
 ===== tests/unit/test_imports.py =====
 
 """Basic import tests."""
@@ -1865,6 +1430,72 @@ def test_register_routers_smoke() -> None:
     assert wishlist.router in routers
 
 
+
+===== tests/unit/test_income_categories.py =====
+
+"""Tests for income category seeding and flow guards."""
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from Bot.database import crud
+
+
+def test_income_categories_not_seeded(tmp_path, monkeypatch) -> None:
+    """Income categories should start empty for a new user."""
+
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+
+    db = crud.FinanceDatabase()
+    try:
+        assert db.list_active_income_categories(12345) == []
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_start_income_flow_with_empty_categories(monkeypatch) -> None:
+    """Handler should stop flow when no income categories exist."""
+
+    pytest.importorskip("aiogram")
+
+    from Bot.handlers import finances  # noqa: WPS433
+
+    db_stub = SimpleNamespace(list_active_income_categories=MagicMock(return_value=[]))
+    monkeypatch.setattr("Bot.handlers.finances.get_db", lambda: db_stub)
+    monkeypatch.setattr(
+        "Bot.handlers.finances.build_main_menu_for_user",
+        AsyncMock(return_value="menu"),
+    )
+    monkeypatch.setattr("Bot.handlers.finances.ui_register_message", AsyncMock())
+    monkeypatch.setattr("Bot.handlers.finances.safe_delete_message", AsyncMock())
+
+    sent_message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(id=20),
+        message_id=5,
+        bot=SimpleNamespace(),
+        answer=AsyncMock(return_value=sent_message),
+    )
+    state = SimpleNamespace(clear=AsyncMock(), set_state=AsyncMock(), update_data=AsyncMock())
+
+    async def _run() -> None:
+        await finances.start_income_flow(message, state)
+
+    asyncio.run(_run())
+
+    assert db_stub.list_active_income_categories.call_count == 1
+    state.set_state.assert_not_awaited()
+    message.answer.assert_awaited_once()
+    assert "Категории дохода не настроены" in message.answer.await_args.args[0]
+
+
+
 ===== tests/unit/test_telegram_safe.py =====
 
 """Tests for telegram_safe utilities."""
@@ -1897,6 +1528,7 @@ async def test_safe_edit_message_text_retries_network_error() -> None:
 
     assert result is True
     assert bot.edit_message_text.call_count == 2
+
 
 
 ===== tests/unit/test_telegram_safe_delete.py =====
@@ -2033,6 +1665,7 @@ def test_safe_delete_message_not_found() -> None:
     asyncio.run(run())
 
 
+
 ===== tests/unit/test_text_sanitizer.py =====
 
 """Tests for income text sanitizer."""
@@ -2065,6 +1698,7 @@ def test_sanitize_income_title_removes_tinkoff_suffix() -> None:
 def test_sanitize_income_title_removes_ozon_suffix() -> None:
     text = "что-то (озон)"
     assert sanitize_income_title(text) == "что-то"
+
 
 
 ===== tests/unit/test_ui_cleanup.py =====
@@ -2175,7 +1809,6 @@ if "aiogram" not in sys.modules:
 from Bot.handlers.start import back_to_main
 from Bot.utils.ui_cleanup import (
     ui_cleanup_to_context,
-    ui_register_message,
     ui_register_protected_message,
     ui_set_welcome_message,
     ui_track_message,
@@ -2221,11 +1854,12 @@ def test_ui_cleanup_keeps_welcome() -> None:
     """Cleanup removes tracked messages while keeping welcome."""
 
     async def run_test() -> None:
-        state = DummyState()
-        await ui_register_message(state, 1, 10)
-        await ui_register_message(state, 1, 11)
-        await ui_register_message(state, 1, 12)
-        await state.update_data(ui_welcome_message_id=11)
+        state = DummyState(
+            {
+                "ui_welcome_message_id": 111,
+                "ui_tracked_message_ids": [111, 222, 333],
+            }
+        )
 
         bot = DummyBot()
         await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU")
@@ -2233,7 +1867,7 @@ def test_ui_cleanup_keeps_welcome() -> None:
         deleted_ids = {
             call.kwargs["message_id"] for call in bot.delete_message.call_args_list
         }
-        assert deleted_ids == {10, 12}
+        assert deleted_ids == {222, 333}
         data = await state.get_data()
         assert data["ui_tracked_message_ids"] == []
 
@@ -2306,6 +1940,7 @@ def test_welcome_reused_on_start() -> None:
     asyncio.run(run_test())
 
 
+
 ===== tests/unit/test_utils.py =====
 
 """Utility tests."""
@@ -2319,11 +1954,99 @@ def test_init_logging_returns_logger() -> None:
     assert logger.name == "Bot.utils.logging"
 
 
+
+===== tests/unit/test_wishlist_debit_category.py =====
+
+"""Tests for wishlist debit category settings."""
+from Bot.database import crud
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_set_and_get_wishlist_debit_category(tmp_path, monkeypatch) -> None:
+    """Wishlist debit category should persist in user settings."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.set_wishlist_debit_category(1, "alpha")
+        assert db.get_wishlist_debit_category(1) == "alpha"
+        db.set_wishlist_debit_category(1, None)
+        assert db.get_wishlist_debit_category(1) is None
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+
+===== tests/unit/test_wishlist_purchase.py =====
+
+"""Tests for wishlist purchase flow."""
+from Bot.database import crud
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_purchase_wishlist_without_debit(tmp_path, monkeypatch) -> None:
+    """Purchase without debit should not change savings."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        wish_id = db.add_wish(1, "Laptop", 100.0, None, "Work")
+        result = db.purchase_wish(1, wish_id, None)
+        assert result.get("status") == "no_debit"
+        wish = db.get_wish(wish_id)
+        assert wish is not None
+        assert wish.get("is_purchased") == 1
+        assert wish.get("debited_at") is None
+        savings_map = db.get_user_savings_map(1)
+        assert "alpha" not in savings_map
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_purchase_wishlist_debit_idempotent(tmp_path, monkeypatch) -> None:
+    """Purchase should debit once and be idempotent."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        wish_id = db.add_wish(2, "Phone", 50.0, None, "Fun")
+        db.update_saving(2, "alpha", 100.0)
+        result = db.purchase_wish(2, wish_id, "alpha")
+        assert result.get("status") == "debited"
+        savings_map = db.get_user_savings_map(2)
+        assert savings_map.get("alpha") == 50.0
+        result_again = db.purchase_wish(2, wish_id, "alpha")
+        assert result_again.get("status") == "already"
+        savings_map_again = db.get_user_savings_map(2)
+        assert savings_map_again.get("alpha") == 50.0
+        wish = db.get_wish(wish_id)
+        assert wish is not None
+        assert wish.get("debited_at") is not None
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+
 ===== utils/__init__.py =====
 
 from Bot.utils import *  # noqa: F401,F403
 
 
+
 ===== utils/logging.py =====
 
 from Bot.utils.logging import *  # noqa: F401,F403
+
+

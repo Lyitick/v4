@@ -1,214 +1,3 @@
-                    continue
-                keep_delta = timedelta(days=int(cat_settings.get("days", default_days)))
-                timestamp = purchase.get("purchased_at")
-                if timestamp:
-                    try:
-                        purchase_dt = datetime.fromisoformat(str(timestamp))
-                        if purchase_dt.tzinfo is None:
-                            purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
-                    except ValueError:
-                        continue
-                    if purchase_dt + keep_delta <= current_time:
-                        continue
-                filtered.append(purchase)
-            return filtered
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to fetch purchases for user %s: %s", user_id, error)
-            return []
-
-    def list_active_byt_timer_times(self, user_id: int) -> List[Dict[str, Any]]:
-        """Return active BYT timer times for user."""
-
-        self.ensure_byt_timer_defaults(user_id)
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                """
-                SELECT id, hour, minute
-                FROM byt_timer_times
-                WHERE user_id = ? AND is_active = 1
-                ORDER BY hour, minute, id
-                """,
-                (user_id,),
-            )
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to fetch BYT timer times for user %s: %s", user_id, error
-            )
-            return []
-
-    def add_byt_timer_time(self, user_id: int, hour: int, minute: int) -> Optional[int]:
-        """Add a new BYT timer time if not duplicate."""
-
-        self.ensure_byt_timer_defaults(user_id)
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                """
-                SELECT id FROM byt_timer_times
-                WHERE user_id = ? AND hour = ? AND minute = ? AND is_active = 1
-                LIMIT 1
-                """,
-                (user_id, hour, minute),
-            )
-            existing = cursor.fetchone()
-            if existing:
-                return int(existing["id"])
-
-            cursor.execute(
-                """
-                INSERT INTO byt_timer_times (user_id, hour, minute, is_active)
-                VALUES (?, ?, ?, 1)
-                """,
-                (user_id, hour, minute),
-            )
-            self.connection.commit()
-            return cursor.lastrowid
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to add BYT timer time for user %s: %s", user_id, error)
-            return None
-
-    def deactivate_byt_timer_time(self, user_id: int, timer_id: int) -> None:
-        """Deactivate specific BYT timer time."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                """
-                UPDATE byt_timer_times
-                SET is_active = 0
-                WHERE user_id = ? AND id = ?
-                """,
-                (user_id, timer_id),
-            )
-            self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to deactivate BYT timer time %s for user %s: %s",
-                timer_id,
-                user_id,
-                error,
-            )
-
-    def reset_byt_timer_times(self, user_id: int) -> None:
-        """Reset BYT timer times to defaults."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                "UPDATE byt_timer_times SET is_active = 0 WHERE user_id = ?",
-                (user_id,),
-            )
-            for hour, minute in [(12, 0), (18, 0)]:
-                cursor.execute(
-                    """
-                    INSERT INTO byt_timer_times (user_id, hour, minute, is_active)
-                    VALUES (?, ?, ?, 1)
-                    """,
-                    (user_id, hour, minute),
-                )
-            self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to reset BYT timer times for user %s: %s", user_id, error)
-
-    def get_users_with_byt_timer_times(self) -> List[int]:
-        """Return users that have BYT timer times configured."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                """
-                SELECT DISTINCT user_id
-                FROM byt_timer_times
-                WHERE is_active = 1
-                """
-            )
-            rows = cursor.fetchall()
-            return [int(row["user_id"]) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to get users with BYT timer times: %s", error)
-            return []
-
-    def get_users_with_active_byt_wishes(self) -> List[int]:
-        """Return user ids that have active BYT wishes."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                """
-                SELECT DISTINCT user_id
-                FROM wishes
-                WHERE category IN ('byt', 'БЫТ') AND (is_purchased = 0 OR is_purchased IS NULL)
-                """
-            )
-            rows = cursor.fetchall()
-            return [int(row["user_id"]) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to get users with active BYT wishes: %s", error)
-            return []
-
-    def cleanup_old_byt_purchases(self, now: Optional[datetime] = None) -> None:
-        """Remove BYT purchases older than one month from purchases and wishes."""
-
-        current_time = now or now_tz()
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                "SELECT id, purchased_at FROM purchases WHERE category IN ('byt', 'БЫТ')"
-            )
-            purchases = cursor.fetchall()
-            ids_to_delete: list[int] = []
-            for purchase in purchases:
-                timestamp = purchase["purchased_at"]
-                if not timestamp:
-                    continue
-                try:
-                    purchase_dt = datetime.fromisoformat(timestamp)
-                    if purchase_dt.tzinfo is None:
-                        purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
-                except ValueError:
-                    continue
-                if add_one_month(purchase_dt) <= current_time:
-                    ids_to_delete.append(int(purchase["id"]))
-
-            if ids_to_delete:
-                cursor.execute(
-                    "DELETE FROM purchases WHERE id IN ({})".format(
-                        ",".join("?" * len(ids_to_delete))
-                    ),
-                    ids_to_delete,
-                )
-
-            cursor.execute(
-                "SELECT id, purchased_at FROM wishes WHERE category IN ('byt', 'БЫТ') AND is_purchased = 1"
-            )
-            wish_rows = cursor.fetchall()
-            wish_ids: list[int] = []
-            for wish in wish_rows:
-                purchased_at = wish["purchased_at"]
-                if not purchased_at:
-                    continue
-                try:
-                    wish_dt = datetime.fromisoformat(purchased_at)
-                    if wish_dt.tzinfo is None:
-                        wish_dt = wish_dt.replace(tzinfo=settings.TIMEZONE)
-                except ValueError:
-                    continue
-                if add_one_month(wish_dt) <= current_time:
-                    wish_ids.append(int(wish["id"]))
-
-            if wish_ids:
-                cursor.execute(
-                    "DELETE FROM wishes WHERE id IN ({})".format(",".join("?" * len(wish_ids))),
-                    wish_ids,
-                )
-            if ids_to_delete or wish_ids:
-                self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to cleanup old BYT purchases: %s", error)
-
     def close(self) -> None:
         """Close database connection."""
 
@@ -217,6 +6,7 @@
             LOGGER.info("Database connection closed")
         except sqlite3.Error as error:
             LOGGER.error("Failed to close database connection: %s", error)
+
 
 
 ===== Bot/database/get_db.py =====
@@ -234,6 +24,7 @@ def get_db() -> FinanceDatabase:
     if _DB_INSTANCE is None:
         _DB_INSTANCE = FinanceDatabase()
     return _DB_INSTANCE
+
 
 
 ===== Bot/database/models.py =====
@@ -283,7 +74,9 @@ class Purchase:
     purchased_at: str
 
 
+
 ===== Bot/handlers/__init__.py =====
+
 
 
 
@@ -624,6 +417,7 @@ async def handle_affordable_wishes_later(callback: CallbackQuery, state: FSMCont
             await ui_register_message(state, callback.message.chat.id, sent_id)
 
 
+
 ===== Bot/handlers/common.py =====
 
 """Common handlers and fallbacks."""
@@ -679,6 +473,7 @@ async def fallback_handler(message: Message, state: FSMContext) -> None:
         reply_markup=await build_main_menu_for_user(message.from_user.id),
     )
     await ui_register_message(state, sent.chat.id, sent.message_id)
+
 
 
 ===== Bot/handlers/finances.py =====
@@ -1344,6 +1139,7 @@ async def unexpected_purchase_input(message: Message) -> None:
     """Handle unexpected text in purchase confirmation state."""
 
     await message.answer("Выбери вариант на клавиатуре: Купил или Продолжить копить.")
+
 
 
 ===== Bot/handlers/household_payments.py =====
@@ -2218,3 +2014,208 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     await _log_state_transition(state, user_id, None)
     await state.clear()
     await _send_main_menu_summary(callback.bot, state, callback.message.chat.id, user_id)
+
+
+
+===== Bot/handlers/settings.py =====
+
+"""Inline settings handlers for a single-page experience."""
+import logging
+import time
+
+from aiogram import F, Router
+from aiogram.filters import BaseFilter
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
+
+from Bot.constants.ui_labels import (
+    WISHLIST_DEBIT_CATEGORY_BACK,
+    WISHLIST_DEBIT_CATEGORY_BUTTON,
+    WISHLIST_DEBIT_CATEGORY_NONE,
+)
+from Bot.database.get_db import get_db
+from Bot.handlers.common import build_main_menu_for_user
+from Bot.keyboards.main import back_only_keyboard
+from Bot.keyboards.settings import (
+    byt_rules_reply_keyboard,
+    byt_timer_reply_keyboard,
+    byt_timer_times_select_reply_keyboard,
+    household_debit_category_select_reply_keyboard,
+    household_payments_remove_reply_keyboard,
+    household_settings_reply_keyboard,
+    income_categories_select_reply_keyboard,
+    income_settings_reply_keyboard,
+    settings_back_reply_keyboard,
+    settings_home_reply_keyboard,
+    wishlist_categories_select_reply_keyboard,
+    wishlist_debit_category_select_reply_keyboard,
+    wishlist_purchased_mode_reply_keyboard,
+    wishlist_settings_reply_keyboard,
+)
+from Bot.keyboards.calculator import income_calculator_keyboard
+from Bot.states.money_states import HouseholdSettingsState, IncomeSettingsState
+from Bot.states.wishlist_states import (
+    BytSettingsState,
+    BytTimerState,
+    WishlistSettingsState,
+)
+from Bot.utils.datetime_utils import current_month_str
+from Bot.utils.savings import format_savings_summary
+from Bot.utils.telegram_safe import (
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_messages,
+    ui_cleanup_to_context,
+    ui_register_message,
+    ui_render_screen,
+    ui_set_screen_message,
+    ui_track_message,
+)
+
+router = Router()
+LOGGER = logging.getLogger(__name__)
+PERCENT_DIGITS = {str(i) for i in range(10)}
+PERCENT_INPUT_BUTTONS = PERCENT_DIGITS | {"Очистить", "✅ Газ"}
+
+
+class InSettingsFilter(BaseFilter):
+    async def __call__(self, message: Message, state: FSMContext) -> bool:
+        data = await state.get_data()
+        return bool(data.get("in_settings"))
+
+
+async def _register_user_message(state: FSMContext, message: Message) -> None:
+    await ui_track_message(state, message.chat.id, message.message_id)
+
+
+async def _safe_edit(bot, **kwargs) -> None:
+    edited = await safe_edit_message_text(bot, logger=LOGGER, **kwargs)
+    if not edited:
+        raise TelegramBadRequest(method="editMessageText", message="edit-failed")
+
+
+async def _delete_message_safely(bot, chat_id: int | None, message_id: int | None) -> None:
+    if chat_id is None or message_id is None:
+        return
+    await safe_delete_message(
+        bot,
+        chat_id=chat_id,
+        message_id=int(message_id),
+        logger=LOGGER,
+    )
+
+
+async def _delete_user_message(message: Message) -> None:
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+async def _remove_calculator_keyboard(message: Message) -> None:
+    temp = await safe_send_message(
+        message.bot,
+        chat_id=message.chat.id,
+        text=" ",
+        reply_markup=ReplyKeyboardRemove(),
+        logger=LOGGER,
+    )
+    if temp:
+        await safe_delete_message(
+            message.bot,
+            chat_id=temp.chat.id,
+            message_id=temp.message_id,
+            logger=LOGGER,
+        )
+
+
+async def _apply_reply_keyboard(message: Message, reply_markup: ReplyKeyboardMarkup) -> None:
+    temp = await safe_send_message(
+        message.bot,
+        chat_id=message.chat.id,
+        text=" ",
+        reply_markup=reply_markup,
+        logger=LOGGER,
+    )
+    if temp:
+        await safe_delete_message(
+            message.bot,
+            chat_id=temp.chat.id,
+            message_id=temp.message_id,
+            logger=LOGGER,
+        )
+
+
+def _parse_time_text(raw: str) -> tuple[int, int] | None:
+    value = raw.strip()
+    if ":" not in value:
+        return None
+    parts = value.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return None
+    return hour, minute
+
+
+async def _cleanup_input_ui(
+    bot,
+    data: dict,
+    *,
+    display_chat_key: str | None = None,
+    display_message_key: str | None = None,
+    prompt_chat_key: str | None = None,
+    prompt_message_key: str | None = None,
+) -> None:
+    if display_chat_key and display_message_key:
+        await _delete_message_safely(
+            bot, data.get(display_chat_key), data.get(display_message_key)
+        )
+    if prompt_chat_key and prompt_message_key:
+        await _delete_message_safely(
+            bot, data.get(prompt_chat_key), data.get(prompt_message_key)
+        )
+
+
+async def _store_settings_message(state: FSMContext, chat_id: int, message_id: int) -> None:
+    await state.update_data(
+        settings_chat_id=chat_id, settings_message_id=message_id, in_settings=True
+    )
+
+
+async def _set_current_screen(state: FSMContext, screen_id: str) -> None:
+    await state.update_data(settings_current_screen=screen_id, in_settings=True)
+
+
+async def _reset_navigation(state: FSMContext, current_screen: str = "st:home") -> None:
+    await state.update_data(settings_nav_stack=[], settings_current_screen=current_screen)
+
+
+async def _push_current_screen(state: FSMContext, next_screen: str) -> None:
+    data = await state.get_data()
+    current_screen = data.get("settings_current_screen")
+    stack = list(data.get("settings_nav_stack") or [])
+    if current_screen and current_screen != next_screen:
+        if not stack or stack[-1] != current_screen:
+            stack.append(current_screen)
+    await state.update_data(settings_nav_stack=stack, settings_current_screen=next_screen)
+
+
+async def _pop_previous_screen(state: FSMContext) -> str | None:
+    data = await state.get_data()
+    stack = list(data.get("settings_nav_stack") or [])
+    if not stack:
+        return None
+    previous = stack.pop()
+    await state.update_data(settings_nav_stack=stack, settings_current_screen=previous)

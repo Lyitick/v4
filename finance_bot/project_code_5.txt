@@ -1,361 +1,3 @@
-        return
-
-    try:
-        item_id = int(data[1])
-    except ValueError:
-        await safe_callback_answer(callback, "Некорректный элемент.", show_alert=True, logger=LOGGER)
-        return
-
-    db = get_db()
-    wish = db.get_wish(item_id)
-    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
-        await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
-        return
-
-    price = float(wish.get("price", 0) or 0)
-    purchase_time = now_tz()
-    db.decrease_savings(callback.from_user.id, "быт", price)
-    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
-    db.add_purchase(
-        callback.from_user.id,
-        wish.get("name", ""),
-        price,
-        humanize_wishlist_category(wish.get("category", "")),
-        purchased_at=purchase_time,
-    )
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    if callback.message:
-        await _refresh_byt_reminder_message(
-            callback.bot,
-            callback.message.chat.id,
-            callback.message.message_id,
-            callback.from_user.id,
-        )
-
-
-@router.callback_query(F.data.startswith("byt_defer_menu"))
-async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    """Show BYT items to choose which to defer."""
-
-    wish_id: int | None = None
-    if callback.data and ":" in callback.data:
-        parts = callback.data.split(":", maxsplit=1)
-        if len(parts) == 2:
-            try:
-                wish_id = int(parts[1])
-            except ValueError:
-                wish_id = None
-    if wish_id is None:
-        data = await state.get_data()
-        stored_id = data.get("current_byt_item_id")
-        try:
-            wish_id = int(stored_id) if stored_id is not None else None
-        except (TypeError, ValueError):
-            wish_id = None
-
-    db = get_db()
-    settings_row = db.get_user_settings(callback.from_user.id)
-    if not bool(settings_row.get("byt_defer_enabled", 1)):
-        await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
-        return
-    now_dt = now_tz()
-    items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
-    if wish_id is not None:
-        await state.update_data(current_byt_item_id=wish_id)
-        started = await _start_byt_defer_flow(callback, state, wish_id)
-        if not started:
-            await state.clear()
-        return
-    if not items:
-        await state.clear()
-        if callback.message:
-            await safe_answer(callback.message, "Нет бытовых покупок для отложки.", logger=LOGGER)
-        else:
-            await safe_send_message(
-                callback.bot,
-                chat_id=callback.from_user.id,
-                text="Нет бытовых покупок для отложки.",
-                logger=LOGGER,
-            )
-        await safe_callback_answer(callback, logger=LOGGER)
-        return
-
-    keyboard = _build_byt_defer_keyboard(items)
-    await state.clear()
-    if callback.message:
-        edited = await safe_edit_message_text(
-            callback.message.bot,
-            chat_id=callback.message.chat.id,
-            message_id=callback.message.message_id,
-            text="ЧТО?",
-            reply_markup=keyboard,
-            logger=LOGGER,
-        )
-        if not edited:
-            await safe_answer(callback.message, "ЧТО?", reply_markup=keyboard, logger=LOGGER)
-    else:
-        await safe_send_message(
-            callback.bot,
-            chat_id=callback.from_user.id,
-            text="ЧТО?",
-            reply_markup=keyboard,
-            logger=LOGGER,
-        )
-    await safe_callback_answer(callback, logger=LOGGER)
-
-
-@router.callback_query(F.data.startswith("byt_defer_pick:"))
-async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> None:
-    """Start deferring selected BYT item."""
-
-    data = callback.data.split(":", maxsplit=1)
-    wish_id: int | None = None
-    if len(data) == 2:
-        try:
-            wish_id = int(data[1])
-        except ValueError:
-            wish_id = None
-    if wish_id is None:
-        state_data = await state.get_data()
-        try:
-            wish_id = (
-                int(state_data.get("defer_item_id"))
-                if state_data.get("defer_item_id") is not None
-                else None
-            )
-        except (TypeError, ValueError):
-            wish_id = None
-    if wish_id is None:
-        await safe_callback_answer(callback, "Ошибка: не найден item_id", show_alert=True, logger=LOGGER)
-        return
-
-    started = await _start_byt_defer_flow(callback, state, wish_id)
-    if not started:
-        await state.clear()
-
-
-@router.message(
-    BytDeferState.waiting_for_days,
-    F.text.in_(
-        {
-            "0",
-            "1",
-            "2",
-            "3",
-            "4",
-            "5",
-            "6",
-            "7",
-            "8",
-            "9",
-            "Очистить",
-            "✅ Газ",
-        }
-    ),
-)
-async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
-    """Handle calculator input for BYT defer days."""
-
-    data = await state.get_data()
-    current_sum = str(data.get("defer_days_str", "0"))
-    display_chat_id = data.get("defer_display_chat_id", message.chat.id)
-    display_message_id = data.get("defer_display_message_id")
-    db = get_db()
-
-    if message.text == "Очистить":
-        new_sum = "0"
-    elif message.text == "✅ Газ":
-        amount_str = current_sum.strip()
-        if not amount_str:
-            LOGGER.warning(
-                "BYT defer submit missing entered_days user_id=%s",
-                message.from_user.id if message.from_user else "unknown",
-            )
-            await message.answer("Нужно ввести число дней. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-        try:
-            days = int(amount_str)
-        except (TypeError, ValueError):
-            LOGGER.warning(
-                "BYT defer submit invalid days user_id=%s value=%s",
-                message.from_user.id if message.from_user else "unknown",
-                amount_str,
-            )
-            await message.answer("Нужно ввести число. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-
-        if days <= 0:
-            LOGGER.warning(
-                "BYT defer submit non-positive days user_id=%s value=%s",
-                message.from_user.id if message.from_user else "unknown",
-                days,
-            )
-            await message.answer("Нужно ввести число дней. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-
-        try:
-            settings_row = db.get_user_settings(message.from_user.id)
-        except Exception as exc:
-            LOGGER.error(
-                "Failed to load user settings for BYT defer user_id=%s",
-                message.from_user.id if message.from_user else "unknown",
-                exc_info=exc,
-            )
-            await message.answer("Ошибка БД")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-        max_days = int(settings_row.get("byt_defer_max_days", 365) or 365)
-        if days < 1 or days > max_days:
-            await message.answer(f"Количество дней должно быть от 1 до {max_days}.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-
-        raw_defer_item_id = data.get("defer_item_id")
-        try:
-            defer_item_id = int(raw_defer_item_id) if raw_defer_item_id is not None else None
-        except (TypeError, ValueError):
-            defer_item_id = None
-        if defer_item_id is None:
-            LOGGER.warning(
-                "BYT defer submit missing item_id user_id=%s",
-                message.from_user.id if message.from_user else "unknown",
-            )
-            await message.answer("Не выбран товар для отсрочки.")
-            await state.clear()
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-        reminder_message_id = data.get("reminder_message_id")
-        deferred_until = now_tz() + timedelta(days=days)
-
-        try:
-            db.set_wishlist_item_deferred_until(
-                message.from_user.id, defer_item_id, deferred_until.isoformat()
-            )
-        except Exception as exc:
-            LOGGER.error(
-                "Failed to set BYT defer days user_id=%s item_id=%s days=%s",
-                message.from_user.id if message.from_user else "unknown",
-                defer_item_id,
-                days,
-                exc_info=exc,
-            )
-            await message.answer("Ошибка БД")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-
-        LOGGER.info(
-            "BYT defer days submit user_id=%s item_id=%s days=%s",
-            message.from_user.id if message.from_user else "unknown",
-            defer_item_id,
-            days,
-        )
-
-        await state.clear()
-        await message.answer(
-            f"Отложено на {days} дн.", reply_markup=ReplyKeyboardRemove()
-        )
-
-        if reminder_message_id:
-            await _refresh_byt_reminder_message(
-                message.bot,
-                message.chat.id,
-                int(reminder_message_id),
-                message.from_user.id,
-            )
-
-        await safe_delete_message(
-            message.bot,
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            logger=LOGGER,
-        )
-        return
-    else:
-        if current_sum == "0":
-            new_sum = message.text
-        else:
-            new_sum = current_sum + message.text
-
-    new_display_message_id = display_message_id
-    new_display_chat_id = display_chat_id
-    if display_message_id:
-        edited = await safe_edit_message_text(
-            message.bot,
-            chat_id=display_chat_id,
-            message_id=int(display_message_id),
-            text=f": {new_sum}",
-            logger=LOGGER,
-        )
-        if not edited:
-            prompt = await message.answer(f": {new_sum}")
-            new_display_message_id = prompt.message_id
-            new_display_chat_id = message.chat.id
-    else:
-        prompt = await message.answer(f": {new_sum}")
-        new_display_message_id = prompt.message_id
-        new_display_chat_id = message.chat.id
-
-    await state.update_data(
-        defer_days_str=new_sum,
-        defer_display_message_id=new_display_message_id,
-        defer_display_chat_id=new_display_chat_id,
-    )
-
-    await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-
-
-@router.message(BytDeferState.waiting_for_days)
-async def handle_byt_defer_days_invalid(message: Message) -> None:
-    """Prompt to use calculator buttons for defer days."""
-
-    await message.answer("Используй кнопки калькулятора ниже.")
-
-
-===== Bot/keyboards/__init__.py =====
 
 
 
@@ -385,6 +27,7 @@ def income_calculator_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         one_time_keyboard=False,
     )
+
 
 
 ===== Bot/keyboards/household.py =====
@@ -432,6 +75,7 @@ def household_payments_inline_keyboard(
             InlineKeyboardButton(text="Назад", callback_data=f"hh_pay:back{suffix}")
         )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 
 ===== Bot/keyboards/main.py =====
@@ -546,6 +190,7 @@ def income_confirm_keyboard() -> InlineKeyboardMarkup:
 
     buttons = [[InlineKeyboardButton(text="✅ Получено", callback_data="income_confirm")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 
 ===== Bot/keyboards/settings.py =====
@@ -999,6 +644,7 @@ def settings_stub_inline_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[])
 
 
+
 ===== Bot/main.py =====
 
 """Entry point for finance bot."""
@@ -1153,9 +799,11 @@ if __name__ == "__main__":
     asyncio.run(main())
 
 
+
 ===== Bot/renderers/__init__.py =====
 
 """Renderer layer package."""
+
 
 
 ===== Bot/renderers/household.py =====
@@ -1224,9 +872,11 @@ def build_household_question_keyboard(
     )
 
 
+
 ===== Bot/services/__init__.py =====
 
 """Service layer package."""
+
 
 
 ===== Bot/services/household.py =====
@@ -1326,7 +976,9 @@ def update_flow_state(
     )
 
 
+
 ===== Bot/states/__init__.py =====
+
 
 
 
@@ -1367,6 +1019,7 @@ class IncomeSettingsState(StatesGroup):
     waiting_for_removal = State()
     waiting_for_percent_category = State()
     waiting_for_percent = State()
+
 
 
 ===== Bot/states/wishlist_states.py =====
@@ -1422,7 +1075,9 @@ class BytTimerState(StatesGroup):
     waiting_for_minute = State()
 
 
+
 ===== Bot/utils/__init__.py =====
+
 
 
 
@@ -1459,6 +1114,7 @@ def add_one_month(source: datetime) -> datetime:
     return source.replace(year=year, month=month, day=day)
 
 
+
 ===== Bot/utils/logging.py =====
 
 """Logging utilities."""
@@ -1476,6 +1132,7 @@ def init_logging() -> logging.Logger:
 
     setup_logging()
     return logging.getLogger(__name__)
+
 
 
 ===== Bot/utils/savings.py =====
@@ -1531,6 +1188,7 @@ def find_reached_goal(
         if goal and current >= goal:
             return category, data
     return None, None
+
 
 
 ===== Bot/utils/telegram_safe.py =====
@@ -1901,6 +1559,7 @@ async def safe_callback_answer(
             log.debug("Safe callback answer unexpected error details", exc_info=True)
 
 
+
 ===== Bot/utils/text_sanitizer.py =====
 
 """Text sanitizers for user-facing labels."""
@@ -1925,6 +1584,7 @@ def sanitize_income_title(text: str) -> str:
     value = re.sub(r"\(\s*\)", "", value)
     value = re.sub(r"\s{2,}", " ", value)
     return value.strip(" -—:\t\n")
+
 
 
 ===== Bot/utils/ui_cleanup.py =====
@@ -1990,10 +1650,16 @@ async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: 
 
 async def ui_safe_delete_message(
     bot: Bot,
+    state: FSMContext | None,
     chat_id: int,
     message_id: int,
     log_context: str | None = None,
 ) -> bool:
+    if state is not None:
+        welcome_id = await ui_get_welcome_id(state)
+        if welcome_id is not None and int(message_id) == int(welcome_id):
+            LOGGER.info("SKIP_DELETE_WELCOME message_id=%s", message_id)
+            return False
     return await safe_delete_message(
         bot,
         chat_id=chat_id,
@@ -2050,6 +1716,13 @@ async def ui_set_welcome_message(
     return 0
 
 
+async def ui_get_protected_ids(state: FSMContext) -> set[int]:
+    welcome_id = await ui_get_welcome_id(state)
+    if welcome_id is None:
+        return set()
+    return {int(welcome_id)}
+
+
 async def ui_set_settings_mode_message(
     state: FSMContext, chat_id: int, message_id: int
 ) -> None:
@@ -2075,3 +1748,331 @@ async def ui_cleanup_to_context(
     chat_id: int,
     context_name: str,
     keep_ids: List[int] | None = None,
+) -> None:
+    data = await state.get_data()
+    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    welcome_id = data.get("ui_welcome_message_id")
+    protected_ids = await ui_get_protected_ids(state)
+    extra_protected_ids = {
+        int(item)
+        for item in (data.get("ui_protected_message_ids") or [])
+        if item is not None
+    }
+    protected_ids.update(extra_protected_ids)
+    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
+    delete_ids = []
+    kept_ids = set()
+    for mid in tracked_ids:
+        mid_int = int(mid)
+        if mid_int in protected_ids:
+            kept_ids.add(mid_int)
+            continue
+        if mid_int in keep_id_set:
+            kept_ids.add(mid_int)
+            continue
+        delete_ids.append(mid_int)
+    deleted_count = 0
+    for message_id in delete_ids:
+        deleted = await ui_safe_delete_message(
+            bot,
+            state,
+            chat_id=chat_id,
+            message_id=message_id,
+            log_context=f"context={context_name}",
+        )
+        if deleted:
+            deleted_count += 1
+
+    LOGGER.info(
+        "UI_CLEANUP context=%s deleted=%s kept=%s welcome_id=%s",
+        context_name,
+        deleted_count,
+        len(kept_ids),
+        welcome_id,
+    )
+    await state.update_data(
+        ui_tracked_message_ids=list(
+            {
+                int(item)
+                for item in (keep_ids or [])
+                if item is not None and int(item) not in protected_ids
+            }
+        ),
+    )
+
+
+async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
+    data = await state.get_data()
+    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
+    if chat_id is None:
+        return
+    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
+
+
+async def ui_render_screen(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> int:
+    data = await state.get_data()
+    screen_id = data.get("ui_screen_message_id")
+    if screen_id is not None and not isinstance(
+        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
+    ):
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(screen_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            logger=LOGGER,
+        )
+        if edited:
+            await ui_set_screen_message(state, chat_id, int(screen_id))
+            return int(screen_id)
+    sent = await safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
+    )
+    if sent:
+        await ui_set_screen_message(state, chat_id, sent.message_id)
+        return int(sent.message_id)
+    return int(screen_id or 0)
+
+
+
+===== Bot/utils/ui_flow.py =====
+
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
+
+from Bot.utils.telegram_safe import safe_delete_message
+from Bot.utils.ui_cleanup import ui_get_protected_ids
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_get(state: FSMContext) -> dict[str, Any]:
+    data = await state.get_data()
+    return {
+        "greeting_id": data.get("ui_welcome_message_id"),
+        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
+    }
+
+
+async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
+    ui = await ui_get(state)
+    if ui.get("greeting_id") is not None:
+        return
+    # greeting_id не удаляем никогда
+    await state.update_data(ui_welcome_message_id=int(message_id))
+
+
+async def ui_track(
+    state: FSMContext, message_id: int, kind: str, screen: str | None
+) -> None:
+    ui = await ui_get(state)
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    tracked.append(int(message_id))
+    if len(tracked) > 300:
+        tracked = tracked[-300:]
+    await state.update_data(ui_tracked_message_ids=tracked)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, screen: str, message_id: int
+) -> None:
+    await ui_track(state, message_id, kind="ui", screen=screen)
+
+
+async def ui_cleanup_for_transition(
+    bot: Bot, state: FSMContext, chat_id: int, keep_greeting: bool = True
+) -> None:
+    ui = await ui_get(state)
+    greeting_id = ui.get("greeting_id") if keep_greeting else None
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    data = await state.get_data()
+    protected_ids = await ui_get_protected_ids(state)
+    extra_protected_ids = {
+        int(item)
+        for item in (data.get("ui_protected_message_ids") or [])
+        if item is not None
+    }
+    protected_ids.update(extra_protected_ids)
+    ids = [int(item) for item in tracked]
+    for message_id in ids:
+        if greeting_id and message_id == greeting_id:
+            continue
+        if message_id in protected_ids:
+            continue
+        await safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            logger=LOGGER,
+        )
+    await state.update_data(ui_tracked_message_ids=[])
+
+
+async def ui_transition(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    new_screen: str,
+    send_screen: Callable[[], Awaitable[Message]],
+) -> Message:
+    await ui_cleanup_for_transition(bot, state, chat_id, keep_greeting=True)
+    sent = await send_screen()
+    await ui_set_screen_message(state, new_screen, sent.message_id)
+    return sent
+
+
+
+===== __init__.py =====
+
+
+
+
+===== docs/AUDIT_REPORT.md =====
+
+# Audit Report (finance_bot v4)
+
+## Found issues
+- UI cleanup tracked multiple message lists and could retain welcome in tracked ids.
+- Welcome message id was not persisted and could be duplicated after state loss.
+- Direct Telegram edit/delete calls could fail on network errors or invalid reply keyboards.
+- Income category titles contained bank/service suffixes and older rows were not sanitized.
+- Database access used direct `FinanceDatabase()` construction across handlers.
+
+## Fixes applied
+- Unified UI tracking to `ui_tracked_message_ids` and excluded welcome from tracked ids after cleanup.
+- Added persistent welcome id storage in `ui_pins` table and reused it on startup.
+- Implemented safe Telegram operations with retries and guarded edits against reply keyboards.
+- Added income title sanitizer and migration to update existing stored titles.
+- Introduced `get_db()` for a shared database instance and updated handlers.
+
+## Backlog / Follow-up
+- Expand safe Telegram wrapper adoption in remaining handlers and services.
+- Add safe reply markup editing helper if required by additional flows.
+
+
+
+===== docs/RUNBOOK.md =====
+
+# Runbook
+
+## Запуск бота
+```bash
+python Bot/main.py
+```
+
+## Прогон тестов
+```bash
+pytest
+```
+
+
+
+===== finance_bot.log =====
+
+[2025-11-25 14:56:00,395] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2025-11-25 14:56:00,396] [INFO] [__main__] Starting bot polling
+[2025-11-25 14:56:00,397] [INFO] [aiogram.dispatcher] Start polling
+[2025-11-25 14:56:00,637] [INFO] [aiogram.dispatcher] Run polling for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
+[2025-11-25 14:56:00,876] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:56:00,877] [INFO] [aiogram.event] Update id=131879015 is handled. Duration 180 ms by bot id=8440100118
+[2025-11-25 14:56:00,897] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:56:00,898] [INFO] [aiogram.event] Update id=131879016 is handled. Duration 199 ms by bot id=8440100118
+[2025-11-25 14:56:00,919] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:56:00,919] [INFO] [aiogram.event] Update id=131879017 is handled. Duration 219 ms by bot id=8440100118
+[2025-11-25 14:56:00,937] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:56:00,937] [INFO] [aiogram.event] Update id=131879018 is handled. Duration 236 ms by bot id=8440100118
+[2025-11-25 14:57:27,080] [INFO] [handlers.start] User 838347504 started bot
+[2025-11-25 14:57:27,081] [INFO] [aiogram.event] Update id=131879019 is handled. Duration 84 ms by bot id=8440100118
+[2025-11-25 14:57:56,254] [INFO] [handlers.finances] User 838347504 started income calculation
+[2025-11-25 14:57:56,255] [INFO] [aiogram.event] Update id=131879020 is handled. Duration 95 ms by bot id=8440100118
+[2025-11-25 14:58:00,888] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 14:58:00,888] [INFO] [aiogram.event] Update id=131879021 is handled. Duration 105 ms by bot id=8440100118
+[2025-11-25 14:58:02,102] [INFO] [handlers.finances] User 838347504 started income calculation
+[2025-11-25 14:58:02,102] [INFO] [aiogram.event] Update id=131879022 is handled. Duration 79 ms by bot id=8440100118
+[2025-11-25 14:58:10,082] [INFO] [aiogram.event] Update id=131879023 is handled. Duration 103 ms by bot id=8440100118
+[2025-11-25 14:58:14,297] [INFO] [database.crud] Updated saving for user 838347504 category долги by 3000.0
+[2025-11-25 14:58:14,480] [INFO] [aiogram.event] Update id=131879024 is handled. Duration 213 ms by bot id=8440100118
+[2025-11-25 14:58:22,837] [INFO] [database.crud] Updated saving for user 838347504 category быт by 2000.0
+[2025-11-25 14:58:23,038] [INFO] [aiogram.event] Update id=131879025 is handled. Duration 228 ms by bot id=8440100118
+[2025-11-25 14:58:26,322] [INFO] [database.crud] Updated saving for user 838347504 category инвестиции by 2000.0
+[2025-11-25 14:58:26,464] [INFO] [aiogram.event] Update id=131879026 is handled. Duration 161 ms by bot id=8440100118
+[2025-11-25 14:58:33,379] [INFO] [database.crud] Updated saving for user 838347504 category сбережения by 2000.0
+[2025-11-25 14:58:33,586] [INFO] [aiogram.event] Update id=131879027 is handled. Duration 238 ms by bot id=8440100118
+[2025-11-25 14:58:36,150] [INFO] [database.crud] Updated saving for user 838347504 category спонтанные траты by 1000.0
+[2025-11-25 14:58:36,237] [INFO] [database.crud] Fetched savings for user 838347504
+[2025-11-25 14:58:36,314] [INFO] [aiogram.event] Update id=131879028 is handled. Duration 180 ms by bot id=8440100118
+[2025-11-25 14:58:53,690] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 14:58:53,690] [INFO] [aiogram.event] Update id=131879029 is handled. Duration 161 ms by bot id=8440100118
+[2025-11-25 14:58:57,875] [INFO] [database.crud] Fetched purchases for user 838347504
+[2025-11-25 14:58:57,947] [INFO] [aiogram.event] Update id=131879030 is handled. Duration 75 ms by bot id=8440100118
+[2025-11-25 14:58:59,960] [INFO] [aiogram.event] Update id=131879031 is handled. Duration 69 ms by bot id=8440100118
+[2025-11-25 14:59:02,045] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:02,117] [INFO] [aiogram.event] Update id=131879032 is handled. Duration 73 ms by bot id=8440100118
+[2025-11-25 14:59:08,043] [INFO] [handlers.start] User 838347504 returned to main menu
+[2025-11-25 14:59:08,044] [INFO] [aiogram.event] Update id=131879033 is handled. Duration 70 ms by bot id=8440100118
+[2025-11-25 14:59:10,023] [INFO] [handlers.wishlist] User 838347504 opened wishlist
+[2025-11-25 14:59:10,023] [INFO] [aiogram.event] Update id=131879034 is handled. Duration 160 ms by bot id=8440100118
+[2025-11-25 14:59:14,674] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:14,749] [INFO] [aiogram.event] Update id=131879035 is handled. Duration 75 ms by bot id=8440100118
+[2025-11-25 14:59:17,760] [INFO] [database.crud] Fetched wishes for user 838347504
+[2025-11-25 14:59:17,829] [INFO] [aiogram.event] Update id=131879036 is not handled. Duration 69 ms by bot id=8440100118
+[2025-11-25 14:59:17,830] [ERROR] [aiogram.event] Cause exception while process update id=131879036 by bot id=8440100118
+TelegramBadRequest: Telegram server says - Bad Request: message is not modified: specified new message content and reply markup are exactly the same as a current content and reply markup of the message
+Traceback (most recent call last):
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 309, in _process_update
+    response = await self.feed_update(bot, update, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 158, in feed_update
+    response = await self.update.wrap_outer_middleware(
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<7 lines>...
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\error.py", line 25, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\middlewares\user_context.py", line 56, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\fsm\middleware.py", line 42, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\telegram.py", line 121, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\event\handler.py", line 43, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\dispatcher.py", line 276, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 146, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 141, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        observer=observer, update_type=update_type, event=telegram_event, **data
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\admin\AppData\Local\Programs\Python\Python313\Lib\site-packages\aiogram\dispatcher\router.py", line 174, in _propagate_event
+    response = await router.propagate_event(update_type=update_type, event=event, **kwargs)

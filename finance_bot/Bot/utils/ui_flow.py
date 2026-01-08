@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from Bot.utils.telegram_safe import safe_delete_message
+from Bot.utils.ui_cleanup import ui_get_protected_ids
 LOGGER = logging.getLogger(__name__)
 
 
@@ -49,9 +50,19 @@ async def ui_cleanup_for_transition(
     ui = await ui_get(state)
     greeting_id = ui.get("greeting_id") if keep_greeting else None
     tracked: list[int] = list(ui.get("tracked_ids") or [])
+    data = await state.get_data()
+    protected_ids = await ui_get_protected_ids(state)
+    extra_protected_ids = {
+        int(item)
+        for item in (data.get("ui_protected_message_ids") or [])
+        if item is not None
+    }
+    protected_ids.update(extra_protected_ids)
     ids = [int(item) for item in tracked]
     for message_id in ids:
         if greeting_id and message_id == greeting_id:
+            continue
+        if message_id in protected_ids:
             continue
         await safe_delete_message(
             bot,

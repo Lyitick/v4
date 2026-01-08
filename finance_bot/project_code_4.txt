@@ -1,366 +1,3 @@
-    choice = (message.text or "").strip()
-    if choice == "⬅ Назад":
-        await state.set_state(None)
-        await _render_previous_screen_or_exit(message, state)
-        return
-
-    mapping: dict[str, int] = data.get("bt_delete_map") or {}
-    timer_id = mapping.get(choice)
-    if not timer_id:
-        await render_settings_screen(
-            "bt:del_time_menu",
-            message=message,
-            state=state,
-            error_message="Выбери время из списка.",
-            force_new=True,
-        )
-        return
-
-    db = get_db()
-    times = db.list_active_byt_timer_times(message.from_user.id)
-    if len(times) <= 1:
-        await state.set_state(None)
-        await _render_byt_timer_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=message.from_user.id,
-            error_message="Нельзя удалить последнее время.",
-        )
-        return
-
-    db.deactivate_byt_timer_time(message.from_user.id, timer_id)
-    await state.set_state(None)
-    previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
-    await render_settings_screen(previous_screen, message=message, state=state)
-
-
-@router.message(BytTimerState.waiting_for_time_add)
-async def byt_timer_add_time_value(message: Message, state: FSMContext) -> None:
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    text = (message.text or "").strip()
-    parsed = _parse_time_text(text)
-    if not parsed:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Нужно ввести время в формате ЧЧ:ММ.",
-            reply_markup=None,
-        )
-        return
-
-    hour, minute = parsed
-    db = get_db()
-    db.add_byt_timer_time(message.from_user.id, hour, minute)
-    await state.set_state(None)
-    previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
-    await render_settings_screen(previous_screen, message=message, state=state)
-
-@router.callback_query(F.data == "inc:add")
-async def category_add(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    await _push_current_screen(state, "inc:add_category")
-    await state.set_state(IncomeSettingsState.waiting_for_category_title)
-    await state.update_data(category_scope="income")
-    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
-    await _edit_settings_page(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="Введи название новой категории",
-        reply_markup=None,
-    )
-
-
-@router.callback_query(F.data == "wl:add_cat")
-async def wishlist_category_add(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    await _push_current_screen(state, "wl:add_category")
-    await state.set_state(WishlistSettingsState.waiting_for_category_title)
-    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
-    await _edit_settings_page(
-        bot=callback.message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="Введи название категории",
-        reply_markup=None,
-    )
-
-
-@router.message(IncomeSettingsState.waiting_for_category_title)
-async def income_add_category_title(message: Message, state: FSMContext) -> None:
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    title = (message.text or "").strip()
-    if not title or len(title) > 32:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Название должно быть от 1 до 32 символов.",
-            reply_markup=None,
-        )
-        return
-
-    await state.update_data(new_income_category_title=title, new_income_percent_str="0")
-    await state.set_state(IncomeSettingsState.waiting_for_new_category_percent)
-    chat_id, message_id = await _get_settings_message_ids(state, message)
-    await _edit_settings_page(
-        bot=message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="Процент для категории?",
-        reply_markup=None,
-    )
-    prompt = await _send_and_register(
-        message=message,
-        state=state,
-        text=": 0",
-        reply_markup=income_calculator_keyboard(),
-    )
-    await state.update_data(
-        new_income_display_chat_id=prompt.chat.id,
-        new_income_display_message_id=prompt.message_id,
-    )
-
-
-@router.message(WishlistSettingsState.waiting_for_category_title)
-async def wishlist_add_category_title(message: Message, state: FSMContext) -> None:
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    title = (message.text or "").strip()
-    if not title or len(title) > 32:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Название должно быть от 1 до 32 символов.",
-            reply_markup=None,
-        )
-        return
-
-    db = get_db()
-    db.create_wishlist_category(message.from_user.id, title)
-    await state.set_state(None)
-    previous_screen = await _pop_previous_screen(state) or "st:wishlist"
-    await render_settings_screen(previous_screen, message=message, state=state)
-
-
-@router.message(
-    IncomeSettingsState.waiting_for_new_category_percent, F.text.in_(PERCENT_INPUT_BUTTONS)
-)
-async def income_new_category_percent(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    text = (message.text or "").strip()
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    if text not in PERCENT_INPUT_BUTTONS:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Используй кнопки калькулятора.",
-            reply_markup=None,
-        )
-        return
-
-    percent_str = data.get("new_income_percent_str", "0")
-    display_chat_id = data.get("new_income_display_chat_id", message.chat.id)
-    display_message_id = data.get("new_income_display_message_id")
-
-    if text in PERCENT_DIGITS:
-        percent_str = percent_str.lstrip("0") if percent_str != "0" else ""
-        percent_str = f"{percent_str}{text}" or "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=f": {percent_str}",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=f": {percent_str}",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            new_income_percent_str=percent_str,
-            new_income_display_chat_id=display_chat_id,
-            new_income_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "Очистить":
-        percent_str = "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=": 0",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=": 0",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            new_income_percent_str=percent_str,
-            new_income_display_chat_id=display_chat_id,
-            new_income_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "✅ Газ":
-        error_message = None
-        try:
-            percent = int(percent_str or "0")
-        except ValueError:
-            error_message = "Процент должен быть числом."
-            percent = 0
-        else:
-            if percent < 0 or percent > 100:
-                error_message = "Процент должен быть в диапазоне 0–100."
-
-        title = (data.get("new_income_category_title") or "").strip()
-        if not title:
-            error_message = error_message or "Название категории не задано."
-
-        if error_message is None:
-            db = get_db()
-            category_id = db.create_income_category(message.from_user.id, title)
-            if category_id is not None:
-                db.update_income_category_percent(
-                    message.from_user.id, category_id, percent
-                )
-
-        await _cleanup_input_ui(
-            message.bot,
-            data,
-            display_chat_key="new_income_display_chat_id",
-            display_message_key="new_income_display_message_id",
-        )
-        await _remove_calculator_keyboard(message)
-        await state.set_state(None)
-        previous_screen = await _pop_previous_screen(state) or "st:income"
-        await render_settings_screen(
-            previous_screen, message=message, state=state, error_message=error_message
-        )
-
-
-@router.message(HouseholdSettingsState.waiting_for_title)
-async def household_payment_title(message: Message, state: FSMContext) -> None:
-    await _register_user_message(state, message)
-    title = (message.text or "").strip()
-    if not title:
-        await _send_and_register(
-            message=message,
-            state=state,
-            text="Нужно ввести название платежа.",
-        )
-        return
-
-    await state.update_data(hp_new_title=title, hp_amount_str="0")
-    await state.set_state(HouseholdSettingsState.waiting_for_amount)
-    chat_id, message_id = await _get_settings_message_ids(state, message)
-    await _edit_settings_page(
-        bot=message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text=f'Сколько платить за "{title}"?',
-        reply_markup=None,
-    )
-    prompt = await _send_and_register(
-        message=message,
-        state=state,
-        text=": 0",
-        reply_markup=income_calculator_keyboard(),
-    )
-    await state.update_data(
-        hp_amount_display_chat_id=prompt.chat.id,
-        hp_amount_display_message_id=prompt.message_id,
-    )
-
-
-@router.message(
-    HouseholdSettingsState.waiting_for_amount, F.text.in_(PERCENT_INPUT_BUTTONS)
-)
-async def household_payment_amount(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    text = (message.text or "").strip()
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    amount_str = data.get("hp_amount_str", "0")
-    display_chat_id = data.get("hp_amount_display_chat_id", message.chat.id)
-    display_message_id = data.get("hp_amount_display_message_id")
-
-    if text in PERCENT_DIGITS:
-        amount_str = amount_str.lstrip("0") if amount_str != "0" else ""
-        amount_str = f"{amount_str}{text}" or "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=f": {amount_str}",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=f": {amount_str}",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            hp_amount_str=amount_str,
-            hp_amount_display_chat_id=display_chat_id,
-            hp_amount_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "Очистить":
-        amount_str = "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=": 0",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=": 0",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
             hp_amount_str=amount_str,
             hp_amount_display_chat_id=display_chat_id,
             hp_amount_display_message_id=display_message_id,
@@ -1216,6 +853,7 @@ async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
         await render_settings_screen(previous_screen, message=message, state=state)
 
 
+
 ===== Bot/handlers/start.py =====
 
 """Handlers for start and cancel commands."""
@@ -1276,6 +914,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
 
     await ui_safe_delete_message(
         message.bot,
+        state,
         chat_id=message.chat.id,
         message_id=message.message_id,
         log_context="cmd_start",
@@ -1316,6 +955,7 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
 
     deleted = await ui_safe_delete_message(
         message.bot,
+        state,
         chat_id=message.chat.id,
         message_id=message.message_id,
         log_context="back_to_main_user_msg",
@@ -1344,6 +984,7 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
         message.from_user.id if message.from_user else "unknown",
         await state.get_state(),
     )
+
 
 
 ===== Bot/handlers/wishlist.py =====
@@ -1998,3 +1639,362 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
     data = callback.data.split(":", maxsplit=1)
     if len(data) != 2:
         await safe_callback_answer(callback, "Некорректный формат.", show_alert=True, logger=LOGGER)
+        return
+
+    try:
+        item_id = int(data[1])
+    except ValueError:
+        await safe_callback_answer(callback, "Некорректный элемент.", show_alert=True, logger=LOGGER)
+        return
+
+    db = get_db()
+    wish = db.get_wish(item_id)
+    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+        await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
+        return
+
+    price = float(wish.get("price", 0) or 0)
+    purchase_time = now_tz()
+    db.decrease_savings(callback.from_user.id, "быт", price)
+    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
+    db.add_purchase(
+        callback.from_user.id,
+        wish.get("name", ""),
+        price,
+        humanize_wishlist_category(wish.get("category", "")),
+        purchased_at=purchase_time,
+    )
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    if callback.message:
+        await _refresh_byt_reminder_message(
+            callback.bot,
+            callback.message.chat.id,
+            callback.message.message_id,
+            callback.from_user.id,
+        )
+
+
+@router.callback_query(F.data.startswith("byt_defer_menu"))
+async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show BYT items to choose which to defer."""
+
+    wish_id: int | None = None
+    if callback.data and ":" in callback.data:
+        parts = callback.data.split(":", maxsplit=1)
+        if len(parts) == 2:
+            try:
+                wish_id = int(parts[1])
+            except ValueError:
+                wish_id = None
+    if wish_id is None:
+        data = await state.get_data()
+        stored_id = data.get("current_byt_item_id")
+        try:
+            wish_id = int(stored_id) if stored_id is not None else None
+        except (TypeError, ValueError):
+            wish_id = None
+
+    db = get_db()
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
+        return
+    now_dt = now_tz()
+    items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
+    if wish_id is not None:
+        await state.update_data(current_byt_item_id=wish_id)
+        started = await _start_byt_defer_flow(callback, state, wish_id)
+        if not started:
+            await state.clear()
+        return
+    if not items:
+        await state.clear()
+        if callback.message:
+            await safe_answer(callback.message, "Нет бытовых покупок для отложки.", logger=LOGGER)
+        else:
+            await safe_send_message(
+                callback.bot,
+                chat_id=callback.from_user.id,
+                text="Нет бытовых покупок для отложки.",
+                logger=LOGGER,
+            )
+        await safe_callback_answer(callback, logger=LOGGER)
+        return
+
+    keyboard = _build_byt_defer_keyboard(items)
+    await state.clear()
+    if callback.message:
+        edited = await safe_edit_message_text(
+            callback.message.bot,
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            text="ЧТО?",
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+        if not edited:
+            await safe_answer(callback.message, "ЧТО?", reply_markup=keyboard, logger=LOGGER)
+    else:
+        await safe_send_message(
+            callback.bot,
+            chat_id=callback.from_user.id,
+            text="ЧТО?",
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+    await safe_callback_answer(callback, logger=LOGGER)
+
+
+@router.callback_query(F.data.startswith("byt_defer_pick:"))
+async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> None:
+    """Start deferring selected BYT item."""
+
+    data = callback.data.split(":", maxsplit=1)
+    wish_id: int | None = None
+    if len(data) == 2:
+        try:
+            wish_id = int(data[1])
+        except ValueError:
+            wish_id = None
+    if wish_id is None:
+        state_data = await state.get_data()
+        try:
+            wish_id = (
+                int(state_data.get("defer_item_id"))
+                if state_data.get("defer_item_id") is not None
+                else None
+            )
+        except (TypeError, ValueError):
+            wish_id = None
+    if wish_id is None:
+        await safe_callback_answer(callback, "Ошибка: не найден item_id", show_alert=True, logger=LOGGER)
+        return
+
+    started = await _start_byt_defer_flow(callback, state, wish_id)
+    if not started:
+        await state.clear()
+
+
+@router.message(
+    BytDeferState.waiting_for_days,
+    F.text.in_(
+        {
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "Очистить",
+            "✅ Газ",
+        }
+    ),
+)
+async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
+    """Handle calculator input for BYT defer days."""
+
+    data = await state.get_data()
+    current_sum = str(data.get("defer_days_str", "0"))
+    display_chat_id = data.get("defer_display_chat_id", message.chat.id)
+    display_message_id = data.get("defer_display_message_id")
+    db = get_db()
+
+    if message.text == "Очистить":
+        new_sum = "0"
+    elif message.text == "✅ Газ":
+        amount_str = current_sum.strip()
+        if not amount_str:
+            LOGGER.warning(
+                "BYT defer submit missing entered_days user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Нужно ввести число дней. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+        try:
+            days = int(amount_str)
+        except (TypeError, ValueError):
+            LOGGER.warning(
+                "BYT defer submit invalid days user_id=%s value=%s",
+                message.from_user.id if message.from_user else "unknown",
+                amount_str,
+            )
+            await message.answer("Нужно ввести число. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        if days <= 0:
+            LOGGER.warning(
+                "BYT defer submit non-positive days user_id=%s value=%s",
+                message.from_user.id if message.from_user else "unknown",
+                days,
+            )
+            await message.answer("Нужно ввести число дней. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        try:
+            settings_row = db.get_user_settings(message.from_user.id)
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to load user settings for BYT defer user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+                exc_info=exc,
+            )
+            await message.answer("Ошибка БД")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+        max_days = int(settings_row.get("byt_defer_max_days", 365) or 365)
+        if days < 1 or days > max_days:
+            await message.answer(f"Количество дней должно быть от 1 до {max_days}.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        raw_defer_item_id = data.get("defer_item_id")
+        try:
+            defer_item_id = int(raw_defer_item_id) if raw_defer_item_id is not None else None
+        except (TypeError, ValueError):
+            defer_item_id = None
+        if defer_item_id is None:
+            LOGGER.warning(
+                "BYT defer submit missing item_id user_id=%s",
+                message.from_user.id if message.from_user else "unknown",
+            )
+            await message.answer("Не выбран товар для отсрочки.")
+            await state.clear()
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+        reminder_message_id = data.get("reminder_message_id")
+        deferred_until = now_tz() + timedelta(days=days)
+
+        try:
+            db.set_wishlist_item_deferred_until(
+                message.from_user.id, defer_item_id, deferred_until.isoformat()
+            )
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to set BYT defer days user_id=%s item_id=%s days=%s",
+                message.from_user.id if message.from_user else "unknown",
+                defer_item_id,
+                days,
+                exc_info=exc,
+            )
+            await message.answer("Ошибка БД")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        LOGGER.info(
+            "BYT defer days submit user_id=%s item_id=%s days=%s",
+            message.from_user.id if message.from_user else "unknown",
+            defer_item_id,
+            days,
+        )
+
+        await state.clear()
+        await message.answer(
+            f"Отложено на {days} дн.", reply_markup=ReplyKeyboardRemove()
+        )
+
+        if reminder_message_id:
+            await _refresh_byt_reminder_message(
+                message.bot,
+                message.chat.id,
+                int(reminder_message_id),
+                message.from_user.id,
+            )
+
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
+
+    new_display_message_id = display_message_id
+    new_display_chat_id = display_chat_id
+    if display_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=display_chat_id,
+            message_id=int(display_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+        if not edited:
+            prompt = await message.answer(f": {new_sum}")
+            new_display_message_id = prompt.message_id
+            new_display_chat_id = message.chat.id
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        new_display_message_id = prompt.message_id
+        new_display_chat_id = message.chat.id
+
+    await state.update_data(
+        defer_days_str=new_sum,
+        defer_display_message_id=new_display_message_id,
+        defer_display_chat_id=new_display_chat_id,
+    )
+
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+@router.message(BytDeferState.waiting_for_days)
+async def handle_byt_defer_days_invalid(message: Message) -> None:
+    """Prompt to use calculator buttons for defer days."""
+
+    await message.answer("Используй кнопки калькулятора ниже.")
+
+
+
+===== Bot/keyboards/__init__.py =====

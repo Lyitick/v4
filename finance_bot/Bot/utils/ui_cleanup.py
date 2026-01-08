@@ -59,10 +59,16 @@ async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: 
 
 async def ui_safe_delete_message(
     bot: Bot,
+    state: FSMContext | None,
     chat_id: int,
     message_id: int,
     log_context: str | None = None,
 ) -> bool:
+    if state is not None:
+        welcome_id = await ui_get_welcome_id(state)
+        if welcome_id is not None and int(message_id) == int(welcome_id):
+            LOGGER.info("SKIP_DELETE_WELCOME message_id=%s", message_id)
+            return False
     return await safe_delete_message(
         bot,
         chat_id=chat_id,
@@ -119,6 +125,13 @@ async def ui_set_welcome_message(
     return 0
 
 
+async def ui_get_protected_ids(state: FSMContext) -> set[int]:
+    welcome_id = await ui_get_welcome_id(state)
+    if welcome_id is None:
+        return set()
+    return {int(welcome_id)}
+
+
 async def ui_set_settings_mode_message(
     state: FSMContext, chat_id: int, message_id: int
 ) -> None:
@@ -146,27 +159,32 @@ async def ui_cleanup_to_context(
     keep_ids: List[int] | None = None,
 ) -> None:
     data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    welcome_id = data.get("ui_welcome_message_id")
+    protected_ids = await ui_get_protected_ids(state)
+    extra_protected_ids = {
+        int(item)
+        for item in (data.get("ui_protected_message_ids") or [])
+        if item is not None
+    }
+    protected_ids.update(extra_protected_ids)
     keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
-    if welcome_id is not None:
-        keep_id_set.add(int(welcome_id))
-    for protected_id in protected_ids:
-        keep_id_set.add(int(protected_id))
     delete_ids = []
+    kept_ids = set()
     for mid in tracked_ids:
         mid_int = int(mid)
-        if welcome_id is not None and mid_int == int(welcome_id):
-            LOGGER.info("SKIP_DELETE_WELCOME message_id=%s", mid_int)
+        if mid_int in protected_ids:
+            kept_ids.add(mid_int)
             continue
         if mid_int in keep_id_set:
+            kept_ids.add(mid_int)
             continue
         delete_ids.append(mid_int)
     deleted_count = 0
     for message_id in delete_ids:
         deleted = await ui_safe_delete_message(
             bot,
+            state,
             chat_id=chat_id,
             message_id=message_id,
             log_context=f"context={context_name}",
@@ -178,7 +196,7 @@ async def ui_cleanup_to_context(
         "UI_CLEANUP context=%s deleted=%s kept=%s welcome_id=%s",
         context_name,
         deleted_count,
-        len(keep_id_set),
+        len(kept_ids),
         welcome_id,
     )
     await state.update_data(
@@ -186,8 +204,7 @@ async def ui_cleanup_to_context(
             {
                 int(item)
                 for item in (keep_ids or [])
-                if item is not None
-                and (welcome_id is None or int(item) != int(welcome_id))
+                if item is not None and int(item) not in protected_ids
             }
         ),
     )

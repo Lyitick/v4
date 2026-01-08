@@ -574,6 +574,19 @@ class FinanceDatabase:
             )
             return []
 
+    def get_income_categories_map(self, user_id: int) -> Dict[str, str]:
+        """Return mapping of income category code to title."""
+
+        categories = self.list_active_income_categories(user_id)
+        category_map: Dict[str, str] = {}
+        for item in categories:
+            code = str(item.get("code", "")).strip()
+            if not code:
+                continue
+            title = str(item.get("title", "")).strip()
+            category_map[code] = title
+        return category_map
+
     def ensure_expense_categories_seeded(self, user_id: int) -> None:
         """Seed default expense categories if user has none."""
 

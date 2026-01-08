@@ -371,7 +371,8 @@ async def _send_main_menu_summary(
 ) -> None:
     db = get_db()
     savings = db.get_user_savings(user_id)
-    summary = format_savings_summary(savings)
+    categories_map = db.get_income_categories_map(user_id)
+    summary = format_savings_summary(savings, categories_map)
     text = f"Текущие накопления:\n{summary}"
     menu = await build_main_menu_for_user(user_id)
     sent = await safe_send_message(bot, chat_id=chat_id, text=text, reply_markup=menu)

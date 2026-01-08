@@ -89,7 +89,8 @@ async def _send_main_menu_summary(
 ) -> None:
     db = get_db()
     savings = db.get_user_savings(user_id)
-    summary = format_savings_summary(savings)
+    categories_map = db.get_income_categories_map(user_id)
+    summary = format_savings_summary(savings, categories_map)
     menu = await build_main_menu_for_user(user_id)
     await ui_render_screen(
         bot,

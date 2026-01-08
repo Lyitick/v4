@@ -2,7 +2,18 @@
 from typing import Any, Dict, List, Tuple
 
 
-def format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
+def _fallback_humanize_category(category: str) -> str:
+    name = str(category)
+    if name.startswith("savings_"):
+        name = name[len("savings_") :]
+    name = name.replace("_", " ").strip()
+    return name or str(category)
+
+
+def format_savings_summary(
+    savings: Dict[str, Dict[str, Any]],
+    categories_map: Dict[str, str] | None = None,
+) -> str:
     """Format savings summary for user message."""
 
     if not savings:
@@ -10,10 +21,15 @@ def format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
 
     lines: List[str] = []
     for category, data in savings.items():
+        display_name = None
+        if categories_map is not None:
+            display_name = categories_map.get(str(category))
+        if not display_name:
+            display_name = _fallback_humanize_category(str(category))
         current = data.get("current", 0)
         goal = data.get("goal", 0)
         purpose = data.get("purpose", "")
-        line = f"{category}: {current:.2f}"
+        line = f"{display_name}: {current:.2f}"
         if goal and goal > 0:
             progress = min(current / goal * 100, 100)
             extra = f" (цель {goal:.2f} для '{purpose}', прогресс {progress:.1f}%)"

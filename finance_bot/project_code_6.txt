@@ -4,13 +4,19 @@
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
     protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
     keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
+    if welcome_id is not None:
+        keep_id_set.add(int(welcome_id))
     for protected_id in protected_ids:
         keep_id_set.add(int(protected_id))
-    delete_ids = [
-        int(mid)
-        for mid in tracked_ids
-        if int(mid) not in keep_id_set and int(mid) != int(welcome_id or 0)
-    ]
+    delete_ids = []
+    for mid in tracked_ids:
+        mid_int = int(mid)
+        if welcome_id is not None and mid_int == int(welcome_id):
+            LOGGER.info("SKIP_DELETE_WELCOME message_id=%s", mid_int)
+            continue
+        if mid_int in keep_id_set:
+            continue
+        delete_ids.append(mid_int)
     deleted_count = 0
     for message_id in delete_ids:
         deleted = await ui_safe_delete_message(
@@ -23,14 +29,20 @@
             deleted_count += 1
 
     LOGGER.info(
-        "UI_CLEANUP context=%s deleted=%s kept=%s",
+        "UI_CLEANUP context=%s deleted=%s kept=%s welcome_id=%s",
         context_name,
         deleted_count,
         len(keep_id_set),
+        welcome_id,
     )
     await state.update_data(
         ui_tracked_message_ids=list(
-            {int(item) for item in (keep_ids or []) if item is not None}
+            {
+                int(item)
+                for item in (keep_ids or [])
+                if item is not None
+                and (welcome_id is None or int(item) != int(welcome_id))
+            }
         ),
     )
 

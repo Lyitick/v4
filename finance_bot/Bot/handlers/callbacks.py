@@ -269,7 +269,8 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
             logger=LOGGER,
         )
     savings = db.get_user_savings(callback.from_user.id)
-    summary = _format_savings_summary(savings)
+    categories_map = db.get_income_categories_map(callback.from_user.id)
+    summary = _format_savings_summary(savings, categories_map)
     if callback.message:
         await safe_answer(callback.message, f"Обновлённые накопления:\n{summary}", logger=LOGGER)
         await show_affordable_wishes(message=callback.message, user_id=callback.from_user.id, db=db)

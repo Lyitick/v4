@@ -29,6 +29,7 @@ from Bot.keyboards.main import (
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import BytDeferState, WishlistState
 from Bot.utils.datetime_utils import get_next_byt_run_dt, now_tz, resolve_deferred_until
+from Bot.utils.byt_utils import get_byt_source_category, wishlist_category_matches
 from Bot.utils.telegram_safe import (
     safe_answer,
     safe_callback_answer,
@@ -522,7 +523,17 @@ async def _refresh_byt_reminder_message(
     """Refresh reminder message with current BYT items."""
 
     db = get_db()
-    items = db.list_active_byt_items_for_reminder(user_id, now_tz())
+    _, category_title = get_byt_source_category(db, user_id)
+    if not category_title:
+        await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="Категория BYT не выбрана. Открой настройки и выбери категорию.",
+            logger=LOGGER,
+        )
+        return
+    items = db.list_active_byt_items_for_reminder(user_id, now_tz(), category_title)
     settings_row = db.get_user_settings(user_id)
     allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
     if not items:
@@ -543,7 +554,16 @@ async def _start_byt_defer_flow(
 
     db = get_db()
     wish = db.get_wish(wish_id)
-    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+    _, category_title = get_byt_source_category(db, callback.from_user.id)
+    if not category_title or not wish:
+        await safe_callback_answer(
+            callback,
+            "Категория BYT не выбрана. Открой настройки.",
+            show_alert=True,
+            logger=LOGGER,
+        )
+        return False
+    if not wishlist_category_matches(wish.get("category", ""), category_title):
         await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
         return False
 
@@ -611,7 +631,6 @@ async def run_byt_timer_check(
             microsecond=0,
         )
 
-    db.cleanup_old_byt_purchases(trigger_dt)
     user_ids = (
         [user_id]
         if user_id is not None
@@ -627,6 +646,13 @@ async def run_byt_timer_check(
         db.ensure_byt_timer_defaults(uid)
         settings_row = db.get_user_settings(uid)
         if not bool(settings_row.get("byt_reminders_enabled", 1)):
+            continue
+
+        source_category_id, source_category_title = get_byt_source_category(db, uid)
+        if not source_category_title:
+            LOGGER.info(
+                "BYT timer: no source category configured, skip (user_id=%s)", uid
+            )
             continue
 
         times = db.list_active_byt_timer_times(uid)
@@ -653,16 +679,30 @@ async def run_byt_timer_check(
         if not should_run:
             continue
 
-        items = db.list_active_byt_items_for_reminder(uid, trigger_dt)
+        db.cleanup_old_byt_purchases(uid, source_category_title, trigger_dt)
+        total_items = db.get_active_byt_wishes(uid, source_category_title)
+        items = db.list_active_byt_items_for_reminder(uid, trigger_dt, source_category_title)
         if not items:
-            LOGGER.info("BYT timer: no items, skip (user_id=%s)", uid)
+            LOGGER.info(
+                "BYT timer: source_category_id=%s items=%s due=%s deferred=%s user_id=%s",
+                source_category_id,
+                len(total_items),
+                0,
+                len(total_items),
+                uid,
+            )
             continue
 
         allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
         keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
         await bot.send_message(uid, "Что ты купил?", reply_markup=keyboard)
         LOGGER.info(
-            "BYT timer: sending checklist, items=%s, user_id=%s", len(items), uid
+            "BYT timer: source_category_id=%s items=%s due=%s deferred=%s user_id=%s",
+            source_category_id,
+            len(total_items),
+            len(items),
+            max(len(total_items) - len(items), 0),
+            uid,
         )
 
 
@@ -701,7 +741,16 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
 
     db = get_db()
     wish = db.get_wish(item_id)
-    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+    _, category_title = get_byt_source_category(db, callback.from_user.id)
+    if not category_title or not wish:
+        await safe_callback_answer(
+            callback,
+            "Категория BYT не выбрана. Открой настройки.",
+            show_alert=True,
+            logger=LOGGER,
+        )
+        return
+    if not wishlist_category_matches(wish.get("category", ""), category_title):
         await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
         return
 
@@ -753,7 +802,18 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
         await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
         return
     now_dt = now_tz()
-    items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
+    _, category_title = get_byt_source_category(db, callback.from_user.id)
+    if not category_title:
+        await safe_callback_answer(
+            callback,
+            "Категория BYT не выбрана. Открой настройки.",
+            show_alert=True,
+            logger=LOGGER,
+        )
+        return
+    items = db.list_active_byt_items_for_reminder(
+        callback.from_user.id, now_dt, category_title
+    )
     if wish_id is not None:
         await state.update_data(current_byt_item_id=wish_id)
         started = await _start_byt_defer_flow(callback, state, wish_id)
@@ -763,12 +823,16 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
     if not items:
         await state.clear()
         if callback.message:
-            await safe_answer(callback.message, "Нет бытовых покупок для отложки.", logger=LOGGER)
+            await safe_answer(
+                callback.message,
+                f"Нет напоминаний для отложки в категории {category_title}.",
+                logger=LOGGER,
+            )
         else:
             await safe_send_message(
                 callback.bot,
                 chat_id=callback.from_user.id,
-                text="Нет бытовых покупок для отложки.",
+                text=f"Нет напоминаний для отложки в категории {category_title}.",
                 logger=LOGGER,
             )
         await safe_callback_answer(callback, logger=LOGGER)
@@ -822,19 +886,37 @@ async def handle_byt_defer_next_menu(callback: CallbackQuery, state: FSMContext)
         return
 
     now_dt = now_tz()
-    items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
-    if not items:
+    _, category_title = get_byt_source_category(db, callback.from_user.id)
+    if not category_title:
         if callback.message:
             await safe_answer(
                 callback.message,
-                "Нет бытовых покупок для отложки.",
+                "Категория BYT не выбрана. Открой настройки.",
                 logger=LOGGER,
             )
         else:
             await safe_send_message(
                 callback.bot,
                 chat_id=callback.from_user.id,
-                text="Нет бытовых покупок для отложки.",
+                text="Категория BYT не выбрана. Открой настройки.",
+                logger=LOGGER,
+            )
+        return
+    items = db.list_active_byt_items_for_reminder(
+        callback.from_user.id, now_dt, category_title
+    )
+    if not items:
+        if callback.message:
+            await safe_answer(
+                callback.message,
+                f"Нет напоминаний для отложки в категории {category_title}.",
+                logger=LOGGER,
+            )
+        else:
+            await safe_send_message(
+                callback.bot,
+                chat_id=callback.from_user.id,
+                text=f"Нет напоминаний для отложки в категории {category_title}.",
                 logger=LOGGER,
             )
         return
@@ -882,7 +964,10 @@ async def handle_byt_defer_next(callback: CallbackQuery, state: FSMContext) -> N
 
     db = get_db()
     wish = db.get_wish(item_id)
-    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+    _, category_title = get_byt_source_category(db, callback.from_user.id)
+    if not category_title or not wish:
+        return
+    if not wishlist_category_matches(wish.get("category", ""), category_title):
         return
 
     settings_row = db.get_user_settings(callback.from_user.id)

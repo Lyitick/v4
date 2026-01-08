@@ -91,7 +91,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(F.text == "⏪ На главную")
+@router.message(F.text.in_({"⏪ На главную", "🏠 На главную"}))
 async def back_to_main(message: Message, state: FSMContext) -> None:
     """Return user to main menu."""
 

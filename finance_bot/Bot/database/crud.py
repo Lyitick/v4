@@ -337,7 +337,8 @@ class FinanceDatabase:
                 byt_defer_enabled INTEGER NOT NULL DEFAULT 1,
                 byt_defer_max_days INTEGER NOT NULL DEFAULT 365,
                 household_debit_category TEXT,
-                wishlist_debit_category_id TEXT
+                wishlist_debit_category_id TEXT,
+                byt_wishlist_category_id TEXT
             )
             """
         )
@@ -364,6 +365,9 @@ class FinanceDatabase:
         )
         self._add_column_if_missing(
             cursor, TABLES.user_settings, "wishlist_debit_category_id", "TEXT"
+        )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "byt_wishlist_category_id", "TEXT"
         )
         self._add_column_if_missing(cursor, TABLES.wishes, "debited_at", "TEXT")
         self.connection.commit()
@@ -641,9 +645,10 @@ class FinanceDatabase:
                     byt_defer_enabled,
                     byt_defer_max_days,
                     household_debit_category,
-                    wishlist_debit_category_id
+                    wishlist_debit_category_id,
+                    byt_wishlist_category_id
                 )
-                VALUES (?, 30, 1, 1, 365, NULL, NULL)
+                VALUES (?, 30, 1, 1, 365, NULL, NULL, NULL)
                 """,
                 (user_id,),
             )
@@ -1024,7 +1029,8 @@ class FinanceDatabase:
                     byt_defer_enabled,
                     byt_defer_max_days,
                     household_debit_category,
-                    wishlist_debit_category_id
+                    wishlist_debit_category_id,
+                    byt_wishlist_category_id
                 FROM {TABLES.user_settings}
                 WHERE user_id = ?
                 LIMIT 1
@@ -1129,6 +1135,81 @@ class FinanceDatabase:
                 user_id,
                 error,
             )
+
+    def get_byt_wishlist_category_id(self, user_id: int) -> int | None:
+        """Return BYT wishlist category id for user."""
+
+        try:
+            self.ensure_user_settings(user_id)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT byt_wishlist_category_id FROM {TABLES.user_settings} WHERE user_id = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            if row and row["byt_wishlist_category_id"] is not None:
+                try:
+                    return int(row["byt_wishlist_category_id"])
+                except (TypeError, ValueError):
+                    return None
+            return None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch BYT wishlist category for user %s: %s",
+                user_id,
+                error,
+            )
+            return None
+
+    def set_byt_wishlist_category_id(self, user_id: int, category_id: int | None) -> None:
+        """Set BYT wishlist category id for user."""
+
+        try:
+            self.ensure_user_settings(user_id)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.user_settings}
+                SET byt_wishlist_category_id = ?
+                WHERE user_id = ?
+                """,
+                (category_id, user_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update BYT wishlist category for user %s: %s",
+                user_id,
+                error,
+            )
+
+    def get_wishlist_category_by_title(
+        self, user_id: int, title: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return wishlist category by title (case-insensitive)."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, title, position, is_active, purchased_mode, purchased_days
+                FROM {TABLES.wishlist_categories}
+                WHERE user_id = ?
+                  AND is_active = 1
+                  AND lower(trim(title)) = lower(trim(?))
+                LIMIT 1
+                """,
+                (user_id, title),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch wishlist category by title for user %s: %s",
+                user_id,
+                error,
+            )
+            return None
 
     def resolve_household_debit_category(self, user_id: int) -> tuple[str, str]:
         """Resolve household debit category code and title with fallback."""
@@ -1559,19 +1640,27 @@ class FinanceDatabase:
             LOGGER.error("Failed to fetch wish %s: %s", wish_id, error)
             return None
 
-    def get_active_byt_wishes(self, user_id: int) -> List[Dict[str, Any]]:
-        """Return active BYT wishes for user."""
+    def get_active_byt_wishes(self, user_id: int, category_title: str) -> List[Dict[str, Any]]:
+        """Return active BYT wishes for user and category."""
 
+        if not category_title:
+            return []
         try:
             cursor = self.connection.cursor()
+            category_sql = "lower(trim(category)) = lower(trim(?))"
+            params: tuple[Any, ...] = (user_id, category_title)
+            if category_title.strip().casefold() == "быт":
+                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
             cursor.execute(
                 f"""
                 SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
                 FROM {TABLES.wishes}
-                WHERE user_id = ? AND category IN ('byt', 'БЫТ') AND (is_purchased = 0 OR is_purchased IS NULL)
+                WHERE user_id = ?
+                  AND {category_sql}
+                  AND (is_purchased = 0 OR is_purchased IS NULL)
                 ORDER BY id
                 """,
-                (user_id,),
+                params,
             )
             rows = cursor.fetchall()
             LOGGER.info("Fetched active BYT wishes for user %s", user_id)
@@ -1581,23 +1670,29 @@ class FinanceDatabase:
             return []
 
     def list_active_byt_items_for_reminder(
-        self, user_id: int, now_dt: datetime
+        self, user_id: int, now_dt: datetime, category_title: str
     ) -> List[Dict[str, Any]]:
         """Return BYT wishlist items available for reminders at given time."""
 
+        if not category_title:
+            return []
         try:
             cursor = self.connection.cursor()
+            category_sql = "lower(trim(category)) = lower(trim(?))"
+            params: tuple[Any, ...] = (user_id, category_title, now_dt.isoformat())
+            if category_title.strip().casefold() == "быт":
+                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
             cursor.execute(
                 f"""
                 SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
                 FROM {TABLES.wishes}
                 WHERE user_id = ?
-                  AND category IN ('byt', 'БЫТ')
+                  AND {category_sql}
                   AND (is_purchased = 0 OR is_purchased IS NULL)
                   AND (deferred_until IS NULL OR deferred_until <= ?)
                 ORDER BY id
                 """,
-                (user_id, now_dt.isoformat()),
+                params,
             )
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
@@ -2287,7 +2382,7 @@ class FinanceDatabase:
                 f"""
                 SELECT DISTINCT user_id
                 FROM {TABLES.wishes}
-                WHERE category IN ('byt', 'БЫТ') AND (is_purchased = 0 OR is_purchased IS NULL)
+                WHERE is_purchased = 0 OR is_purchased IS NULL
                 """
             )
             rows = cursor.fetchall()
@@ -2296,14 +2391,29 @@ class FinanceDatabase:
             LOGGER.error("Failed to get users with active BYT wishes: %s", error)
             return []
 
-    def cleanup_old_byt_purchases(self, now: Optional[datetime] = None) -> None:
+    def cleanup_old_byt_purchases(
+        self, user_id: int, category_title: str, now: Optional[datetime] = None
+    ) -> None:
         """Remove BYT purchases older than one month from purchases and wishes."""
 
+        if not category_title:
+            return
         current_time = now or now_tz()
         try:
             cursor = self.connection.cursor()
+            category_sql = "lower(trim(category)) = lower(trim(?))"
+            params: tuple[Any, ...] = (user_id, category_title)
+            if category_title.strip().casefold() == "быт":
+                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
+
             cursor.execute(
-                f"SELECT id, purchased_at FROM {TABLES.purchases} WHERE category IN ('byt', 'БЫТ')"
+                f"""
+                SELECT id, purchased_at
+                FROM {TABLES.purchases}
+                WHERE user_id = ?
+                  AND {category_sql}
+                """,
+                params,
             )
             purchases = cursor.fetchall()
             ids_to_delete: list[int] = []
@@ -2332,7 +2442,14 @@ class FinanceDatabase:
                 )
 
             cursor.execute(
-                f"SELECT id, purchased_at FROM {TABLES.wishes} WHERE category IN ('byt', 'БЫТ') AND is_purchased = 1"
+                f"""
+                SELECT id, purchased_at
+                FROM {TABLES.wishes}
+                WHERE user_id = ?
+                  AND {category_sql}
+                  AND is_purchased = 1
+                """,
+                params,
             )
             wish_rows = cursor.fetchall()
             wish_ids: list[int] = []

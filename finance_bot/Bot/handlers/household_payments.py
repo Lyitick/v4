@@ -598,8 +598,8 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         )
         sent_id = await safe_answer(
             message,
-            "Категория BYT не выбрана. Открой настройки и выбери категорию, "
-            "из которой брать напоминания.",
+            "Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+            "Выбор категории для напоминаний.",
             reply_markup=await build_main_menu_for_user(user_id),
             logger=LOGGER,
         )

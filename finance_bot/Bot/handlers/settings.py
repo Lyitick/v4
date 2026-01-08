@@ -503,7 +503,7 @@ async def _render_wishlist_byt_category_menu(
     categories = db.list_active_wishlist_categories(user_id)
     _, byt_title = get_byt_source_category(db, user_id)
     if categories:
-        text = "Выбери категорию напоминаний BYT."
+        text = "Выбери категорию для напоминаний."
         if byt_title:
             text = f"{text}\nТекущая: {byt_title}"
         if error_message:
@@ -546,7 +546,6 @@ def _format_category_text(
 def _format_wishlist_text(
     categories: list[dict],
     debit_category_title: str,
-    byt_category_title: str,
     error_message: str | None = None,
 ) -> str:
     lines: list[str] = ["🧾 ВИШЛИСТ — настройки", "", "Категории:", ""]
@@ -563,7 +562,6 @@ def _format_wishlist_text(
         [
             "",
             f"Категория списания: {debit_category_title}",
-            f"Категория напоминаний (BYT): {byt_category_title}",
         ]
     )
     if error_message:
@@ -573,12 +571,16 @@ def _format_wishlist_text(
 
 
 def _format_byt_rules_text(
-    settings: dict, times: list[dict], error_message: str | None = None
+    settings: dict,
+    times: list[dict],
+    category_title: str,
+    error_message: str | None = None,
 ) -> str:
     on_off = {True: "ДА", False: "НЕТ", 1: "ДА", 0: "НЕТ"}
     lines = [
-        "🧺 БЫТ — условия напоминаний",
+        "🔔 Напоминания — условия",
         "",
+        f"Категория для напоминаний: {category_title}",
         f"Напоминания включены: {on_off.get(settings.get('byt_reminders_enabled', 1), 'НЕТ')}",
         "Слать если список пуст: НЕТ",
         'Формат: "Что ты купил?" (кнопки-товары)',
@@ -602,7 +604,7 @@ def _format_byt_rules_text(
 
 
 def _format_byt_timer_text(times: list[dict], error_message: str | None = None) -> str:
-    lines = ["⏰ БЫТ — таймер напоминаний", "Текущие времена:", ""]
+    lines = ["⏰ Напоминания — таймер", "Текущие времена:", ""]
     if times:
         for timer in times:
             lines.append(f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}")
@@ -646,18 +648,16 @@ async def _render_wishlist_settings(
 ) -> list[dict]:
     categories = db.list_active_wishlist_categories(user_id)
     debit_category = db.get_wishlist_debit_category(user_id)
-    _, byt_category_title = get_byt_source_category(db, user_id)
     debit_title = "Не выбрано"
     if debit_category:
         income_category = db.get_income_category_by_code(user_id, debit_category)
         debit_title = income_category.get("title", debit_category) if income_category else "Категория удалена"
-    byt_title = byt_category_title or "Не выбрано"
     LOGGER.info("Open wishlist settings (reply mode) user_id=%s", user_id)
     LOGGER.info("USER=%s ACTION=WISHLIST_SETTINGS_OPEN", user_id)
     await _render_reply_settings_page(
         message=message,
         state=state,
-        text=_format_wishlist_text(categories, debit_title, byt_title, error_message),
+        text=_format_wishlist_text(categories, debit_title, error_message),
         reply_markup=wishlist_settings_reply_keyboard(),
         screen_id="st:wishlist",
     )
@@ -676,11 +676,13 @@ async def _render_byt_rules_settings(
     settings_row = db.get_user_settings(user_id)
     db.ensure_byt_timer_defaults(user_id)
     times = db.list_active_byt_timer_times(user_id)
+    _, byt_category_title = get_byt_source_category(db, user_id)
+    category_title = byt_category_title or "не выбрана"
     LOGGER.info("Open byt conditions settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(
         message=message,
         state=state,
-        text=_format_byt_rules_text(settings_row, times, error_message),
+        text=_format_byt_rules_text(settings_row, times, category_title, error_message),
         reply_markup=byt_rules_reply_keyboard(),
         screen_id="st:byt_rules",
     )
@@ -1186,7 +1188,7 @@ async def open_household_payments_reply(message: Message, state: FSMContext) -> 
     )
 
 
-@router.message(F.text == "🧺 БЫТ условия")
+@router.message(F.text == "Напоминания")
 async def open_byt_rules_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
@@ -1440,7 +1442,7 @@ async def wishlist_byt_category_menu_reply(message: Message, state: FSMContext) 
     data = await state.get_data()
     if not data.get("in_settings"):
         return
-    if data.get("settings_current_screen") != "st:wishlist":
+    if data.get("settings_current_screen") != "st:byt_rules":
         return
 
     await _register_user_message(state, message)
@@ -1890,7 +1892,7 @@ async def wishlist_byt_category_choice(message: Message, state: FSMContext) -> N
     choice = (message.text or "").strip()
     if choice in {"⏪ Назад", "⬅ Назад", "⬅️ Назад"}:
         await state.set_state(None)
-        previous_screen = await _pop_previous_screen(state) or "st:wishlist"
+        previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
         await render_settings_screen(previous_screen, message=message, state=state)
         return
     if choice in {"🏠 На главную", "⏪ На главную"}:
@@ -1919,10 +1921,10 @@ async def wishlist_byt_category_choice(message: Message, state: FSMContext) -> N
     await _send_and_register(
         message=message,
         state=state,
-        text="Категория напоминаний BYT обновлена.",
+        text="Категория для напоминаний обновлена.",
     )
     await state.set_state(None)
-    previous_screen = await _pop_previous_screen(state) or "st:wishlist"
+    previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
     await render_settings_screen(previous_screen, message=message, state=state)
 
 

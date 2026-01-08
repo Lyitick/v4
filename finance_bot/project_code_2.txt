@@ -830,7 +830,25 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
 
     await delete_welcome_message_if_exists(message, state)
     await state.clear()
-    get_db().ensure_income_categories_seeded(message.from_user.id)
+    user_id = message.from_user.id
+    categories = get_db().list_active_income_categories(user_id)
+    if not categories:
+        sent = await message.answer(
+            'Категории дохода не настроены. Открой "Настройки → Доход" и добавь хотя бы одну категорию.',
+            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+        )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+        try:
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+        except Exception:  # noqa: BLE001
+            LOGGER.warning("Failed to delete user command message", exc_info=True)
+        LOGGER.info("USER=%s ACTION=INCOME_START_NO_CATEGORIES", user_id)
+        return
     await state.set_state(MoneyState.waiting_for_amount)
 
     income_sum = "0"
@@ -901,7 +919,6 @@ async def _process_income_amount_value(
         )
 
     db = get_db()
-    db.ensure_income_categories_seeded(message.from_user.id)
     categories = db.list_active_income_categories(message.from_user.id)
     total_percent = db.sum_income_category_percents(message.from_user.id)
     if total_percent != 100:
@@ -2090,12 +2107,14 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
         return
 
+    debit_category, _ = db.resolve_household_debit_category(user_id)
     changed = db.apply_household_payment_answer(
         user_id=user_id,
         month=str(month),
         question_code=code,
         amount=amount_value if amount is not None else None,
         answer=action,
+        debit_category=debit_category,
     )
     if not changed and action == "yes":
         await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
@@ -2111,6 +2130,13 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         question_code=code,
         answer=action,
     )
+    if action == "yes" and amount is not None:
+        _log_event(
+            user_id,
+            "HOUSEHOLD_DEBIT",
+            await state.get_state(),
+            debit_category=debit_category,
+        )
 
     index = get_next_index(index, questions)
     next_question = get_current_question(questions, index)
@@ -2157,4 +2183,3 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     await _log_state_transition(state, user_id, None)
     await state.clear()
     await _send_main_menu_summary(callback.bot, state, callback.message.chat.id, user_id)
-

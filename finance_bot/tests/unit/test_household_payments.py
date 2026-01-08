@@ -109,6 +109,7 @@ async def test_question_flow_and_savings_update() -> None:
         question_code=first_code,
         amount=amount,
         answer="yes",
+        debit_category="быт",
     )
     assert changed is True
 
@@ -121,6 +122,7 @@ async def test_question_flow_and_savings_update() -> None:
         question_code=first_code,
         amount=amount,
         answer="yes",
+        debit_category="быт",
     )
     assert changed_again is False
 
@@ -130,6 +132,7 @@ async def test_question_flow_and_savings_update() -> None:
         question_code=first_code,
         amount=amount,
         answer="no",
+        debit_category="быт",
     )
     assert changed_back is True
     savings_map = db.get_user_savings_map(user_id)

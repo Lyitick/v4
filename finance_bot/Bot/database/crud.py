@@ -1118,6 +1118,11 @@ class FinanceDatabase:
                 (category, user_id),
             )
             self.connection.commit()
+            LOGGER.info(
+                "USER=%s ACTION=WISHLIST_DEBIT_CATEGORY_SET META=category_id=%s",
+                user_id,
+                category,
+            )
         except sqlite3.Error as error:
             LOGGER.error(
                 "Failed to update wishlist debit category for user %s: %s",

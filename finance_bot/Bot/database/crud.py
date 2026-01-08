@@ -340,7 +340,8 @@ class FinanceDatabase:
                 purchased_keep_days INTEGER NOT NULL DEFAULT 30,
                 byt_reminders_enabled INTEGER NOT NULL DEFAULT 1,
                 byt_defer_enabled INTEGER NOT NULL DEFAULT 1,
-                byt_defer_max_days INTEGER NOT NULL DEFAULT 365
+                byt_defer_max_days INTEGER NOT NULL DEFAULT 365,
+                household_debit_category TEXT
             )
             """
         )
@@ -361,6 +362,9 @@ class FinanceDatabase:
         )
         self._add_column_if_missing(
             cursor, TABLES.wishlist_categories, "purchased_days", "INTEGER DEFAULT 30"
+        )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "household_debit_category", "TEXT"
         )
         self.connection.commit()
         self.sanitize_income_category_titles()
@@ -673,9 +677,14 @@ class FinanceDatabase:
             cursor.execute(
                 f"""
                 INSERT OR IGNORE INTO {TABLES.user_settings} (
-                    user_id, purchased_keep_days, byt_reminders_enabled, byt_defer_enabled, byt_defer_max_days
+                    user_id,
+                    purchased_keep_days,
+                    byt_reminders_enabled,
+                    byt_defer_enabled,
+                    byt_defer_max_days,
+                    household_debit_category
                 )
-                VALUES (?, 30, 1, 1, 365)
+                VALUES (?, 30, 1, 1, 365, NULL)
                 """,
                 (user_id,),
             )
@@ -1022,7 +1031,13 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 f"""
-                SELECT user_id, purchased_keep_days, byt_reminders_enabled, byt_defer_enabled, byt_defer_max_days
+                SELECT
+                    user_id,
+                    purchased_keep_days,
+                    byt_reminders_enabled,
+                    byt_defer_enabled,
+                    byt_defer_max_days,
+                    household_debit_category
                 FROM {TABLES.user_settings}
                 WHERE user_id = ?
                 LIMIT 1
@@ -1034,6 +1049,77 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error("Failed to fetch user settings for %s: %s", user_id, error)
             return {}
+
+    def get_household_debit_category(self, user_id: int) -> str | None:
+        """Return household debit category for user."""
+
+        try:
+            self.ensure_user_settings(user_id)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT household_debit_category FROM {TABLES.user_settings} WHERE user_id = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row["household_debit_category"]
+            return None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch household debit category for user %s: %s",
+                user_id,
+                error,
+            )
+            return None
+
+    def set_household_debit_category(self, user_id: int, category: str) -> None:
+        """Set household debit category for user."""
+
+        try:
+            self.ensure_user_settings(user_id)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.user_settings}
+                SET household_debit_category = ?
+                WHERE user_id = ?
+                """,
+                (category, user_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update household debit category for user %s: %s",
+                user_id,
+                error,
+            )
+
+    def resolve_household_debit_category(self, user_id: int) -> tuple[str, str]:
+        """Resolve household debit category code and title with fallback."""
+
+        categories = self.list_active_income_categories(user_id)
+        category_map = {str(item.get("code", "")): str(item.get("title", "")) for item in categories}
+        selected = self.get_household_debit_category(user_id)
+        if selected and selected in category_map:
+            return selected, category_map[selected]
+
+        fallback_code = None
+        if "быт" in category_map:
+            fallback_code = "быт"
+        elif categories:
+            fallback_code = str(categories[0].get("code", "быт"))
+        else:
+            fallback_code = "быт"
+
+        if selected and selected not in category_map:
+            LOGGER.warning(
+                "Household debit category invalid for user %s: %s, fallback to %s",
+                user_id,
+                selected,
+                fallback_code,
+            )
+
+        return fallback_code, category_map.get(fallback_code, fallback_code)
 
     def update_purchased_keep_days(self, user_id: int, days: int) -> None:
         """Update purchased_keep_days value."""
@@ -1677,6 +1763,7 @@ class FinanceDatabase:
         question_code: str,
         amount: float | None,
         answer: str,
+        debit_category: str | None = None,
     ) -> bool:
         """Apply household answer and savings update atomically.
 
@@ -1722,7 +1809,8 @@ class FinanceDatabase:
             )
             if amount is not None:
                 delta = -abs(amount) if answer == "yes" else abs(amount)
-                self._update_saving_in_transaction(cursor, user_id, "быт", delta)
+                target_category = debit_category or "быт"
+                self._update_saving_in_transaction(cursor, user_id, target_category, delta)
             self.connection.commit()
             return True
         except sqlite3.Error as error:

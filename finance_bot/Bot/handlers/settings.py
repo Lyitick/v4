@@ -15,6 +15,7 @@ from Bot.keyboards.settings import (
     byt_rules_reply_keyboard,
     byt_timer_reply_keyboard,
     byt_timer_times_select_reply_keyboard,
+    household_debit_category_select_reply_keyboard,
     household_payments_remove_reply_keyboard,
     household_settings_reply_keyboard,
     income_categories_select_reply_keyboard,
@@ -325,9 +326,19 @@ async def _render_settings_home(message: Message, state: FSMContext) -> None:
 
 
 def _format_household_payments_text(
-    items: list[dict], *, unpaid_set: set[str], error_message: str | None = None
+    items: list[dict],
+    *,
+    unpaid_set: set[str],
+    debit_category: str,
+    error_message: str | None = None,
 ) -> str:
-    lines: list[str] = ["РЕЖИМ НАСТРОЕК", "", "Бытовые платежи", ""]
+    lines: list[str] = [
+        "РЕЖИМ НАСТРОЕК",
+        "",
+        "Бытовые платежи",
+        f"Категория списания: {debit_category}",
+        "",
+    ]
     if not items:
         lines.append("Платежей пока нет. Нажми ➕ Добавить")
     else:
@@ -358,6 +369,7 @@ async def _render_household_payments_settings(
     await db.init_household_questions_for_month(user_id, month)
     unpaid = await db.get_unpaid_household_questions(user_id, month)
     unpaid_set: set[str] = set(unpaid)
+    debit_code, debit_title = db.resolve_household_debit_category(user_id)
     LOGGER.info(
         "Open household payments settings (user_id=%s, month=%s, items_count=%s, unpaid_count=%s)",
         user_id,
@@ -369,7 +381,10 @@ async def _render_household_payments_settings(
         message=message,
         state=state,
         text=_format_household_payments_text(
-            items, unpaid_set=unpaid_set, error_message=error_message
+            items,
+            unpaid_set=unpaid_set,
+            debit_category=debit_title or debit_code,
+            error_message=error_message,
         ),
         reply_markup=household_settings_reply_keyboard(),
         screen_id="st:household_payments",
@@ -401,6 +416,33 @@ async def _render_household_delete_menu(
     )
     if items:
         await state.set_state(HouseholdSettingsState.waiting_for_removal)
+
+
+async def _render_household_debit_category_menu(
+    *, state: FSMContext, message: Message, db, user_id: int, error_message: str | None = None
+) -> None:
+    categories = db.list_active_income_categories(user_id)
+    if categories:
+        text = "Выбери категорию списания"
+        if error_message:
+            text = f"{error_message}\n\n{text}"
+    else:
+        text = "Категорий дохода пока нет."
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=text,
+        reply_markup=household_debit_category_select_reply_keyboard(categories)
+        if categories
+        else household_settings_reply_keyboard(),
+        screen_id="hp:debit_category_menu",
+        force_new=True,
+    )
+    await state.update_data(
+        hp_debit_map={category.get("title", ""): category.get("code") for category in categories}
+    )
+    if categories:
+        await state.set_state(HouseholdSettingsState.waiting_for_debit_category)
 
 
 def _format_category_text(
@@ -824,6 +866,14 @@ async def render_settings_screen(
         await _render_household_delete_menu(
             state=state, message=message, db=db, user_id=user_id
         )
+    elif screen_id == "hp:debit_category_menu":
+        await _render_household_debit_category_menu(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
     else:
         await _render_settings_home(message, state)
     await _set_current_screen(state, screen_id)
@@ -1067,6 +1117,19 @@ async def household_payment_delete_menu_reply(
     )
 
 
+@router.message(F.text == "💰 Категория списания")
+async def household_debit_category_menu_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "st:household_payments":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    await _navigate_to_screen(
+        "hp:debit_category_menu", message=message, state=state, force_new=True
+    )
+
+
 @router.message(F.text == "🧹 Обнулить")
 async def household_reset_questions_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
@@ -1094,8 +1157,13 @@ async def household_refresh_questions_reply(message: Message, state: FSMContext)
         return
     await _register_user_message(state, message)
     await _delete_user_message(message)
+    await _send_and_register(
+        message=message,
+        state=state,
+        text="Эта кнопка устарела. Открой настройки заново.",
+    )
     await render_settings_screen(
-        "st:household_payments", message=message, state=state, force_new=True
+        "st:household_payments", message=message, state=state, force_new=False
     )
 
 
@@ -1559,6 +1627,43 @@ async def household_payment_delete_choice(
     await render_settings_screen(
         "st:household_payments", message=message, state=state, force_new=False
     )
+
+
+@router.message(HouseholdSettingsState.waiting_for_debit_category)
+async def household_debit_category_choice(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+
+    choice = (message.text or "").strip()
+    if choice in {"⬅ Назад", "⬅️ Назад"}:
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "st:household_payments"
+        await render_settings_screen(previous_screen, message=message, state=state)
+        return
+
+    mapping: dict[str, str] = data.get("hp_debit_map") or {}
+    category_code = mapping.get(choice)
+    if not category_code:
+        await render_settings_screen(
+            "hp:debit_category_menu",
+            message=message,
+            state=state,
+            error_message="Выбери категорию из списка.",
+            force_new=True,
+        )
+        return
+
+    db = get_db()
+    db.set_household_debit_category(message.from_user.id, str(category_code))
+    LOGGER.info(
+        "USER=%s ACTION=HOUSEHOLD_DEBIT_CATEGORY_SET META=category=%s",
+        message.from_user.id,
+        category_code,
+    )
+    await state.set_state(None)
+    previous_screen = await _pop_previous_screen(state) or "st:household_payments"
+    await render_settings_screen(previous_screen, message=message, state=state)
 
 
 @router.message(IncomeSettingsState.waiting_for_removal)

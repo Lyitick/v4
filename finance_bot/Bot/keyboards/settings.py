@@ -138,7 +138,7 @@ def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Доход", callback_data="st:income"),
             InlineKeyboardButton(text="🧾 Вишлист", callback_data="st:wishlist"),
         ],
-        [InlineKeyboardButton(text="🧺 БЫТ условия", callback_data="st:byt_rules")],
+        [InlineKeyboardButton(text="Напоминания", callback_data="st:byt_rules")],
         [InlineKeyboardButton(text="🧾 Бытовые платежи", callback_data="st:household_payments")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
@@ -149,7 +149,7 @@ def settings_home_reply_keyboard() -> ReplyKeyboardMarkup:
 
     buttons = [
         [KeyboardButton(text="📊 Доход"), KeyboardButton(text="🧾 Вишлист")],
-        [KeyboardButton(text="🧺 БЫТ условия"), KeyboardButton(text="🧾 Бытовые платежи")],
+        [KeyboardButton(text="Напоминания"), KeyboardButton(text="🧾 Бытовые платежи")],
         [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -179,7 +179,6 @@ def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="➖ Удалить категорию вишлиста"),
         ],
         [KeyboardButton(text="🕒 Настроить купленное")],
-        [KeyboardButton(text=WISHLIST_BYT_CATEGORY_BUTTON)],
         [KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BUTTON)],
         [KeyboardButton(text="⬅️ Назад")],
     ]
@@ -305,6 +304,7 @@ def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard for BYT rules settings."""
 
     buttons = [
+        [KeyboardButton(text=WISHLIST_BYT_CATEGORY_BUTTON)],
         [
             KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
             KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),

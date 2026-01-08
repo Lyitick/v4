@@ -1124,7 +1124,6 @@ async def unexpected_purchase_input(message: Message) -> None:
     await message.answer("Выбери вариант на клавиатуре: Купил или Продолжить копить.")
 
 ===== Bot/handlers/household_payments.py =====
-
 """Handlers for household payments scenario."""
 from datetime import datetime, time as dt_time
 import logging
@@ -1725,8 +1724,8 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         )
         sent_id = await safe_answer(
             message,
-            "Категория BYT не выбрана. Открой настройки и выбери категорию, "
-            "из которой брать напоминания.",
+            "Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+            "Выбор категории для напоминаний.",
             reply_markup=await build_main_menu_for_user(user_id),
             logger=LOGGER,
         )
@@ -2013,3 +2012,5 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
     await _log_state_transition(state, user_id, None)
     await state.clear()
     await _send_main_menu_summary(callback.bot, state, callback.message.chat.id, user_id)
+
+

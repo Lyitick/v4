@@ -791,12 +791,14 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
         return
 
+    debit_category, _ = db.resolve_household_debit_category(user_id)
     changed = db.apply_household_payment_answer(
         user_id=user_id,
         month=str(month),
         question_code=code,
         amount=amount_value if amount is not None else None,
         answer=action,
+        debit_category=debit_category,
     )
     if not changed and action == "yes":
         await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
@@ -812,6 +814,13 @@ async def handle_household_answer(callback: CallbackQuery, state: FSMContext) ->
         question_code=code,
         answer=action,
     )
+    if action == "yes" and amount is not None:
+        _log_event(
+            user_id,
+            "HOUSEHOLD_DEBIT",
+            await state.get_state(),
+            debit_category=debit_category,
+        )
 
     index = get_next_index(index, questions)
     next_question = get_current_question(questions, index)

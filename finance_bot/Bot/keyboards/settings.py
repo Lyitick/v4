@@ -48,10 +48,28 @@ def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
 
     buttons = [
         [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
-        [KeyboardButton(text="🔄 Обновить"), KeyboardButton(text="🧹 Обнулить")],
+        [KeyboardButton(text="💰 Категория списания"), KeyboardButton(text="🧹 Обнулить")],
         [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def household_debit_category_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting household debit category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⬅ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def household_payments_remove_reply_keyboard(

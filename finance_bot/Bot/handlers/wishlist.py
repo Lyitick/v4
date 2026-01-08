@@ -28,7 +28,7 @@ from Bot.keyboards.main import (
 )
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import BytDeferState, WishlistState
-from Bot.utils.datetime_utils import now_tz
+from Bot.utils.datetime_utils import get_next_byt_run_dt, now_tz, resolve_deferred_until
 from Bot.utils.telegram_safe import (
     safe_answer,
     safe_callback_answer,
@@ -441,6 +441,7 @@ def _build_byt_items_keyboard(items: list[dict], allow_defer: bool = True) -> In
         rows.append(row)
     if allow_defer:
         defer_callback = "byt_defer_menu"
+        defer_next_callback = "byt:defer_next_menu"
         if len(items) == 1:
             try:
                 defer_id = int(items[0].get("id"))
@@ -448,8 +449,12 @@ def _build_byt_items_keyboard(items: list[dict], allow_defer: bool = True) -> In
                 defer_id = None
             else:
                 defer_callback = f"byt_defer_menu:{defer_id}"
+                defer_next_callback = f"byt:defer_next:{defer_id}"
         rows.append(
-            [InlineKeyboardButton(text="ОТЛОЖИТЬ", callback_data=defer_callback)]
+            [
+                InlineKeyboardButton(text="⏭ Отложить", callback_data=defer_next_callback),
+                InlineKeyboardButton(text="📅 Отложить на …", callback_data=defer_callback),
+            ]
         )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -471,6 +476,44 @@ def _build_byt_defer_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
             )
         rows.append(row)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_byt_defer_select_keyboard(
+    items: list[dict], callback_prefix: str
+) -> InlineKeyboardMarkup:
+    """Build inline keyboard for selecting BYT item for defer action."""
+
+    rows: list[list[InlineKeyboardButton]] = []
+    per_row = 2 if len(items) > 3 else 1
+    for index in range(0, len(items), per_row):
+        row_items = items[index : index + per_row]
+        row: list[InlineKeyboardButton] = []
+        for item in row_items:
+            row.append(
+                InlineKeyboardButton(
+                    text=item.get("name", ""),
+                    callback_data=f"{callback_prefix}:{item.get('id')}",
+                )
+            )
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_byt_defer_actions_keyboard(item_id: int) -> InlineKeyboardMarkup:
+    """Build inline keyboard for BYT defer actions for a single item."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⏭ Отложить", callback_data=f"byt:defer_next:{item_id}"
+                ),
+                InlineKeyboardButton(
+                    text="📅 Отложить на …", callback_data=f"byt_defer_menu:{item_id}"
+                ),
+            ]
+        ]
+    )
 
 
 async def _refresh_byt_reminder_message(
@@ -753,6 +796,154 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
             logger=LOGGER,
         )
     await safe_callback_answer(callback, logger=LOGGER)
+
+
+@router.callback_query(F.data == "byt:defer_next_menu")
+async def handle_byt_defer_next_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show BYT items to choose which to defer to next reminder."""
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    db = get_db()
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        if callback.message:
+            await safe_answer(
+                callback.message,
+                "Отключено в настройках",
+                logger=LOGGER,
+            )
+        else:
+            await safe_send_message(
+                callback.bot,
+                chat_id=callback.from_user.id,
+                text="Отключено в настройках",
+                logger=LOGGER,
+            )
+        return
+
+    now_dt = now_tz()
+    items = db.list_active_byt_items_for_reminder(callback.from_user.id, now_dt)
+    if not items:
+        if callback.message:
+            await safe_answer(
+                callback.message,
+                "Нет бытовых покупок для отложки.",
+                logger=LOGGER,
+            )
+        else:
+            await safe_send_message(
+                callback.bot,
+                chat_id=callback.from_user.id,
+                text="Нет бытовых покупок для отложки.",
+                logger=LOGGER,
+            )
+        return
+
+    keyboard = _build_byt_defer_select_keyboard(items, "byt:defer_next")
+    if callback.message:
+        edited = await safe_edit_message_text(
+            callback.message.bot,
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            text="ЧТО?",
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+        if not edited:
+            await safe_answer(
+                callback.message,
+                "ЧТО?",
+                reply_markup=keyboard,
+                logger=LOGGER,
+            )
+    else:
+        await safe_send_message(
+            callback.bot,
+            chat_id=callback.from_user.id,
+            text="ЧТО?",
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+
+
+@router.callback_query(F.data.startswith("byt:defer_next:"))
+async def handle_byt_defer_next(callback: CallbackQuery, state: FSMContext) -> None:
+    """Defer BYT item until the next scheduled reminder time."""
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    data = callback.data.split(":", maxsplit=2)
+    if len(data) != 3:
+        return
+
+    try:
+        item_id = int(data[2])
+    except ValueError:
+        return
+
+    db = get_db()
+    wish = db.get_wish(item_id)
+    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+        return
+
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        return
+
+    times = db.list_active_byt_timer_times(callback.from_user.id)
+    schedule_times = [
+        time(int(timer.get("hour", 0)), int(timer.get("minute", 0))) for timer in times
+    ]
+    next_run = get_next_byt_run_dt(now_tz(), schedule_times)
+
+    existing_deferred: datetime | None = None
+    raw_deferred = wish.get("deferred_until")
+    if raw_deferred:
+        try:
+            existing_deferred = datetime.fromisoformat(raw_deferred)
+        except ValueError:
+            existing_deferred = None
+
+    deferred_until = resolve_deferred_until(existing_deferred, next_run)
+    db.set_wishlist_item_deferred_until(
+        callback.from_user.id, item_id, deferred_until.isoformat()
+    )
+    LOGGER.info(
+        "USER=%s ACTION=BYT_DEFER_NEXT META=item_id=%s deferred_until=%s",
+        callback.from_user.id,
+        item_id,
+        deferred_until.isoformat(),
+    )
+
+    message_text = f"Отложено до {deferred_until.strftime('%d.%m.%Y %H:%M')}"
+    keyboard = _build_byt_defer_actions_keyboard(item_id)
+    if callback.message:
+        edited = await safe_edit_message_text(
+            callback.message.bot,
+            chat_id=callback.message.chat.id,
+            message_id=callback.message.message_id,
+            text=message_text,
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+        if not edited:
+            sent_id = await safe_answer(
+                callback.message,
+                message_text,
+                reply_markup=keyboard,
+                logger=LOGGER,
+            )
+            if sent_id:
+                await ui_register_message(state, callback.message.chat.id, sent_id)
+    else:
+        sent = await safe_send_message(
+            callback.bot,
+            chat_id=callback.from_user.id,
+            text=message_text,
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+        if sent:
+            await ui_register_message(state, sent.chat.id, sent.message_id)
 
 
 @router.callback_query(F.data.startswith("byt_defer_pick:"))

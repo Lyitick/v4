@@ -529,7 +529,8 @@ async def _refresh_byt_reminder_message(
             bot,
             chat_id=chat_id,
             message_id=message_id,
-            text="Категория BYT не выбрана. Открой настройки и выбери категорию.",
+            text="Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+            "Выбор категории для напоминаний.",
             logger=LOGGER,
         )
         return
@@ -558,7 +559,8 @@ async def _start_byt_defer_flow(
     if not category_title or not wish:
         await safe_callback_answer(
             callback,
-            "Категория BYT не выбрана. Открой настройки.",
+            "Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+            "Выбор категории для напоминаний.",
             show_alert=True,
             logger=LOGGER,
         )
@@ -745,7 +747,8 @@ async def handle_byt_buy(callback: CallbackQuery) -> None:
     if not category_title or not wish:
         await safe_callback_answer(
             callback,
-            "Категория BYT не выбрана. Открой настройки.",
+            "Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+            "Выбор категории для напоминаний.",
             show_alert=True,
             logger=LOGGER,
         )
@@ -806,7 +809,8 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
     if not category_title:
         await safe_callback_answer(
             callback,
-            "Категория BYT не выбрана. Открой настройки.",
+            "Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+            "Выбор категории для напоминаний.",
             show_alert=True,
             logger=LOGGER,
         )
@@ -891,14 +895,16 @@ async def handle_byt_defer_next_menu(callback: CallbackQuery, state: FSMContext)
         if callback.message:
             await safe_answer(
                 callback.message,
-                "Категория BYT не выбрана. Открой настройки.",
+                "Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+                "Выбор категории для напоминаний.",
                 logger=LOGGER,
             )
         else:
             await safe_send_message(
                 callback.bot,
                 chat_id=callback.from_user.id,
-                text="Категория BYT не выбрана. Открой настройки.",
+                text="Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+                "Выбор категории для напоминаний.",
                 logger=LOGGER,
             )
         return

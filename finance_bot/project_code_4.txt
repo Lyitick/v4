@@ -1410,36 +1410,17 @@ async def delete_welcome_message_if_exists(message: Message, state: FSMContext) 
 
     return None
 
-WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY = {
-    "Инструменты": "инвестиции",
-    "Финансы": "сбережения",
-    "Разное": "спонтанные траты",
-    "инвестиции в работу": "инвестиции",
-    "вклад в себя": "сбережения",
-    "кайфы": "спонтанные траты",
-    "БЫТ": "быт",
-}
-
 def humanize_wishlist_category(category: str) -> str:
-    """Return user-facing category name supporting legacy values."""
+    """Return user-facing category name supporting legacy BYT values."""
 
-    mapping = {
-        "Инструменты": "инвестиции в работу",
-        "Финансы": "вклад в себя",
-        "Разное": "кайфы",
-        "инвестиции в работу": "инвестиции в работу",
-        "вклад в себя": "вклад в себя",
-        "кайфы": "кайфы",
-        "byt": "БЫТ",
-        "БЫТ": "БЫТ",
-    }
-    return mapping.get(category, category)
+    if category == "byt":
+        return "БЫТ"
+    return category
 
 
 def _get_user_wishlist_categories(db: FinanceDatabase, user_id: int) -> list[dict]:
-    """Return active wishlist categories ensuring defaults exist."""
+    """Return active wishlist categories."""
 
-    db.ensure_wishlist_categories_seeded(user_id)
     return db.list_active_wishlist_categories(user_id)
 
 
@@ -1460,6 +1441,17 @@ async def open_wishlist(message: Message, state: FSMContext) -> None:
     wishes = db.get_wishes_by_user(message.from_user.id)
     categories = _get_user_wishlist_categories(db, message.from_user.id)
     has_active_wishes = any(not wish.get("is_purchased") for wish in wishes)
+
+    if not categories:
+        await message.answer(
+            "Категорий вишлиста пока нет. Добавь их в настройках.",
+            reply_markup=wishlist_reply_keyboard(),
+        )
+        LOGGER.info(
+            "User %s opened wishlist without categories",
+            message.from_user.id if message.from_user else "unknown",
+        )
+        return
 
     if not has_active_wishes:
         await message.answer(
@@ -1622,6 +1614,13 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
     await _push_wl_step(state, "category")
     db = get_db()
     categories = _get_user_wishlist_categories(db, message.from_user.id)
+    if not categories:
+        await message.answer(
+            "Категорий вишлиста пока нет. Добавь их в настройках.",
+            reply_markup=wishlist_reply_keyboard(),
+        )
+        await state.clear()
+        return
     await message.answer(
         "Выбери категорию желания.", reply_markup=wishlist_categories_keyboard(categories)
     )

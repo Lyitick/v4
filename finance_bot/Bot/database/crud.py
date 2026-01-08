@@ -81,12 +81,6 @@ DEFAULT_EXPENSE_CATEGORIES = [
     {"code": "другое", "title": "Другое", "percent": 10, "position": 5},
 ]
 
-DEFAULT_WISHLIST_CATEGORIES = [
-    {"title": "инвестиции в работу", "position": 1},
-    {"title": "вклад в себя", "position": 2},
-    {"title": "кайфы", "position": 3},
-    {"title": "БЫТ", "position": 4},
-]
 
 
 def _get_user_version(cursor: sqlite3.Cursor) -> int:
@@ -229,6 +223,7 @@ class FinanceDatabase:
                 is_purchased INTEGER,
                 saved_amount REAL DEFAULT 0,
                 purchased_at TEXT,
+                debited_at TEXT,
                 deferred_until TEXT
             )
             """
@@ -341,7 +336,8 @@ class FinanceDatabase:
                 byt_reminders_enabled INTEGER NOT NULL DEFAULT 1,
                 byt_defer_enabled INTEGER NOT NULL DEFAULT 1,
                 byt_defer_max_days INTEGER NOT NULL DEFAULT 365,
-                household_debit_category TEXT
+                household_debit_category TEXT,
+                wishlist_debit_category_id TEXT
             )
             """
         )
@@ -366,6 +362,10 @@ class FinanceDatabase:
         self._add_column_if_missing(
             cursor, TABLES.user_settings, "household_debit_category", "TEXT"
         )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "wishlist_debit_category_id", "TEXT"
+        )
+        self._add_column_if_missing(cursor, TABLES.wishes, "debited_at", "TEXT")
         self.connection.commit()
         self.sanitize_income_category_titles()
 
@@ -620,61 +620,6 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error("Failed to seed expense categories for user %s: %s", user_id, error)
 
-    def ensure_wishlist_categories_seeded(self, user_id: int) -> None:
-        """Seed default wishlist categories if user has none."""
-
-        try:
-            cursor = self.connection.cursor()
-            self.ensure_user_settings(user_id)
-            cursor.execute(
-                f"SELECT 1 FROM {TABLES.wishlist_categories} WHERE user_id = ? AND is_active = 1 LIMIT 1",
-                (user_id,),
-            )
-            if cursor.fetchone():
-                cursor.execute(
-                    f"SELECT purchased_keep_days FROM {TABLES.user_settings} WHERE user_id = ?",
-                    (user_id,),
-                )
-                row = cursor.fetchone()
-                default_days = int(row[0]) if row and row[0] is not None else 30
-                cursor.execute(
-                    f"UPDATE {TABLES.wishlist_categories} SET purchased_mode = COALESCE(purchased_mode, 'days') WHERE user_id = ?",
-                    (user_id,),
-                )
-                cursor.execute(
-                    f"UPDATE {TABLES.wishlist_categories} SET purchased_days = COALESCE(purchased_days, ?) WHERE user_id = ?",
-                    (default_days, user_id),
-                )
-                self.connection.commit()
-                return
-
-            self.ensure_user_settings(user_id)
-            cursor.execute(
-                f"SELECT purchased_keep_days FROM {TABLES.user_settings} WHERE user_id = ?",
-                (user_id,),
-            )
-            row = cursor.fetchone()
-            default_days = int(row[0]) if row and row[0] is not None else 30
-            for item in DEFAULT_WISHLIST_CATEGORIES:
-                cursor.execute(
-                    f"""
-                    INSERT INTO {TABLES.wishlist_categories} (
-                        user_id, title, position, is_active, purchased_mode, purchased_days
-                    )
-                    VALUES (?, ?, ?, 1, 'days', ?)
-                    """,
-                    (
-                        user_id,
-                        item["title"],
-                        item["position"],
-                        default_days,
-                    ),
-                )
-            self.connection.commit()
-            LOGGER.info("Seeded default wishlist categories for user %s", user_id)
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to seed wishlist categories for user %s: %s", user_id, error)
-
     def ensure_user_settings(self, user_id: int) -> None:
         """Ensure user_settings row exists with defaults."""
 
@@ -695,9 +640,10 @@ class FinanceDatabase:
                     byt_reminders_enabled,
                     byt_defer_enabled,
                     byt_defer_max_days,
-                    household_debit_category
+                    household_debit_category,
+                    wishlist_debit_category_id
                 )
-                VALUES (?, 30, 1, 1, 365, NULL)
+                VALUES (?, 30, 1, 1, 365, NULL, NULL)
                 """,
                 (user_id,),
             )
@@ -1009,6 +955,33 @@ class FinanceDatabase:
             )
             return None
 
+    def get_income_category_by_code(
+        self, user_id: int, code: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return income category by code."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, code, title, percent, position
+                FROM {TABLES.income_categories}
+                WHERE user_id = ? AND code = ? AND is_active = 1
+                LIMIT 1
+                """,
+                (user_id, code),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch income category %s for user %s: %s",
+                code,
+                user_id,
+                error,
+            )
+            return None
+
     def get_expense_category_by_id(
         self, user_id: int, category_id: int
     ) -> Optional[Dict[str, Any]]:
@@ -1050,7 +1023,8 @@ class FinanceDatabase:
                     byt_reminders_enabled,
                     byt_defer_enabled,
                     byt_defer_max_days,
-                    household_debit_category
+                    household_debit_category,
+                    wishlist_debit_category_id
                 FROM {TABLES.user_settings}
                 WHERE user_id = ?
                 LIMIT 1
@@ -1103,6 +1077,50 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error(
                 "Failed to update household debit category for user %s: %s",
+                user_id,
+                error,
+            )
+
+    def get_wishlist_debit_category(self, user_id: int) -> str | None:
+        """Return wishlist debit category for user."""
+
+        try:
+            self.ensure_user_settings(user_id)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT wishlist_debit_category_id FROM {TABLES.user_settings} WHERE user_id = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                return row["wishlist_debit_category_id"]
+            return None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch wishlist debit category for user %s: %s",
+                user_id,
+                error,
+            )
+            return None
+
+    def set_wishlist_debit_category(self, user_id: int, category: str | None) -> None:
+        """Set wishlist debit category for user."""
+
+        try:
+            self.ensure_user_settings(user_id)
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.user_settings}
+                SET wishlist_debit_category_id = ?
+                WHERE user_id = ?
+                """,
+                (category, user_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update wishlist debit category for user %s: %s",
                 user_id,
                 error,
             )
@@ -1503,7 +1521,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 f"""
-                SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until
                 FROM {TABLES.wishes}
                 WHERE user_id = ?
                 """,
@@ -1523,7 +1541,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 f"""
-                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until
                 FROM {TABLES.wishes}
                 WHERE id = ?
                 """,
@@ -1632,6 +1650,102 @@ class FinanceDatabase:
             LOGGER.info("Marked wish %s as purchased", wish_id)
         except sqlite3.Error as error:
             LOGGER.error("Failed to mark wish %s as purchased: %s", wish_id, error)
+
+    def purchase_wish(
+        self, user_id: int, wish_id: int, debit_category: str | None
+    ) -> Dict[str, Any]:
+        """Purchase wish with debit in a single transaction."""
+
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                f"""
+                SELECT id, user_id, name, price, category, is_purchased, debited_at
+                FROM {TABLES.wishes}
+                WHERE id = ? AND user_id = ?
+                LIMIT 1
+                """,
+                (wish_id, user_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute("ROLLBACK")
+                return {"status": "not_found"}
+
+            if row["is_purchased"] or row["debited_at"]:
+                cursor.execute("ROLLBACK")
+                return {"status": "already"}
+
+            price = self._to_float(row["price"])
+            if price <= 0 or debit_category is None:
+                purchased_value = now_tz().isoformat()
+                cursor.execute(
+                    f"""
+                    UPDATE {TABLES.wishes}
+                    SET is_purchased = 1, purchased_at = ?, deferred_until = NULL
+                    WHERE id = ?
+                    """,
+                    (purchased_value, wish_id),
+                )
+                cursor.execute(
+                    f"""
+                    INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, row["name"], price, row["category"], purchased_value),
+                )
+                cursor.execute("COMMIT")
+                return {
+                    "status": "no_debit",
+                    "price": price,
+                    "wish_name": row["name"],
+                    "category": row["category"],
+                }
+
+            cursor.execute(
+                f"SELECT id, current FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
+                (user_id, debit_category),
+            )
+            savings_row = cursor.fetchone()
+            savings_before = self._to_float(savings_row["current"]) if savings_row else 0.0
+            if savings_before < price:
+                cursor.execute("ROLLBACK")
+                return {
+                    "status": "insufficient",
+                    "price": price,
+                    "available": savings_before,
+                }
+
+            self._update_saving_in_transaction(cursor, user_id, debit_category, -price)
+            purchased_value = now_tz().isoformat()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.wishes}
+                SET is_purchased = 1, purchased_at = ?, debited_at = ?, deferred_until = NULL
+                WHERE id = ?
+                """,
+                (purchased_value, purchased_value, wish_id),
+            )
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, row["name"], price, row["category"], purchased_value),
+            )
+            cursor.execute("COMMIT")
+            return {
+                "status": "debited",
+                "price": price,
+                "wish_name": row["name"],
+                "category": row["category"],
+                "savings_before": savings_before,
+            }
+        except sqlite3.Error as error:
+            cursor.execute("ROLLBACK")
+            LOGGER.error("Failed to purchase wish %s for user %s: %s", wish_id, user_id, error)
+            return {"status": "error"}
 
     def add_purchase(
         self,
@@ -1998,7 +2112,6 @@ class FinanceDatabase:
         """Get purchases for user honoring retention settings."""
 
         self.ensure_user_settings(user_id)
-        self.ensure_wishlist_categories_seeded(user_id)
         try:
             cursor = self.connection.cursor()
             cursor.execute(

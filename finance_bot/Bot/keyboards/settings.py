@@ -172,6 +172,7 @@ def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="➖ Удалить категорию вишлиста"),
         ],
         [KeyboardButton(text="🕒 Настроить купленное")],
+        [KeyboardButton(text="💰 Категория списания")],
         [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -202,6 +203,25 @@ def wishlist_purchased_mode_reply_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_debit_category_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist debit category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="❌ Не списывать автоматически")])
+    rows.append([KeyboardButton(text="⏪ Назад")])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def wishlist_categories_select_keyboard(

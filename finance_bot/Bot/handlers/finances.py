@@ -16,7 +16,7 @@ from Bot.keyboards.main import (
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.states.money_states import MoneyState
-from Bot.handlers.wishlist import WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY, humanize_wishlist_category
+from Bot.handlers.wishlist import humanize_wishlist_category
 from Bot.utils.savings import find_reached_goal, format_savings_summary
 from Bot.utils.telegram_safe import safe_delete_message, safe_edit_message_text
 from Bot.utils.ui_cleanup import ui_register_message
@@ -573,6 +573,11 @@ async def show_affordable_wishes(
     db = db or get_db()
     savings_map = db.get_user_savings_map(user_id)
     wishes = db.get_wishes_by_user(user_id)
+    debit_category = db.get_wishlist_debit_category(user_id)
+    if not debit_category:
+        return
+    if not db.get_income_category_by_code(user_id, debit_category):
+        return
 
     affordable: List[Dict[str, Any]] = []
     for wish in wishes:
@@ -580,12 +585,8 @@ async def show_affordable_wishes(
             continue
 
         wishlist_category = humanize_wishlist_category(wish.get("category", ""))
-        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
-        if not savings_category:
-            continue
-
         price = _to_float(wish.get("price"))
-        available = _to_float(savings_map.get(savings_category))
+        available = _to_float(savings_map.get(debit_category))
         if price <= 0 or available < price:
             continue
 

@@ -1,6 +1,12 @@
 """Settings keyboards."""
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from Bot.constants.ui_labels import (
+    WISHLIST_DEBIT_CATEGORY_BACK,
+    WISHLIST_DEBIT_CATEGORY_BUTTON,
+    WISHLIST_DEBIT_CATEGORY_NONE,
+)
+
 
 def settings_menu_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard for settings menu."""
@@ -172,6 +178,7 @@ def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="➖ Удалить категорию вишлиста"),
         ],
         [KeyboardButton(text="🕒 Настроить купленное")],
+        [KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BUTTON)],
         [KeyboardButton(text="⬅️ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -202,6 +209,25 @@ def wishlist_purchased_mode_reply_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_debit_category_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist debit category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_NONE)])
+    rows.append([KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BACK)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
 def wishlist_categories_select_keyboard(

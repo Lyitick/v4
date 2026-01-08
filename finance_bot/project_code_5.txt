@@ -1457,7 +1457,18 @@ def init_logging() -> logging.Logger:
 from typing import Any, Dict, List, Tuple
 
 
-def format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
+def _fallback_humanize_category(category: str) -> str:
+    name = str(category)
+    if name.startswith("savings_"):
+        name = name[len("savings_") :]
+    name = name.replace("_", " ").strip()
+    return name or str(category)
+
+
+def format_savings_summary(
+    savings: Dict[str, Dict[str, Any]],
+    categories_map: Dict[str, str] | None = None,
+) -> str:
     """Format savings summary for user message."""
 
     if not savings:
@@ -1465,10 +1476,15 @@ def format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
 
     lines: List[str] = []
     for category, data in savings.items():
+        display_name = None
+        if categories_map is not None:
+            display_name = categories_map.get(str(category))
+        if not display_name:
+            display_name = _fallback_humanize_category(str(category))
         current = data.get("current", 0)
         goal = data.get("goal", 0)
         purpose = data.get("purpose", "")
-        line = f"{category}: {current:.2f}"
+        line = f"{display_name}: {current:.2f}"
         if goal and goal > 0:
             progress = min(current / goal * 100, 100)
             extra = f" (цель {goal:.2f} для '{purpose}', прогресс {progress:.1f}%)"
@@ -1956,11 +1972,25 @@ async def ui_safe_delete_message(
     )
 
 
+async def ui_get_welcome_id(state: FSMContext) -> int | None:
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    return int(welcome_id) if welcome_id is not None else None
+
+
+async def ui_set_welcome_id(
+    state: FSMContext, message_id: int, chat_id: int | None = None
+) -> None:
+    update = {"ui_welcome_message_id": int(message_id)}
+    if chat_id is not None:
+        update["ui_chat_id"] = int(chat_id)
+    await state.update_data(**update)
+
+
 async def ui_set_welcome_message(
     bot: Bot, state: FSMContext, chat_id: int, text: str
 ) -> int:
-    data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
+    welcome_id = await ui_get_welcome_id(state)
     if welcome_id is not None:
         edited = await safe_edit_message_text(
             bot,
@@ -1977,17 +2007,15 @@ async def ui_set_welcome_message(
         db = get_db()
         persisted = db.get_welcome_message_id(chat_id)
         if persisted is not None:
-            await state.update_data(ui_chat_id=chat_id, ui_welcome_message_id=int(persisted))
+            await ui_set_welcome_id(state, int(persisted), chat_id=chat_id)
             LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, persisted)
             return int(persisted)
 
     sent = await safe_send_message(bot, chat_id=chat_id, text=text, logger=LOGGER)
     if sent:
-        await state.update_data(
-            ui_chat_id=chat_id, ui_welcome_message_id=int(sent.message_id)
-        )
+        await ui_set_welcome_id(state, int(sent.message_id), chat_id=chat_id)
         get_db().set_welcome_message_id(chat_id, int(sent.message_id))
-        LOGGER.info("WELCOME recreated (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
+        LOGGER.info("WELCOME created (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
         return int(sent.message_id)
     return 0
 

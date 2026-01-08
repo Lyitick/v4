@@ -121,10 +121,13 @@ def _to_float(value: Any) -> float:
         return 0.0
 
 
-def _format_savings_summary(savings: Dict[str, Dict[str, Any]]) -> str:
+def _format_savings_summary(
+    savings: Dict[str, Dict[str, Any]],
+    categories_map: Dict[str, str] | None = None,
+) -> str:
     """Format savings summary for user message."""
 
-    return format_savings_summary(savings)
+    return format_savings_summary(savings, categories_map)
 
 
 def _find_reached_goal(
@@ -500,7 +503,8 @@ async def _send_summary_and_goal_prompt(
 
     # Читаем накопления по реальному user_id пользователя
     savings = db.get_user_savings(user_id)
-    summary = _format_savings_summary(savings)
+    categories_map = db.get_income_categories_map(user_id)
+    summary = _format_savings_summary(savings, categories_map)
 
     # Формируем текст: сначала "Получено бабок", затем текущие накопления
     lines: List[str] = []
@@ -628,7 +632,8 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
         )
         await ui_register_message(state, sent.chat.id, sent.message_id)
         savings = db.get_user_savings(message.from_user.id)
-        summary = _format_savings_summary(savings)
+        categories_map = db.get_income_categories_map(message.from_user.id)
+        summary = _format_savings_summary(savings, categories_map)
         await message.answer(f"Обновлённые накопления:\n{summary}")
     else:
         sent = await message.answer(

@@ -1226,6 +1226,7 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
+from Bot.constants.ui import WELCOME_TEXT
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
@@ -1247,8 +1248,8 @@ async def _handle_start_common(message: Message, state: FSMContext) -> None:
     # Это сообщение защищено и НЕ должно удаляться массовыми чистками.
     # Автоматическое удаление запрещено. Удаление допускается только в отдельной задаче
     # после явного подтверждения пользователя.
-    greeting = "Поработаем бл"  # DO_NOT_DELETE_WELCOME_WITHOUT_USER_CONFIRMATION
-    await ui_set_welcome_message(message.bot, state, message.chat.id, greeting)
+    # DO_NOT_DELETE_WELCOME_WITHOUT_USER_CONFIRMATION
+    await ui_set_welcome_message(message.bot, state, message.chat.id, WELCOME_TEXT)
     await ui_cleanup_to_context(
         message.bot,
         state,

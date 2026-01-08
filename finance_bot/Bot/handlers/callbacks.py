@@ -14,7 +14,6 @@ from Bot.handlers.finances import (
 from Bot.keyboards.main import back_only_keyboard, wishlist_categories_keyboard
 from Bot.states.wishlist_states import WishlistState
 from Bot.handlers.wishlist import (
-    WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY,
     _get_user_wishlist_categories,
     humanize_wishlist_category,
 )
@@ -83,11 +82,21 @@ async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
             message_id=callback.message.message_id,
             logger=LOGGER,
         )
+        categories = _get_user_wishlist_categories(get_db(), callback.from_user.id)
+        if not categories:
+            await safe_answer(
+                callback.message,
+                "Категорий вишлиста пока нет. Добавь их в настройках.",
+                reply_markup=back_only_keyboard(),
+                logger=LOGGER,
+            )
+            await state.clear()
+            return
         await safe_answer(
             callback.message,
             "Выбери категорию желания.",
             reply_markup=wishlist_categories_keyboard(
-                _get_user_wishlist_categories(get_db(), callback.from_user.id)
+                categories
             ),
             logger=LOGGER,
         )
@@ -147,6 +156,10 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
     db = get_db()
     wishes = db.get_wishes_by_user(callback.from_user.id)
     savings_map = db.get_user_savings_map(callback.from_user.id)
+    debit_category = db.get_wishlist_debit_category(callback.from_user.id)
+    saved_amount = (
+        float(savings_map.get(debit_category, 0.0) or 0.0) if debit_category else 0.0
+    )
     filtered = [
         wish
         for wish in wishes
@@ -182,8 +195,6 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
 
     for wish in filtered:
         wishlist_category = humanize_wishlist_category(wish.get("category", ""))
-        savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category, "")
-        saved_amount = float(savings_map.get(savings_category, 0.0) or 0.0)
         price = float(wish.get("price", 0) or 0.0)
 
         if price > 0:
@@ -223,42 +234,55 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
     if not wish:
         await safe_callback_answer(callback, "Желание не найдено.", show_alert=True, logger=LOGGER)
         return
-
-    wishlist_category = humanize_wishlist_category(wish.get("category"))
-    savings_category = WISHLIST_CATEGORY_TO_SAVINGS_CATEGORY.get(wishlist_category)
-
-    if not savings_category:
-        LOGGER.error(
-            "No savings mapping for wishlist category %s (wish_id=%s, user_id=%s)",
-            wishlist_category,
-            wish_id,
-            callback.from_user.id,
-        )
-        await safe_callback_answer(
-            "Эта категория не привязана к накоплениям, настрой её позже.",
-            show_alert=True,
-            logger=LOGGER,
-        )
+    if wish.get("is_purchased") or wish.get("debited_at"):
+        await safe_callback_answer(callback, "Уже отмечено как купленное.", logger=LOGGER)
         return
 
-    savings_map = db.get_user_savings_map(callback.from_user.id)
-    category_savings = savings_map.get(savings_category, 0.0)
+    wishlist_category = humanize_wishlist_category(wish.get("category"))
     price = float(wish.get("price", 0) or 0.0)
+    LOGGER.info(
+        "USER=%s ACTION=WISHLIST_PURCHASE META=item_id=%s price=%.2f",
+        callback.from_user.id,
+        wish_id,
+        price,
+    )
+    debit_category = db.get_wishlist_debit_category(callback.from_user.id)
 
-    if category_savings < price:
+    if debit_category is not None:
+        income_category = db.get_income_category_by_code(callback.from_user.id, debit_category)
+        if not income_category:
+            await safe_callback_answer(
+                "Не удалось списать: категория не найдена/удалена. Выберите категорию списания в настройках Wishlist.",
+                show_alert=True,
+                logger=LOGGER,
+            )
+            return
+
+    result = db.purchase_wish(callback.from_user.id, wish_id, debit_category)
+    status = result.get("status")
+    if status == "not_found":
+        await safe_callback_answer(callback, "Желание не найдено.", show_alert=True, logger=LOGGER)
+        return
+    if status == "already":
+        await safe_callback_answer(callback, "Уже отмечено как купленное.", logger=LOGGER)
+        return
+    if status == "insufficient":
         await safe_callback_answer(
             (
                 "Недостаточно средств в накоплениях для этой категории.\n"
-                f"Нужно: {price:.2f}, доступно: {category_savings:.2f}."
+                f"Нужно: {price:.2f}, доступно: {float(result.get('available', 0.0)):.2f}."
             ),
             show_alert=True,
             logger=LOGGER,
         )
         return
-
-    db.update_saving(callback.from_user.id, savings_category, -price)
-    db.mark_wish_purchased(wish_id)
-    db.add_purchase(callback.from_user.id, wish["name"], price, wishlist_category)
+    if status == "error":
+        await safe_callback_answer(
+            "Не удалось списать: ошибка базы данных.",
+            show_alert=True,
+            logger=LOGGER,
+        )
+        return
 
     if callback.message:
         await safe_edit_message_text(
@@ -268,21 +292,24 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
             text=f"🎉 Поздравляю, ты купил {wish['name']} за {price:.2f}!",
             logger=LOGGER,
         )
-    savings = db.get_user_savings(callback.from_user.id)
-    categories_map = db.get_income_categories_map(callback.from_user.id)
-    summary = _format_savings_summary(savings, categories_map)
-    if callback.message:
-        await safe_answer(callback.message, f"Обновлённые накопления:\n{summary}", logger=LOGGER)
-        await show_affordable_wishes(message=callback.message, user_id=callback.from_user.id, db=db)
-    LOGGER.info(
-        "User %s purchased wish %s (wishlist_category=%s, savings_category=%s, price=%.2f, savings_before=%.2f)",
-        callback.from_user.id,
-        wish_id,
-        wishlist_category,
-        savings_category,
-        price,
-        category_savings,
-    )
+    if status == "debited":
+        LOGGER.info(
+            "USER=%s ACTION=WISHLIST_DEBIT META=category=%s amount=%.2f item_id=%s",
+            callback.from_user.id,
+            debit_category,
+            price,
+            wish_id,
+        )
+        savings = db.get_user_savings(callback.from_user.id)
+        categories_map = db.get_income_categories_map(callback.from_user.id)
+        summary = _format_savings_summary(savings, categories_map)
+        if callback.message:
+            await safe_answer(
+                callback.message, f"Обновлённые накопления:\n{summary}", logger=LOGGER
+            )
+            await show_affordable_wishes(
+                message=callback.message, user_id=callback.from_user.id, db=db
+            )
 
 
 @router.callback_query(F.data == "affordable_wishes_later")

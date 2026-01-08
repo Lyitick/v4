@@ -36,3 +36,5 @@
 Обновление (2026-01-08): добавлены protected ids для welcome, защита удаления в UI-cleanup, обновлены тесты и project_code*.txt.
 Запрос 2026-01-08 #1: закрепить вечное welcome-сообщение, добавить protected ids и тест на cleanup.
 Ответ 2026-01-08 #1: реализована защита welcome через protected ids, обновлены ui_cleanup/ui_safe_delete, тесты и project_code*.txt.
+Запрос 2026-01-08 #2: добавить BYT отложить до следующего напоминания, новую кнопку "Отложить на …", расчёт ближайшего слота и тесты.
+Ответ 2026-01-08 #2: добавлены BYT defer-next кнопки/хендлер, расчёт next-run и max defer, тесты utils, обновлены project_code*.txt.

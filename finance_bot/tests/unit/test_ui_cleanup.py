@@ -104,7 +104,6 @@ if "aiogram" not in sys.modules:
 from Bot.handlers.start import back_to_main
 from Bot.utils.ui_cleanup import (
     ui_cleanup_to_context,
-    ui_register_message,
     ui_register_protected_message,
     ui_set_welcome_message,
     ui_track_message,
@@ -150,11 +149,12 @@ def test_ui_cleanup_keeps_welcome() -> None:
     """Cleanup removes tracked messages while keeping welcome."""
 
     async def run_test() -> None:
-        state = DummyState()
-        await ui_register_message(state, 1, 10)
-        await ui_register_message(state, 1, 11)
-        await ui_register_message(state, 1, 12)
-        await state.update_data(ui_welcome_message_id=11)
+        state = DummyState(
+            {
+                "ui_welcome_message_id": 111,
+                "ui_tracked_message_ids": [111, 222, 333],
+            }
+        )
 
         bot = DummyBot()
         await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU")
@@ -162,7 +162,7 @@ def test_ui_cleanup_keeps_welcome() -> None:
         deleted_ids = {
             call.kwargs["message_id"] for call in bot.delete_message.call_args_list
         }
-        assert deleted_ids == {10, 12}
+        assert deleted_ids == {222, 333}
         data = await state.get_data()
         assert data["ui_tracked_message_ids"] == []
 

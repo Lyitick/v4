@@ -8,6 +8,11 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
 
+from Bot.constants.ui_labels import (
+    WISHLIST_DEBIT_CATEGORY_BACK,
+    WISHLIST_DEBIT_CATEGORY_BUTTON,
+    WISHLIST_DEBIT_CATEGORY_NONE,
+)
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import back_only_keyboard
@@ -465,7 +470,7 @@ async def _render_wishlist_debit_category_menu(
         if error_message:
             text = f"{error_message}\n\n{text}"
     else:
-        text = "Категорий дохода пока нет."
+        text = "Сначала добавь категории доходов/накоплений."
     LOGGER.info("USER=%s ACTION=WISHLIST_DEBIT_CATEGORY_MENU_OPEN", user_id)
     await _render_reply_settings_page(
         message=message,
@@ -473,7 +478,7 @@ async def _render_wishlist_debit_category_menu(
         text=text,
         reply_markup=wishlist_debit_category_select_reply_keyboard(categories)
         if categories
-        else wishlist_settings_reply_keyboard(),
+        else back_only_keyboard(),
         screen_id="wl:debit_category_menu",
         force_new=True,
     )
@@ -1350,9 +1355,17 @@ async def wishlist_purchased_menu_reply(message: Message, state: FSMContext) -> 
     )
 
 
-@router.message(F.text == "💰 Категория списания")
+@router.message(F.text == WISHLIST_DEBIT_CATEGORY_BUTTON)
 async def wishlist_debit_category_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
+    current_state = await state.get_state()
+    LOGGER.info(
+        "USER=%s ACTION=WISHLIST_DEBIT_CATEGORY_MENU_CLICK STATE=%s META=current_screen=%s in_settings=%s",
+        message.from_user.id,
+        current_state,
+        data.get("settings_current_screen"),
+        data.get("in_settings"),
+    )
     if not data.get("in_settings"):
         return
     if data.get("settings_current_screen") != "st:wishlist":
@@ -1744,13 +1757,13 @@ async def wishlist_debit_category_choice(message: Message, state: FSMContext) ->
     await _delete_user_message(message)
 
     choice = (message.text or "").strip()
-    if choice in {"⏪ Назад", "⬅ Назад", "⬅️ Назад"}:
+    if choice in {WISHLIST_DEBIT_CATEGORY_BACK, "⬅ Назад"}:
         await state.set_state(None)
         previous_screen = await _pop_previous_screen(state) or "st:wishlist"
         await render_settings_screen(previous_screen, message=message, state=state)
         return
 
-    if choice == "❌ Не списывать автоматически":
+    if choice == WISHLIST_DEBIT_CATEGORY_NONE:
         db = get_db()
         db.set_wishlist_debit_category(message.from_user.id, None)
         LOGGER.info(

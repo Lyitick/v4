@@ -268,11 +268,14 @@ async def safe_send_message(
     """Safely send a message using bot.send_message without raising exceptions."""
 
     log = _get_logger(logger)
+    normalized = "" if text is None else str(text)
+    if not normalized.strip():
+        normalized = "."
     for attempt in range(retries + 1):
         try:
             return await bot.send_message(
                 chat_id=chat_id,
-                text=text,
+                text=normalized,
                 reply_markup=reply_markup,
                 parse_mode=parse_mode,
                 request_timeout=request_timeout,

@@ -32,6 +32,7 @@ class WishlistSettingsState(StatesGroup):
     waiting_for_purchased_mode = State()
     waiting_for_purchased_days = State()
     waiting_for_debit_category = State()
+    waiting_for_byt_category = State()
 
 
 class BytSettingsState(StatesGroup):

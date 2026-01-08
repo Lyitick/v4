@@ -1,537 +1,5 @@
-            LOGGER.info(
-                "Marked household question %s as paid for user %s month %s",
-                question_code,
-                user_id,
-                month,
-            )
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to mark household question %s paid for user %s month %s: %s",
-                question_code,
-                user_id,
-                month,
-                error,
-            )
-
-    async def mark_household_question_unpaid(
-        self, user_id: int, month: str, question_code: str
-    ) -> None:
-        """Mark household question as unpaid."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
-                VALUES (?, ?, ?, 0)
-                ON CONFLICT(user_id, month, question_code)
-                DO UPDATE SET is_paid = excluded.is_paid
-                """,
-                (user_id, month, question_code),
-            )
-            self.connection.commit()
-            LOGGER.info(
-                "Marked household question %s as unpaid for user %s month %s",
-                question_code,
-                user_id,
-                month,
-            )
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to mark household question %s unpaid for user %s month %s: %s",
-                question_code,
-                user_id,
-                month,
-                error,
-            )
-
-    def apply_household_payment_answer(
-        self,
-        user_id: int,
-        month: str,
-        question_code: str,
-        amount: float | None,
-        answer: str,
-        debit_category: str | None = None,
-    ) -> bool:
-        """Apply household answer and savings update atomically.
-
-        Returns True if state changed, False if it was already applied.
-        """
-
-        try:
-            cursor = self.connection.cursor()
-            self.connection.execute("BEGIN")
-            cursor.execute(
-                f"""
-                SELECT is_paid
-                FROM {TABLES.household_payments}
-                WHERE user_id = ? AND month = ? AND question_code = ?
-                """,
-                (user_id, month, question_code),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                cursor.execute(
-                    f"""
-                    INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
-                    VALUES (?, ?, ?, 0)
-                    """,
-                    (user_id, month, question_code),
-                )
-                current_paid = 0
-            else:
-                current_paid = int(row["is_paid"])
-
-            target_paid = 1 if answer == "yes" else 0
-            if current_paid == target_paid:
-                self.connection.commit()
-                return False
-
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.household_payments}
-                SET is_paid = ?
-                WHERE user_id = ? AND month = ? AND question_code = ?
-                """,
-                (target_paid, user_id, month, question_code),
-            )
-            if amount is not None:
-                delta = -abs(amount) if answer == "yes" else abs(amount)
-                target_category = debit_category or "быт"
-                self._update_saving_in_transaction(cursor, user_id, target_category, delta)
-            self.connection.commit()
-            return True
-        except sqlite3.Error as error:
-            self.connection.rollback()
-            LOGGER.error(
-                "Failed to apply household answer for user %s month %s code %s: %s",
-                user_id,
-                month,
-                question_code,
-                error,
-            )
-            return False
-
-    async def get_unpaid_household_questions(self, user_id: int, month: str) -> List[str]:
-        """Get unpaid household question codes for user and month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT items.code
-                FROM {TABLES.household_payment_items} AS items
-                LEFT JOIN {TABLES.household_payments} AS payments
-                  ON payments.user_id = items.user_id
-                 AND payments.month = ?
-                 AND payments.question_code = items.code
-                WHERE items.user_id = ?
-                  AND items.is_active = 1
-                  AND COALESCE(payments.is_paid, 0) = 0
-                ORDER BY items.position, items.id
-                """,
-                (month, user_id),
-            )
-            rows = cursor.fetchall()
-            return [row["code"] for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to get unpaid household questions for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return []
-
-    async def get_household_payment_status_map(
-        self, user_id: int, month: str
-    ) -> Dict[str, int]:
-        """Return mapping: question_code -> is_paid (0/1) for the given month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT items.code, COALESCE(payments.is_paid, 0) AS is_paid
-                FROM {TABLES.household_payment_items} AS items
-                LEFT JOIN {TABLES.household_payments} AS payments
-                  ON payments.user_id = items.user_id
-                 AND payments.month = ?
-                 AND payments.question_code = items.code
-                WHERE items.user_id = ? AND items.is_active = 1
-                """,
-                (month, user_id),
-            )
-            rows = cursor.fetchall()
-            return {row["code"]: int(row["is_paid"]) for row in rows}
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to get household payment status for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return {}
-
-    async def has_unpaid_household_questions(self, user_id: int, month: str) -> bool:
-        """Return True if unpaid household questions exist for month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT 1
-                FROM {TABLES.household_payment_items} AS items
-                LEFT JOIN {TABLES.household_payments} AS payments
-                  ON payments.user_id = items.user_id
-                 AND payments.month = ?
-                 AND payments.question_code = items.code
-                WHERE items.user_id = ?
-                  AND items.is_active = 1
-                  AND COALESCE(payments.is_paid, 0) = 0
-                LIMIT 1
-                """,
-                (month, user_id),
-            )
-            return cursor.fetchone() is not None
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to check unpaid household questions for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return False
-
-    async def should_show_household_payments_button(
-        self, user_id: int, month: str
-    ) -> bool:
-        """Return True if any active household payment is unpaid for the month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT 1
-                FROM {TABLES.household_payment_items} AS items
-                LEFT JOIN {TABLES.household_payments} AS payments
-                  ON payments.user_id = items.user_id
-                 AND payments.month = ?
-                 AND payments.question_code = items.code
-                WHERE items.user_id = ?
-                  AND items.is_active = 1
-                  AND COALESCE(payments.is_paid, 0) = 0
-                LIMIT 1
-                """,
-                (month, user_id),
-            )
-            return cursor.fetchone() is not None
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to decide household payments button for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return False
-
-    async def reset_household_questions_for_month(self, user_id: int, month: str) -> None:
-        """Reset household payment progress for a specific month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.household_payments}
-                SET is_paid = 0
-                WHERE user_id = ? AND month = ?
-                """,
-                (user_id, month),
-            )
-            cursor.execute(
-                f"""
-                INSERT OR IGNORE INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
-                SELECT ?, ?, code, 0
-                FROM {TABLES.household_payment_items}
-                WHERE user_id = ? AND is_active = 1
-                """,
-                (user_id, month, user_id),
-            )
-            self.connection.commit()
-            LOGGER.info(
-                "Reset household questions for user %s month %s", user_id, month
-            )
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to reset household questions for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-
-    def get_purchases_by_user(self, user_id: int) -> List[Dict[str, Any]]:
-        """Get purchases for user honoring retention settings."""
-
-        self.ensure_user_settings(user_id)
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"SELECT id, wish_name, price, category, purchased_at FROM {TABLES.purchases} WHERE user_id = ? ORDER BY purchased_at DESC",
-                (user_id,),
-            )
-            rows = cursor.fetchall()
-            LOGGER.info("Fetched purchases for user %s", user_id)
-            purchases = [dict(row) for row in rows]
-            filtered: list[Dict[str, Any]] = []
-            current_time = now_tz()
-            settings_row = self.get_user_settings(user_id)
-            default_days = int(settings_row.get("purchased_keep_days", 30) or 30)
-            categories = self.list_active_wishlist_categories(user_id)
-            category_map = {
-                cat.get("title", ""): {
-                    "mode": (cat.get("purchased_mode") or "days"),
-                    "days": int(cat.get("purchased_days") or default_days),
-                }
-                for cat in categories
-            }
-            for purchase in purchases:
-                cat_settings = category_map.get(
-                    str(purchase.get("category", "")),
-                    {"mode": "days", "days": default_days},
-                )
-                if cat_settings.get("mode") == "always":
-                    filtered.append(purchase)
-                    continue
-                keep_delta = timedelta(days=int(cat_settings.get("days", default_days)))
-                timestamp = purchase.get("purchased_at")
-                if timestamp:
-                    try:
-                        purchase_dt = datetime.fromisoformat(str(timestamp))
-                        if purchase_dt.tzinfo is None:
-                            purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
-                    except ValueError:
-                        continue
-                    if purchase_dt + keep_delta <= current_time:
-                        continue
-                filtered.append(purchase)
-            return filtered
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to fetch purchases for user %s: %s", user_id, error)
-            return []
-
-    def list_active_byt_timer_times(self, user_id: int) -> List[Dict[str, Any]]:
-        """Return active BYT timer times for user."""
-
-        self.ensure_byt_timer_defaults(user_id)
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, hour, minute
-                FROM {TABLES.byt_timer_times}
-                WHERE user_id = ? AND is_active = 1
-                ORDER BY hour, minute, id
-                """,
-                (user_id,),
-            )
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to fetch BYT timer times for user %s: %s", user_id, error
-            )
-            return []
-
-    def add_byt_timer_time(self, user_id: int, hour: int, minute: int) -> Optional[int]:
-        """Add a new BYT timer time if not duplicate."""
-
-        self.ensure_byt_timer_defaults(user_id)
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT id FROM {TABLES.byt_timer_times}
-                WHERE user_id = ? AND hour = ? AND minute = ? AND is_active = 1
-                LIMIT 1
-                """,
-                (user_id, hour, minute),
-            )
-            existing = cursor.fetchone()
-            if existing:
-                return int(existing["id"])
-
-            cursor.execute(
-                f"""
-                INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
-                VALUES (?, ?, ?, 1)
-                """,
-                (user_id, hour, minute),
-            )
-            self.connection.commit()
-            return cursor.lastrowid
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to add BYT timer time for user %s: %s", user_id, error)
-            return None
-
-    def deactivate_byt_timer_time(self, user_id: int, timer_id: int) -> None:
-        """Deactivate specific BYT timer time."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.byt_timer_times}
-                SET is_active = 0
-                WHERE user_id = ? AND id = ?
-                """,
-                (user_id, timer_id),
-            )
-            self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to deactivate BYT timer time %s for user %s: %s",
-                timer_id,
-                user_id,
-                error,
-            )
-
-    def reset_byt_timer_times(self, user_id: int) -> None:
-        """Reset BYT timer times to defaults."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"UPDATE {TABLES.byt_timer_times} SET is_active = 0 WHERE user_id = ?",
-                (user_id,),
-            )
-            for hour, minute in [(12, 0), (18, 0)]:
-                cursor.execute(
-                    f"""
-                    INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
-                    VALUES (?, ?, ?, 1)
-                    """,
-                    (user_id, hour, minute),
-                )
-            self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to reset BYT timer times for user %s: %s", user_id, error)
-
-    def get_users_with_byt_timer_times(self) -> List[int]:
-        """Return users that have BYT timer times configured."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT DISTINCT user_id
-                FROM {TABLES.byt_timer_times}
-                WHERE is_active = 1
-                """
-            )
-            rows = cursor.fetchall()
-            return [int(row["user_id"]) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to get users with BYT timer times: %s", error)
-            return []
-
-    def get_users_with_active_byt_wishes(self) -> List[int]:
-        """Return user ids that have active BYT wishes."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT DISTINCT user_id
-                FROM {TABLES.wishes}
-                WHERE category IN ('byt', 'БЫТ') AND (is_purchased = 0 OR is_purchased IS NULL)
-                """
-            )
-            rows = cursor.fetchall()
-            return [int(row["user_id"]) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to get users with active BYT wishes: %s", error)
-            return []
-
-    def cleanup_old_byt_purchases(self, now: Optional[datetime] = None) -> None:
-        """Remove BYT purchases older than one month from purchases and wishes."""
-
-        current_time = now or now_tz()
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"SELECT id, purchased_at FROM {TABLES.purchases} WHERE category IN ('byt', 'БЫТ')"
-            )
-            purchases = cursor.fetchall()
-            ids_to_delete: list[int] = []
-            for purchase in purchases:
-                timestamp = purchase["purchased_at"]
-                if not timestamp:
-                    continue
-                try:
-                    purchase_dt = datetime.fromisoformat(timestamp)
-                    if purchase_dt.tzinfo is None:
-                        purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
-                except ValueError:
-                    continue
-                if add_one_month(purchase_dt) <= current_time:
-                    ids_to_delete.append(int(purchase["id"]))
-
-            if ids_to_delete:
-                placeholders = ",".join("?" * len(ids_to_delete))
-                query = "DELETE FROM {} WHERE id IN ({})".format(
-                    TABLES.purchases,
-                    placeholders,
-                )
-                cursor.execute(
-                    query,
-                    ids_to_delete,
-                )
-
-            cursor.execute(
-                f"SELECT id, purchased_at FROM {TABLES.wishes} WHERE category IN ('byt', 'БЫТ') AND is_purchased = 1"
-            )
-            wish_rows = cursor.fetchall()
-            wish_ids: list[int] = []
-            for wish in wish_rows:
-                purchased_at = wish["purchased_at"]
-                if not purchased_at:
-                    continue
-                try:
-                    wish_dt = datetime.fromisoformat(purchased_at)
-                    if wish_dt.tzinfo is None:
-                        wish_dt = wish_dt.replace(tzinfo=settings.TIMEZONE)
-                except ValueError:
-                    continue
-                if add_one_month(wish_dt) <= current_time:
-                    wish_ids.append(int(wish["id"]))
-
-            if wish_ids:
-                placeholders = ",".join("?" * len(wish_ids))
-                query = "DELETE FROM {} WHERE id IN ({})".format(
-                    TABLES.wishes,
-                    placeholders,
-                )
-                cursor.execute(
-                    query,
-                    wish_ids,
-                )
-            if ids_to_delete or wish_ids:
-                self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to cleanup old BYT purchases: %s", error)
-
-    def close(self) -> None:
-        """Close database connection."""
-
-        try:
-            self.connection.close()
-            LOGGER.info("Database connection closed")
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to close database connection: %s", error)
-
-
 ===== Bot/database/get_db.py =====
+
 
 """Database accessor for a shared FinanceDatabase instance."""
 from __future__ import annotations
@@ -547,8 +15,8 @@ def get_db() -> FinanceDatabase:
         _DB_INSTANCE = FinanceDatabase()
     return _DB_INSTANCE
 
-
 ===== Bot/database/models.py =====
+
 
 """Database model helpers."""
 from dataclasses import dataclass
@@ -593,7 +61,6 @@ class Purchase:
     price: float
     category: str
     purchased_at: str
-
 
 ===== Bot/handlers/__init__.py =====
 
@@ -651,12 +118,11 @@ async def handle_category_selection(callback: CallbackQuery, state: FSMContext) 
 
     category_code = category_row.get("title", "")
     category = humanize_wishlist_category(category_code)
-    category_code_norm = "byt" if category == "БЫТ" else category_code
     data = await state.get_data()
     current_state = await state.get_state()
 
     if current_state == WishlistState.waiting_for_category.state:
-        await _finalize_wish(callback, state, category_code_norm, category)
+        await _finalize_wish(callback, state, category_code, category)
         return
 
     await _send_wishes_list(callback, category)
@@ -935,8 +401,8 @@ async def handle_affordable_wishes_later(callback: CallbackQuery, state: FSMCont
         if sent_id:
             await ui_register_message(state, callback.message.chat.id, sent_id)
 
-
 ===== Bot/handlers/common.py =====
+
 
 """Common handlers and fallbacks."""
 import logging
@@ -992,8 +458,8 @@ async def fallback_handler(message: Message, state: FSMContext) -> None:
     )
     await ui_register_message(state, sent.chat.id, sent.message_id)
 
-
 ===== Bot/handlers/finances.py =====
+
 
 """Handlers for income calculation and savings."""
 import logging
@@ -1657,7 +1123,6 @@ async def unexpected_purchase_input(message: Message) -> None:
 
     await message.answer("Выбери вариант на клавиатуре: Купил или Продолжить копить.")
 
-
 ===== Bot/handlers/household_payments.py =====
 
 """Handlers for household payments scenario."""
@@ -1674,6 +1139,7 @@ from Bot.config import settings
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.handlers.wishlist import run_byt_timer_check
+from Bot.utils.byt_utils import get_byt_source_category
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.keyboards.settings import (
     household_remove_keyboard,
@@ -1998,3 +1464,552 @@ async def household_add_amount_calc(message: Message, state: FSMContext) -> None
             await safe_delete_message(
                 message.bot,
                 chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        if amount <= 0:
+            await safe_answer(
+                message, "Сумма должна быть больше нуля. Попробуй снова.", logger=LOGGER
+            )
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        user_id = message.from_user.id
+        db = get_db()
+        position = db.get_next_household_position(user_id)
+        title = str(data.get("title", "")).strip() or "Платёж"
+        code = f"custom_{time.time_ns()}"
+        text = f"{title} {amount}р?"
+        db.add_household_payment_item(user_id, code, text, amount, position)
+        await reset_household_cycle_if_needed(user_id, db)
+        await state.clear()
+        await safe_answer(
+            message,
+            "Платёж добавлен.",
+            reply_markup=ReplyKeyboardRemove(),
+            logger=LOGGER,
+        )
+        await safe_answer(
+            message,
+            "⚙️ Бытовые платежи ⚙️",
+            reply_markup=settings_menu_keyboard(),
+            logger=LOGGER,
+        )
+        await _send_household_settings_overview(message, db, user_id)
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
+
+    if amount_message_id:
+        await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=amount_message_id,
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+
+    await state.update_data(amount_sum=new_sum, amount_message_id=amount_message_id)
+
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+@router.callback_query(F.data == "hh_set:del")
+async def household_remove_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show list of household payments for removal."""
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    if callback.from_user.id != settings.ADMIN_ID:
+        return
+
+    await state.clear()
+    db = get_db()
+    db.ensure_household_items_seeded(callback.from_user.id)
+    items = db.list_active_household_items(callback.from_user.id)
+    if not items:
+        if callback.message:
+            await safe_answer(callback.message, "Список платежей пуст.", logger=LOGGER)
+        return
+
+    if callback.message:
+        await safe_answer(
+            callback.message,
+            "Выбери платеж для удаления:",
+            reply_markup=household_remove_keyboard(items),
+            logger=LOGGER,
+        )
+
+
+@router.callback_query(F.data.startswith("hh_set:remove:"))
+async def household_remove_item(callback: CallbackQuery, state: FSMContext) -> None:
+    """Deactivate selected household payment item."""
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    if callback.from_user.id != settings.ADMIN_ID:
+        return
+
+    parts = callback.data.split(":") if callback.data else []
+    if len(parts) != 3:
+        return
+    code = parts[2]
+    db = get_db()
+    db.deactivate_household_payment_item(callback.from_user.id, code)
+    await reset_household_cycle_if_needed(callback.from_user.id, db)
+    await _send_household_settings_overview(callback.message, db, callback.from_user.id)
+
+
+@router.message(F.text == "Бытовые платежи")
+async def start_household_payments(message: Message, state: FSMContext) -> None:
+    """Start household payments flow."""
+
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+    user_id = message.from_user.id
+    db = get_db()
+
+    await reset_household_cycle_if_needed(user_id, db)
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+    if not items:
+        await ui_cleanup_messages(message.bot, state)
+        await _log_state_transition(state, user_id, None)
+        await state.clear()
+        await ui_render_screen(
+            message.bot,
+            state,
+            message.chat.id,
+            "Список бытовых платежей не настроен.",
+            reply_markup=await build_main_menu_for_user(user_id),
+        )
+        return
+
+    month = current_month_str()
+    await db.init_household_questions_for_month(user_id, month)
+    status_map = await db.get_household_payment_status_map(user_id, month)
+    questions = build_household_questions(items)
+    answers = build_answers_from_status(status_map)
+    all_paid = all(status_map.get(str(question.get("code", "")), 0) == 1 for question in questions)
+    unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
+    hh_questions = filter_unpaid_questions(questions, unpaid_codes)
+
+    if all_paid or not hh_questions:
+        text = render_household_questions_text(
+            month, questions, answers, current_index=None
+        )
+        lines = text.splitlines()
+        if lines:
+            lines[0] = f"✅ Все бытовые платежи оплачены за {month}"
+        text = "\n".join(lines)
+        await ui_cleanup_messages(message.bot, state)
+        await _log_state_transition(state, user_id, None)
+        await state.clear()
+        await ui_render_screen(
+            message.bot,
+            state,
+            message.chat.id,
+            text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            parse_mode="HTML",
+        )
+        _log_event(
+            user_id,
+            "HOUSEHOLD_ALL_PAID",
+            None,
+            month=month,
+        )
+        return
+
+    await _log_state_transition(state, user_id, HouseholdPaymentsState.waiting_for_answer.state)
+    await state.set_state(HouseholdPaymentsState.waiting_for_answer)
+    flow_state = update_flow_state(
+        month=month,
+        questions=hh_questions,
+        current_step_index=0,
+        answers=answers,
+        processed_steps=[],
+    )
+    await state.update_data(
+        hh_month=month,
+        hh_questions=hh_questions,
+        hh_index=0,
+        hh_answers=answers,
+        hh_ui_message_id=0,
+        current_step_index=flow_state.current_step_index,
+        current_question_code=flow_state.current_question_code,
+        processed_steps=[],
+    )
+    text = render_household_questions_text(
+        month, hh_questions, answers, current_index=0
+    )
+    sent_id = await safe_answer(
+        message,
+        text,
+        reply_markup=build_household_question_keyboard(
+            flow_state.current_question_code, show_back=False
+        ),
+        parse_mode="HTML",
+        logger=LOGGER,
+    )
+    if sent_id:
+        await state.update_data(hh_ui_message_id=sent_id)
+        await ui_register_message(state, message.chat.id, sent_id)
+    _log_event(
+        user_id,
+        "HOUSEHOLD_START",
+        await state.get_state(),
+        month=month,
+    )
+
+
+@router.message(F.text == "Проверить быт")
+async def trigger_household_notifications(message: Message, state: FSMContext) -> None:
+    """Trigger BYT purchases check (household wishlist) as if timer fired."""
+
+    user_id = message.from_user.id
+    db = get_db()
+
+    db.ensure_byt_timer_defaults(user_id)
+    data = await state.get_data()
+    last_ts = data.get("byt_manual_check_ts")
+    current_ts = time.time()
+    if last_ts is not None and current_ts - float(last_ts) < 2:
+        sent_id = await safe_answer(
+            message,
+            "Уже проверил. Попробуй ещё раз через пару секунд.",
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+    await state.update_data(byt_manual_check_ts=current_ts)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+    source_category_id, source_category_title = get_byt_source_category(db, user_id)
+    if not source_category_title:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK META=source_category_id=None total=0 due=0 deferred=0",
+            user_id,
+        )
+        sent_id = await safe_answer(
+            message,
+            "Категория BYT не выбрана. Открой настройки и выбери категорию, "
+            "из которой брать напоминания.",
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+
+    times = db.list_active_byt_timer_times(user_id)
+    simulated_time = None
+    if times:
+        first_time = times[0]
+        try:
+            simulated_time = dt_time(
+                hour=int(first_time.get("hour", 0)),
+                minute=int(first_time.get("minute", 0)),
+            )
+        except Exception:
+            simulated_time = None
+
+    now_dt = now_tz()
+    total_items = db.get_active_byt_wishes(user_id, source_category_title)
+    due_items = db.list_active_byt_items_for_reminder(
+        user_id, now_dt, source_category_title
+    )
+    due_ids = {int(item.get("id")) for item in due_items if item.get("id") is not None}
+    deferred_items = [
+        item
+        for item in total_items
+        if item.get("id") is not None and int(item.get("id")) not in due_ids
+    ]
+    nearest_deferred = None
+    for item in deferred_items:
+        deferred_until = item.get("deferred_until")
+        if not deferred_until:
+            continue
+        try:
+            deferred_dt = datetime.fromisoformat(str(deferred_until))
+        except ValueError:
+            continue
+        if nearest_deferred is None or deferred_dt < nearest_deferred:
+            nearest_deferred = deferred_dt
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CHECK META=source_category_id=%s total=%s due=%s deferred=%s",
+        user_id,
+        source_category_id,
+        len(total_items),
+        len(due_items),
+        len(deferred_items),
+    )
+    if not due_items:
+        text = f"В категории {source_category_title} нет активных напоминаний."
+        if deferred_items:
+            if nearest_deferred:
+                nearest_label = nearest_deferred.strftime("%d.%m.%Y %H:%M")
+                text = (
+                    f"{text}\nЕсть отложенные покупки: {len(deferred_items)} шт. "
+                    f"(ближайшая — {nearest_label})"
+                )
+            else:
+                text = (
+                    f"{text}\nЕсть отложенные покупки: {len(deferred_items)} шт."
+                )
+        sent_id = await safe_answer(
+            message,
+            text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+
+    await run_byt_timer_check(
+        message.bot, db, user_id=user_id, simulated_time=simulated_time
+    )
+
+
+@router.callback_query(
+    HouseholdPaymentsState.waiting_for_answer,
+    F.data.startswith("hh_pay:"),
+)
+async def handle_household_answer(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle Yes/No/Back answers for household questions."""
+
+    data = await state.get_data()
+    month = data.get("hh_month")
+    questions = list(data.get("hh_questions") or [])
+    index = int(data.get("current_step_index") or data.get("hh_index") or 0)
+    answers = dict(data.get("hh_answers") or {})
+    ui_message_id = data.get("hh_ui_message_id")
+    processed_steps = normalize_processed_steps(data.get("processed_steps"))
+    user_id = callback.from_user.id
+
+    if callback.message is None or callback.message.message_id != ui_message_id:
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    callback_parts = callback.data.split(":") if callback.data else []
+    if len(callback_parts) < 2:
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+    action = callback_parts[1]
+    callback_code = callback_parts[2] if len(callback_parts) > 2 else None
+
+    if action == "back" and index == 0:
+        await safe_callback_answer(
+            callback, "Назад нельзя — это первый вопрос", show_alert=True, logger=LOGGER
+        )
+        return
+
+    await safe_callback_answer(callback, logger=LOGGER)
+
+    if not month or not questions:
+        await ui_cleanup_messages(callback.bot, state)
+        await _log_state_transition(state, user_id, None)
+        await state.clear()
+        await _send_main_menu_summary(
+            callback.bot, state, callback.message.chat.id, user_id
+        )
+        return
+
+    current_question = get_current_question(questions, index)
+    current_code = str(current_question.get("code")) if current_question else None
+    target_code = callback_code or current_code
+
+    if action == "back":
+        index = get_previous_index(index)
+        current_question = get_current_question(questions, index)
+        current_code = str(current_question.get("code")) if current_question else None
+        await state.update_data(
+            hh_index=index,
+            current_step_index=index,
+            current_question_code=current_code,
+        )
+        text = render_household_questions_text(
+            month, questions, answers, current_index=index
+        )
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
+            ui_message_id=ui_message_id,
+            text=text,
+            reply_markup=build_household_question_keyboard(
+                current_code, show_back=index > 0
+            ),
+            parse_mode="HTML",
+        )
+        if not updated:
+            return
+        _log_event(
+            user_id,
+            "HOUSEHOLD_BACK",
+            await state.get_state(),
+            month=str(month),
+            index=str(index),
+            question_code=str(current_code),
+        )
+        return
+
+    if index >= len(questions):
+        final_text = render_household_questions_text(
+            month, questions, answers, current_index=None
+        )
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
+            ui_message_id=ui_message_id,
+            text=final_text,
+            reply_markup=None,
+            parse_mode="HTML",
+        )
+        if not updated:
+            return
+        await ui_cleanup_messages(callback.bot, state)
+        await _log_state_transition(state, user_id, None)
+        await state.clear()
+        await _send_main_menu_summary(
+            callback.bot, state, callback.message.chat.id, user_id
+        )
+        return
+
+    if target_code and target_code != current_code:
+        if target_code in processed_steps:
+            await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+            return
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    question = current_question
+    if not question:
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    code = str(question.get("code", ""))
+    amount = question.get("amount")
+    amount_value = float(amount) if amount is not None else 0.0
+    db = get_db()
+
+    if action not in {"yes", "no"}:
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    if code in processed_steps:
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+        return
+
+    if should_ignore_answer(answers, processed_steps, code, action):
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+        return
+
+    debit_category, _ = db.resolve_household_debit_category(user_id)
+    changed = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=str(month),
+        question_code=code,
+        amount=amount_value if amount is not None else None,
+        answer=action,
+        debit_category=debit_category,
+    )
+    if not changed and action == "yes":
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+        return
+    answers[code] = "yes" if action == "yes" else "no"
+    processed_steps.add(code)
+
+    _log_event(
+        user_id,
+        "HOUSEHOLD_ANSWER",
+        await state.get_state(),
+        month=str(month),
+        question_code=code,
+        answer=action,
+    )
+    if action == "yes" and amount is not None:
+        _log_event(
+            user_id,
+            "HOUSEHOLD_DEBIT",
+            await state.get_state(),
+            debit_category=debit_category,
+        )
+
+    index = get_next_index(index, questions)
+    next_question = get_current_question(questions, index)
+    next_code = str(next_question.get("code")) if next_question else None
+    await state.update_data(
+        hh_answers=answers,
+        hh_index=index,
+        current_step_index=index,
+        current_question_code=next_code,
+        processed_steps=list(processed_steps),
+    )
+    if index < len(questions):
+        text = render_household_questions_text(
+            month, questions, answers, current_index=index
+        )
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
+            ui_message_id=ui_message_id,
+            text=text,
+            reply_markup=build_household_question_keyboard(
+                next_code, show_back=index > 0
+            ),
+            parse_mode="HTML",
+        )
+        if not updated:
+            return
+        return
+
+    final_text = render_household_questions_text(
+        month, questions, answers, current_index=None
+    )
+    updated = await _update_household_question_message_for_callback(
+        callback=callback,
+        state=state,
+        ui_message_id=ui_message_id,
+        text=final_text,
+        reply_markup=None,
+        parse_mode="HTML",
+    )
+    if not updated:
+        return
+    await ui_cleanup_messages(callback.bot, state)
+    await _log_state_transition(state, user_id, None)
+    await state.clear()
+    await _send_main_menu_summary(callback.bot, state, callback.message.chat.id, user_id)

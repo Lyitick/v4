@@ -62,7 +62,13 @@ async def ui_safe_delete_message(
     chat_id: int,
     message_id: int,
     log_context: str | None = None,
+    state: FSMContext | None = None,
 ) -> bool:
+    if state is not None:
+        protected_ids = await ui_get_protected_ids(state)
+        if int(message_id) in protected_ids:
+            LOGGER.info("SKIP_DELETE_PROTECTED message_id=%s", message_id)
+            return False
     return await safe_delete_message(
         bot,
         chat_id=chat_id,
@@ -75,6 +81,13 @@ async def ui_get_welcome_id(state: FSMContext) -> int | None:
     data = await state.get_data()
     welcome_id = data.get("ui_welcome_message_id")
     return int(welcome_id) if welcome_id is not None else None
+
+
+async def ui_get_protected_ids(state: FSMContext) -> set[int]:
+    welcome_id = await ui_get_welcome_id(state)
+    if welcome_id is None:
+        return set()
+    return {int(welcome_id)}
 
 
 async def ui_set_welcome_id(
@@ -146,23 +159,20 @@ async def ui_cleanup_to_context(
     keep_ids: List[int] | None = None,
 ) -> None:
     data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
     tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    protected_ids = await ui_get_protected_ids(state)
+    extra_protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
     keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
-    if welcome_id is not None:
-        keep_id_set.add(int(welcome_id))
-    for protected_id in protected_ids:
-        keep_id_set.add(int(protected_id))
+    for protected_id in extra_protected_ids:
+        protected_ids.add(int(protected_id))
+    keep_id_set.update(protected_ids)
     delete_ids = []
     for mid in tracked_ids:
         mid_int = int(mid)
-        if welcome_id is not None and mid_int == int(welcome_id):
-            LOGGER.info("SKIP_DELETE_WELCOME message_id=%s", mid_int)
-            continue
         if mid_int in keep_id_set:
             continue
         delete_ids.append(mid_int)
+    kept_ids = {mid for mid in (int(item) for item in tracked_ids) if mid in keep_id_set}
     deleted_count = 0
     for message_id in delete_ids:
         deleted = await ui_safe_delete_message(
@@ -170,6 +180,7 @@ async def ui_cleanup_to_context(
             chat_id=chat_id,
             message_id=message_id,
             log_context=f"context={context_name}",
+            state=state,
         )
         if deleted:
             deleted_count += 1
@@ -178,8 +189,8 @@ async def ui_cleanup_to_context(
         "UI_CLEANUP context=%s deleted=%s kept=%s welcome_id=%s",
         context_name,
         deleted_count,
-        len(keep_id_set),
-        welcome_id,
+        len(kept_ids),
+        await ui_get_welcome_id(state),
     )
     await state.update_data(
         ui_tracked_message_ids=list(
@@ -187,7 +198,7 @@ async def ui_cleanup_to_context(
                 int(item)
                 for item in (keep_ids or [])
                 if item is not None
-                and (welcome_id is None or int(item) != int(welcome_id))
+                and int(item) not in protected_ids
             }
         ),
     )

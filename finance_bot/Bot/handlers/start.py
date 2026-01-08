@@ -59,6 +59,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         chat_id=message.chat.id,
         message_id=message.message_id,
         log_context="cmd_start",
+        state=state,
     )
     await _handle_start_common(message, state)
 
@@ -99,6 +100,7 @@ async def back_to_main(message: Message, state: FSMContext) -> None:
         chat_id=message.chat.id,
         message_id=message.message_id,
         log_context="back_to_main_user_msg",
+        state=state,
     )
     LOGGER.info(
         "USER=%s ACTION=BACK_TO_MAIN_DELETE STATE=%s META=user_msg_deleted=%s",

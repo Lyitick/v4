@@ -1,3 +1,625 @@
+from Bot.keyboards.calculator import income_calculator_keyboard
+from Bot.states.wishlist_states import BytDeferState, WishlistState
+from Bot.utils.datetime_utils import now_tz
+from Bot.utils.telegram_safe import (
+    safe_answer,
+    safe_callback_answer,
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
+from Bot.utils.ui_cleanup import ui_register_message, ui_register_user_message
+
+LOGGER = logging.getLogger(__name__)
+
+router = Router()
+
+
+async def _push_wl_step(state: FSMContext, step: str) -> None:
+    data = await state.get_data()
+    stack = list(data.get("wl_add_step_stack") or [])
+    if not stack or stack[-1] != step:
+        stack.append(step)
+    await state.update_data(wl_add_step_stack=stack)
+
+
+async def _set_wl_steps(state: FSMContext, steps: list[str]) -> None:
+    await state.update_data(wl_add_step_stack=steps)
+
+
+async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
+    """Legacy no-op to keep compatibility when welcome cleanup is referenced."""
+
+    return None
+
+def humanize_wishlist_category(category: str) -> str:
+    """Return user-facing category name supporting legacy BYT values."""
+
+    if category == "byt":
+        return "БЫТ"
+    return category
+
+
+def _get_user_wishlist_categories(db: FinanceDatabase, user_id: int) -> list[dict]:
+    """Return active wishlist categories."""
+
+    return db.list_active_wishlist_categories(user_id)
+
+
+@router.message(F.text == "📋 Вишлист")
+async def open_wishlist(message: Message, state: FSMContext) -> None:
+    """Open wishlist menu."""
+
+    await delete_welcome_message_if_exists(message, state)
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+    await state.clear()
+    db = get_db()
+    wishes = db.get_wishes_by_user(message.from_user.id)
+    categories = _get_user_wishlist_categories(db, message.from_user.id)
+    has_active_wishes = any(not wish.get("is_purchased") for wish in wishes)
+
+    if not categories:
+        await message.answer(
+            "Категорий вишлиста пока нет. Добавь их в настройках.",
+            reply_markup=wishlist_reply_keyboard(),
+        )
+        LOGGER.info(
+            "User %s opened wishlist without categories",
+            message.from_user.id if message.from_user else "unknown",
+        )
+        return
+
+    if not has_active_wishes:
+        await message.answer(
+            "В твоём вишлисте пока пусто.\nДавай добавим что-то новое в наши категории ✨",
+            reply_markup=wishlist_reply_keyboard(),
+        )
+        LOGGER.info("User %s opened empty wishlist", message.from_user.id if message.from_user else "unknown")
+        return
+
+    await message.answer("Раздел вишлиста.", reply_markup=wishlist_reply_keyboard())
+    await message.answer(
+        "Выбери категорию для просмотра или добавь новое желание.",
+        reply_markup=wishlist_categories_keyboard(categories),
+    )
+    LOGGER.info("User %s opened wishlist", message.from_user.id if message.from_user else "unknown")
+
+
+@router.message(F.text.in_({"➕", "+"}))
+async def add_wish_start(message: Message, state: FSMContext) -> None:
+    """Start adding wish."""
+
+    await state.set_state(WishlistState.waiting_for_name)
+    await _set_wl_steps(state, ["name"])
+    await message.answer(
+        "Введи название желания.",
+        reply_markup=back_only_keyboard(),
+    )
+
+@router.message(WishlistState.waiting_for_name, F.text != "⬅️ Назад")
+async def add_wish_name(message: Message, state: FSMContext) -> None:
+    """Save wish name and request price."""
+
+    await state.update_data(name=message.text)
+    await state.set_state(WishlistState.waiting_for_price)
+    await _push_wl_step(state, "amount")
+
+    question = await message.answer(
+        "Введи цену (используй кнопки ниже).",
+        reply_markup=income_calculator_keyboard(),
+    )
+    prompt = await message.answer(": 0")
+
+    await state.update_data(
+        price_sum="0",
+        price_question_message_id=question.message_id,
+        price_message_id=prompt.message_id,
+    )
+
+
+@router.message(
+    WishlistState.waiting_for_price,
+    F.text.in_(
+        {
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "Очистить",
+            "✅ Газ",
+        }
+    ),
+)
+async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
+    """Handle price input via calculator buttons."""
+
+    data = await state.get_data()
+    current_sum = str(data.get("price_sum", "0"))
+    price_message_id = data.get("price_message_id")
+
+    if message.text == "Очистить":
+        new_sum = "0"
+    elif message.text == "✅ Газ":
+        amount_str = current_sum.strip()
+        if not amount_str:
+            await message.answer("Нужно ввести число. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        normalized = amount_str.replace(",", ".")
+        try:
+            price = float(normalized)
+        except (TypeError, ValueError):
+            await message.answer("Нужно ввести число. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        if price <= 0:
+            await message.answer("Цена должна быть больше нуля. Попробуй снова.")
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        await state.update_data(price=price)
+        await state.set_state(WishlistState.waiting_for_url)
+        await _push_wl_step(state, "pre_url")
+        await message.answer("дай", reply_markup=back_only_keyboard())
+        await _push_wl_step(state, "url")
+        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
+
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
+
+    if price_message_id:
+        await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=price_message_id,
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+
+    await state.update_data(price_sum=new_sum, price_message_id=price_message_id)
+
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+@router.message(WishlistState.waiting_for_url, F.text != "⬅️ Назад")
+async def add_wish_url(message: Message, state: FSMContext) -> None:
+    """Save URL and request category selection."""
+
+    text = message.text.strip() if message.text else ""
+    url: Optional[str] = None if text in {"-", ""} else text
+    await state.update_data(url=url)
+    await state.set_state(WishlistState.waiting_for_category)
+    await _push_wl_step(state, "category")
+    db = get_db()
+    categories = _get_user_wishlist_categories(db, message.from_user.id)
+    if not categories:
+        await message.answer(
+            "Категорий вишлиста пока нет. Добавь их в настройках.",
+            reply_markup=wishlist_reply_keyboard(),
+        )
+        await state.clear()
+        return
+    await message.answer(
+        "Выбери категорию желания.", reply_markup=wishlist_categories_keyboard(categories)
+    )
+    await message.answer("Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard())
+
+
+@router.message(F.text == "Купленное")
+async def show_purchases(message: Message, state: FSMContext | None = None) -> None:
+    """Show purchased items grouped by category with pretty headers."""
+
+    db = get_db()
+    purchases = db.get_purchases_by_user(message.from_user.id)
+
+    # Если покупок нет — сразу выходим
+    if not purchases:
+        sent = await message.answer(
+            "Список покупок пуст.",
+            reply_markup=await build_main_menu_for_user(message.from_user.id),
+        )
+        if state:
+            await ui_register_message(state, sent.chat.id, sent.message_id)
+        return
+
+    # Группируем покупки по "очеловеченным" категориям
+    groups: dict[str, list[dict]] = defaultdict(list)
+    for purchase in purchases:
+        category_key = humanize_wishlist_category(purchase.get("category", ""))
+        groups[category_key].append(purchase)
+
+    lines: list[str] = ["Купленные желания:"]
+    for category, items in groups.items():
+        lines.append(f"\n💡 {category}:")
+        for purchase in items:
+            lines.append(
+                f"• {purchase['wish_name']} — {purchase['price']:.2f} ₽ "
+                f"(куплено {purchase['purchased_at']})"
+            )
+
+    sent = await message.answer(
+        "\n".join(lines),
+        reply_markup=await build_main_menu_for_user(message.from_user.id),
+    )
+    if state:
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+
+
+@router.message(
+    F.text == "⬅️ Назад",
+    StateFilter(
+        WishlistState.waiting_for_name,
+        WishlistState.waiting_for_price,
+        WishlistState.waiting_for_url,
+        WishlistState.waiting_for_category,
+    ),
+)
+async def wishlist_add_back(message: Message, state: FSMContext) -> None:
+    """Handle back navigation in wishlist add flow."""
+
+    data = await state.get_data()
+    stack = list(data.get("wl_add_step_stack") or [])
+    current = stack[-1] if stack else None
+
+    if current == "name":
+        await state.clear()
+        await open_wishlist(message, state)
+        return
+
+    if current == "amount":
+        await state.update_data(
+            price=None,
+            price_sum=None,
+            price_question_message_id=None,
+            price_message_id=None,
+        )
+        await state.set_state(WishlistState.waiting_for_name)
+        await _set_wl_steps(state, ["name"])
+        await message.answer(
+            "Введи название желания.",
+            reply_markup=back_only_keyboard(),
+        )
+        return
+
+    if current == "url":
+        stack.pop()
+        await state.update_data(url=None, wl_add_step_stack=stack)
+        await message.answer("дай", reply_markup=back_only_keyboard())
+        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
+        return
+
+    if current == "pre_url":
+        stack.pop()
+        await state.update_data(
+            price=None,
+            price_sum=None,
+            price_question_message_id=None,
+            price_message_id=None,
+            wl_add_step_stack=stack,
+        )
+        await state.set_state(WishlistState.waiting_for_price)
+        question = await message.answer(
+            "Введи цену (используй кнопки ниже).",
+            reply_markup=income_calculator_keyboard(),
+        )
+        prompt = await message.answer(": 0")
+        await state.update_data(
+            price_sum="0",
+            price_question_message_id=question.message_id,
+            price_message_id=prompt.message_id,
+        )
+        await _push_wl_step(state, "amount")
+        return
+
+    if current == "category":
+        stack.pop()
+        await state.update_data(wl_add_step_stack=stack)
+        await state.set_state(WishlistState.waiting_for_url)
+        await message.answer("дай", reply_markup=back_only_keyboard())
+        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
+        return
+
+
+@router.message(WishlistState.waiting_for_price)
+async def invalid_price(message: Message) -> None:
+    """Handle invalid price input."""
+
+    await message.answer("Используй кнопки калькулятора ниже для ввода цены.")
+
+
+@router.message(WishlistState.waiting_for_category, F.text == "⬅️ Назад")
+async def add_wish_back_from_category(message: Message, state: FSMContext) -> None:
+    """Return to name step from category selection."""
+
+    await state.update_data(name=None, price=None, price_sum=None, url=None)
+    await state.set_state(WishlistState.waiting_for_name)
+    await message.answer(
+        "Введи название желания.",
+        reply_markup=back_only_keyboard(),
+    )
+
+
+@router.message(WishlistState.waiting_for_category)
+async def waiting_category_text(message: Message) -> None:
+    """Prompt to use inline keyboard for category."""
+
+    db = get_db()
+    categories = _get_user_wishlist_categories(db, message.from_user.id)
+    await message.answer(
+        "Выбери категорию через кнопки ниже.",
+        reply_markup=wishlist_categories_keyboard(categories),
+    )
+    await message.answer("Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard())
+
+
+def _build_byt_items_keyboard(items: list[dict], allow_defer: bool = True) -> InlineKeyboardMarkup:
+    """Build inline keyboard for BYT items with optional two-column layout."""
+
+    rows: list[list[InlineKeyboardButton]] = []
+    per_row = 2 if len(items) > 3 else 1
+    for index in range(0, len(items), per_row):
+        row_items = items[index : index + per_row]
+        row: list[InlineKeyboardButton] = []
+        for item in row_items:
+            row.append(
+                InlineKeyboardButton(
+                    text=item.get("name", ""), callback_data=f"byt_buy:{item.get('id')}"
+                )
+            )
+        rows.append(row)
+    if allow_defer:
+        defer_callback = "byt_defer_menu"
+        if len(items) == 1:
+            try:
+                defer_id = int(items[0].get("id"))
+            except (TypeError, ValueError):
+                defer_id = None
+            else:
+                defer_callback = f"byt_defer_menu:{defer_id}"
+        rows.append(
+            [InlineKeyboardButton(text="ОТЛОЖИТЬ", callback_data=defer_callback)]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_byt_defer_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    """Build inline keyboard for selecting BYT item to defer."""
+
+    rows: list[list[InlineKeyboardButton]] = []
+    per_row = 2 if len(items) > 3 else 1
+    for index in range(0, len(items), per_row):
+        row_items = items[index : index + per_row]
+        row: list[InlineKeyboardButton] = []
+        for item in row_items:
+            row.append(
+                InlineKeyboardButton(
+                    text=item.get("name", ""),
+                    callback_data=f"byt_defer_pick:{item.get('id')}",
+                )
+            )
+        rows.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+async def _refresh_byt_reminder_message(
+    bot: Bot, chat_id: int, message_id: int, user_id: int
+) -> None:
+    """Refresh reminder message with current BYT items."""
+
+    db = get_db()
+    items = db.list_active_byt_items_for_reminder(user_id, now_tz())
+    settings_row = db.get_user_settings(user_id)
+    allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
+    if not items:
+        await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="Ок.",
+            logger=LOGGER,
+        )
+        return
+
+
+async def _start_byt_defer_flow(
+    callback: CallbackQuery, state: FSMContext, wish_id: int
+) -> bool:
+    """Validate and start BYT defer input flow for specific item."""
+
+    db = get_db()
+    wish = db.get_wish(wish_id)
+    if not wish or humanize_wishlist_category(wish.get("category", "")) != "БЫТ":
+        await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
+        return False
+
+    settings_row = db.get_user_settings(callback.from_user.id)
+    if not bool(settings_row.get("byt_defer_enabled", 1)):
+        await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
+        await state.clear()
+        return False
+
+    await state.set_state(BytDeferState.waiting_for_days)
+    await state.update_data(
+        defer_item_id=wish_id,
+        defer_days_str="0",
+        reminder_message_id=callback.message.message_id if callback.message else None,
+    )
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    target_chat_id = callback.message.chat.id if callback.message else callback.from_user.id
+    question_message = await safe_send_message(
+        callback.bot,
+        chat_id=target_chat_id,
+        text="На сколько дней отложить?",
+        logger=LOGGER,
+    )
+    prompt = await safe_send_message(
+        callback.bot,
+        chat_id=target_chat_id,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
+        logger=LOGGER,
+    )
+    await state.update_data(
+        defer_display_chat_id=question_message.chat.id if question_message else target_chat_id,
+        defer_display_message_id=prompt.message_id if prompt else None,
+    )
+    return True
+
+    keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
+    await safe_edit_message_text(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Что ты купил?",
+        reply_markup=keyboard,
+        logger=LOGGER,
+    )
+
+
+async def run_byt_timer_check(
+    bot: Bot,
+    db: FinanceDatabase,
+    user_id: int | None = None,
+    simulated_time: time | None = None,
+    run_time: datetime | None = None,
+) -> None:
+    """Run BYT reminders using timer configuration for the user."""
+
+    await asyncio.sleep(0)
+    trigger_dt = run_time or now_tz()
+    if simulated_time:
+        trigger_dt = trigger_dt.replace(
+            hour=simulated_time.hour,
+            minute=simulated_time.minute,
+            second=0,
+            microsecond=0,
+        )
+
+    db.cleanup_old_byt_purchases(trigger_dt)
+    user_ids = (
+        [user_id]
+        if user_id is not None
+        else list(
+            set(db.get_users_with_active_byt_wishes())
+            | set(db.get_users_with_byt_timer_times())
+        )
+    )
+    if not user_ids:
+        return
+
+    for uid in user_ids:
+        db.ensure_byt_timer_defaults(uid)
+        settings_row = db.get_user_settings(uid)
+        if not bool(settings_row.get("byt_reminders_enabled", 1)):
+            continue
+
+        times = db.list_active_byt_timer_times(uid)
+        simulated = simulated_time is not None
+        trigger_label = trigger_dt.strftime("%H:%M")
+        LOGGER.info(
+            "BYT timer check triggered (user_id=%s, simulated=%s, time=%s)",
+            uid,
+            simulated,
+            trigger_label,
+        )
+        if not times:
+            LOGGER.info(
+                "BYT timer check: no active times (user_id=%s)",
+                uid,
+            )
+            continue
+
+        should_run = any(
+            int(timer.get("hour", -1)) == trigger_dt.hour
+            and int(timer.get("minute", -1)) == trigger_dt.minute
+            for timer in times
+        )
+        if not should_run:
+            continue
+
+        items = db.list_active_byt_items_for_reminder(uid, trigger_dt)
+        if not items:
+            LOGGER.info("BYT timer: no items, skip (user_id=%s)", uid)
+            continue
+
+        allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
+        keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
+        await bot.send_message(uid, "Что ты купил?", reply_markup=keyboard)
+        LOGGER.info(
+            "BYT timer: sending checklist, items=%s, user_id=%s", len(items), uid
+        )
+
+
+async def run_byt_wishlist_reminders(
+    bot: Bot,
+    db: FinanceDatabase,
+    user_id: int | None = None,
+    forced: bool = False,
+    run_time=None,
+) -> None:
+    """Backward-compatible wrapper for BYT reminders."""
+
+    await run_byt_timer_check(
+        bot,
+        db,
+        user_id=user_id,
+        simulated_time=None,
+        run_time=run_time,
+    )
+
+
+@router.callback_query(F.data.startswith("byt_buy:"))
+async def handle_byt_buy(callback: CallbackQuery) -> None:
+    """Handle purchase confirmation from BYT reminder list."""
+
+    data = callback.data.split(":", maxsplit=1)
+    if len(data) != 2:
+        await safe_callback_answer(callback, "Некорректный формат.", show_alert=True, logger=LOGGER)
         return
 
     try:
@@ -1376,702 +1998,3 @@ from aiogram.fsm.state import State, StatesGroup
 
 
 class WishlistState(StatesGroup):
-    """State machine for wishlist management."""
-
-    waiting_for_name = State()
-    waiting_for_price = State()
-    waiting_for_url = State()
-    waiting_for_category = State()
-
-
-class WishlistBytReminderState(StatesGroup):
-    """State machine for BYT reminder flow."""
-
-    waiting_answer = State()
-
-
-class BytDeferState(StatesGroup):
-    """State machine for deferring BYT wishlist items."""
-
-    waiting_for_days = State()
-
-
-class WishlistSettingsState(StatesGroup):
-    """States for wishlist settings inputs."""
-
-    waiting_for_category_title = State()
-    waiting_for_removal = State()
-    waiting_for_purchased_category = State()
-    waiting_for_purchased_mode = State()
-    waiting_for_purchased_days = State()
-    waiting_for_debit_category = State()
-
-
-class BytSettingsState(StatesGroup):
-    """States for BYT settings inputs."""
-
-    waiting_for_max_defer_days = State()
-
-
-class BytTimerState(StatesGroup):
-    """States for BYT timer settings inputs."""
-
-    waiting_for_removal = State()
-    waiting_for_time_add = State()
-    waiting_for_hour = State()
-    waiting_for_minute = State()
-
-
-===== Bot/utils/__init__.py =====
-
-
-
-===== Bot/utils/datetime_utils.py =====
-
-"""Datetime utilities for the bot."""
-from datetime import datetime, timedelta
-
-from Bot.config import settings
-
-
-def now_tz() -> datetime:
-    """Return current datetime in configured timezone."""
-
-    return datetime.now(tz=settings.TIMEZONE)
-
-
-def current_month_str(now: datetime | None = None) -> str:
-    """Return current month label as YYYY-MM using configured timezone."""
-
-    current = now or now_tz()
-    return f"{current.year:04d}-{current.month:02d}"
-
-
-def add_one_month(source: datetime) -> datetime:
-    """Add one calendar month to datetime without external dependencies."""
-
-    year = source.year + (source.month // 12)
-    month = 1 if source.month == 12 else source.month + 1
-    last_day = (
-        (source.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-    ).day
-    day = min(source.day, last_day)
-    return source.replace(year=year, month=month, day=day)
-
-
-===== Bot/utils/logging.py =====
-
-"""Logging utilities."""
-import logging
-
-from Bot.config.logging_config import setup_logging
-
-
-def init_logging() -> logging.Logger:
-    """Initialize logging and return module logger.
-
-    Returns:
-        logging.Logger: Configured logger instance.
-    """
-
-    setup_logging()
-    return logging.getLogger(__name__)
-
-
-===== Bot/utils/savings.py =====
-
-"""Savings utility helpers."""
-from typing import Any, Dict, List, Tuple
-
-
-def _fallback_humanize_category(category: str) -> str:
-    name = str(category)
-    if name.startswith("savings_"):
-        name = name[len("savings_") :]
-    name = name.replace("_", " ").strip()
-    return name or str(category)
-
-
-def format_savings_summary(
-    savings: Dict[str, Dict[str, Any]],
-    categories_map: Dict[str, str] | None = None,
-) -> str:
-    """Format savings summary for user message."""
-
-    if not savings:
-        return "Пока нет накоплений."
-
-    lines: List[str] = []
-    for category, data in savings.items():
-        display_name = None
-        if categories_map is not None:
-            display_name = categories_map.get(str(category))
-        if not display_name:
-            display_name = _fallback_humanize_category(str(category))
-        current = data.get("current", 0)
-        goal = data.get("goal", 0)
-        purpose = data.get("purpose", "")
-        line = f"{display_name}: {current:.2f}"
-        if goal and goal > 0:
-            progress = min(current / goal * 100, 100)
-            extra = f" (цель {goal:.2f} для '{purpose}', прогресс {progress:.1f}%)"
-            line = f"{line}{extra}"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def find_reached_goal(
-    savings: Dict[str, Dict[str, Any]]
-) -> Tuple[str, Dict[str, Any]] | Tuple[None, None]:
-    """Find first saving goal that has been reached."""
-
-    for category, data in savings.items():
-        current = data.get("current", 0)
-        goal = data.get("goal", 0)
-        if goal and current >= goal:
-            return category, data
-    return None, None
-
-
-===== Bot/utils/telegram_safe.py =====
-
-"""Safe wrappers for Telegram API operations."""
-from __future__ import annotations
-
-import asyncio
-import logging
-
-from aiohttp import ClientConnectionError, ClientOSError
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
-
-LOGGER = logging.getLogger(__name__)
-
-DEFAULT_REQUEST_TIMEOUT = 30
-
-
-def _get_logger(logger: logging.Logger | None) -> logging.Logger:
-    return logger or LOGGER
-
-
-def _is_network_error(exc: Exception) -> bool:
-    return isinstance(
-        exc,
-        (
-            TelegramNetworkError,
-            ClientOSError,
-            ClientConnectionError,
-            asyncio.TimeoutError,
-            TimeoutError,
-        ),
-    )
-
-
-def _log_network_error(
-    logger: logging.Logger,
-    action: str,
-    exc: Exception,
-    attempt: int,
-    retries: int,
-) -> None:
-    logger.warning(
-        "NETWORK_RETRY action=%s attempt=%s/%s error=%s",
-        action,
-        attempt,
-        retries + 1,
-        exc,
-    )
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("Network error details for %s", action, exc_info=True)
-
-
-async def safe_delete_message(
-    bot,
-    chat_id: int,
-    message_id: int,
-    *,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-) -> bool:
-    """Safely delete a message without raising exceptions."""
-
-    log = _get_logger(logger)
-    for attempt in range(retries + 1):
-        try:
-            await bot.delete_message(
-                chat_id=chat_id,
-                message_id=message_id,
-                request_timeout=request_timeout,
-            )
-            return True
-        except TelegramBadRequest as exc:
-            text = str(exc).lower()
-            if (
-                "message to delete not found" in text
-                or "message can't be deleted" in text
-                or "message can’t be deleted" in text
-            ):
-                log.debug(
-                    "Safe delete skipped (chat_id=%s, message_id=%s): %s",
-                    chat_id,
-                    message_id,
-                    exc,
-                )
-                return False
-            log.warning(
-                "Safe delete failed (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe delete failure details", exc_info=True)
-            return False
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "delete_message", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return False
-            log.warning(
-                "Safe delete unexpected error (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe delete unexpected error details", exc_info=True)
-            return False
-    return False
-
-
-async def safe_edit_message_text(
-    bot,
-    chat_id: int,
-    message_id: int,
-    text: str,
-    reply_markup=None,
-    *,
-    parse_mode: str | None = None,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-) -> bool:
-    """Safely edit a message text without raising exceptions."""
-
-    log = _get_logger(logger)
-    if isinstance(reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)):
-        log.warning("Safe edit skipped due to reply keyboard markup")
-        return False
-
-    for attempt in range(retries + 1):
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                request_timeout=request_timeout,
-            )
-            return True
-        except TelegramBadRequest as exc:
-            lowered = str(exc).lower()
-            if "message is not modified" in lowered:
-                return True
-            if "message to edit not found" in lowered:
-                log.debug(
-                    "Safe edit skipped (chat_id=%s, message_id=%s): %s",
-                    chat_id,
-                    message_id,
-                    exc,
-                )
-                return False
-            log.warning(
-                "Safe edit failed (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe edit failure details", exc_info=True)
-            return False
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "edit_message_text", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return False
-            log.warning(
-                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe edit unexpected error details", exc_info=True)
-            return False
-    return False
-
-
-async def safe_edit_message_text_with_status(
-    bot,
-    chat_id: int,
-    message_id: int,
-    text: str,
-    reply_markup=None,
-    *,
-    parse_mode: str | None = None,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-) -> tuple[bool, bool]:
-    """Safely edit a message text, reporting network failures."""
-
-    log = _get_logger(logger)
-    if isinstance(reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)):
-        log.warning("Safe edit skipped due to reply keyboard markup")
-        return False, False
-
-    for attempt in range(retries + 1):
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                request_timeout=request_timeout,
-            )
-            return True, False
-        except TelegramBadRequest as exc:
-            lowered = str(exc).lower()
-            if "message is not modified" in lowered:
-                return True, False
-            if "message to edit not found" in lowered:
-                log.debug(
-                    "Safe edit skipped (chat_id=%s, message_id=%s): %s",
-                    chat_id,
-                    message_id,
-                    exc,
-                )
-                return False, False
-            log.warning(
-                "Safe edit failed (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe edit failure details", exc_info=True)
-            return False, False
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "edit_message_text", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return False, True
-            log.warning(
-                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe edit unexpected error details", exc_info=True)
-            return False, False
-    return False, False
-
-
-async def safe_send_message(
-    bot,
-    chat_id: int,
-    text: str,
-    reply_markup=None,
-    *,
-    parse_mode: str | None = None,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-):
-    """Safely send a message using bot.send_message without raising exceptions."""
-
-    log = _get_logger(logger)
-    normalized = "" if text is None else str(text)
-    if not normalized.strip():
-        normalized = "."
-    for attempt in range(retries + 1):
-        try:
-            return await bot.send_message(
-                chat_id=chat_id,
-                text=normalized,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                request_timeout=request_timeout,
-            )
-        except TelegramBadRequest as exc:
-            log.warning("Safe send failed: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe send failure details", exc_info=True)
-            return None
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "send_message", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return None
-            log.warning("Safe send unexpected error: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe send unexpected error details", exc_info=True)
-            return None
-    return None
-
-
-async def safe_answer(
-    message_or_callback,
-    text: str,
-    reply_markup=None,
-    *,
-    parse_mode: str | None = None,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-) -> int | None:
-    """Safely send a message using .answer without raising exceptions."""
-
-    log = _get_logger(logger)
-    for attempt in range(retries + 1):
-        try:
-            sent = await message_or_callback.answer(
-                text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                request_timeout=request_timeout,
-            )
-            return int(sent.message_id)
-        except TelegramBadRequest as exc:
-            log.warning("Safe answer failed: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe answer failure details", exc_info=True)
-            return None
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "answer", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return None
-            log.warning("Safe answer unexpected error: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe answer unexpected error details", exc_info=True)
-            return None
-    return None
-
-
-async def safe_callback_answer(
-    callback,
-    text: str | None = None,
-    *,
-    show_alert: bool | None = None,
-    logger: logging.Logger | None = None,
-) -> None:
-    """Safely answer a callback query without raising exceptions."""
-
-    log = _get_logger(logger)
-    try:
-        await callback.answer(text=text, show_alert=show_alert)
-    except Exception as exc:  # noqa: BLE001
-        if _is_network_error(exc):
-            log.warning("Safe callback answer failed due to network error: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe callback answer network details", exc_info=True)
-            return
-        log.warning("Safe callback answer unexpected error: %s", exc)
-        if log.isEnabledFor(logging.DEBUG):
-            log.debug("Safe callback answer unexpected error details", exc_info=True)
-
-
-===== Bot/utils/text_sanitizer.py =====
-
-"""Text sanitizers for user-facing labels."""
-from __future__ import annotations
-
-import re
-
-
-_TAIL_PATTERNS = [
-    r"на\s+тиньк",
-    r"на\s+альфу",
-    r"на\s+сбер",
-    r"на\s+яндекс",
-]
-
-
-def sanitize_income_title(text: str) -> str:
-    value = str(text or "")
-    for pattern in _TAIL_PATTERNS:
-        value = re.sub(rf"\s*(?:—|-|:)?\s*{pattern}", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"\s*\(\s*озон\s*\)", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"\(\s*\)", "", value)
-    value = re.sub(r"\s{2,}", " ", value)
-    return value.strip(" -—:\t\n")
-
-
-===== Bot/utils/ui_cleanup.py =====
-
-import logging
-from typing import List
-
-from aiogram import Bot
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
-from aiogram.fsm.context import FSMContext
-
-from Bot.database.get_db import get_db
-from Bot.utils.telegram_safe import (
-    safe_delete_message,
-    safe_edit_message_text,
-    safe_send_message,
-)
-
-LOGGER = logging.getLogger(__name__)
-
-
-async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) -> None:
-    """Track a UI message id for later cleanup."""
-
-    data = await state.get_data()
-    ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    if message_id not in ids:
-        ids.append(int(message_id))
-    if len(ids) > 300:
-        ids = ids[-300:]
-    current_chat_id = data.get("ui_chat_id")
-    await state.update_data(
-        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
-        ui_tracked_message_ids=ids,
-    )
-
-
-async def ui_register_protected_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
-    """Track a UI message id that should never be deleted."""
-
-    data = await state.get_data()
-    ids: List[int] = list(data.get("ui_protected_message_ids") or [])
-    if message_id not in ids:
-        ids.append(int(message_id))
-    if len(ids) > 300:
-        ids = ids[-300:]
-    current_chat_id = data.get("ui_chat_id")
-    await state.update_data(
-        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
-        ui_protected_message_ids=ids,
-    )
-
-
-async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
-    """Do not track user messages for later cleanup."""
-
-    data = await state.get_data()
-    if data.get("ui_chat_id") is None:
-        await state.update_data(ui_chat_id=chat_id)
-
-
-async def ui_safe_delete_message(
-    bot: Bot,
-    chat_id: int,
-    message_id: int,
-    log_context: str | None = None,
-) -> bool:
-    return await safe_delete_message(
-        bot,
-        chat_id=chat_id,
-        message_id=message_id,
-        logger=LOGGER,
-    )
-
-
-async def ui_get_welcome_id(state: FSMContext) -> int | None:
-    data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
-    return int(welcome_id) if welcome_id is not None else None
-
-
-async def ui_set_welcome_id(
-    state: FSMContext, message_id: int, chat_id: int | None = None
-) -> None:
-    update = {"ui_welcome_message_id": int(message_id)}
-    if chat_id is not None:
-        update["ui_chat_id"] = int(chat_id)
-    await state.update_data(**update)
-
-
-async def ui_set_welcome_message(
-    bot: Bot, state: FSMContext, chat_id: int, text: str
-) -> int:
-    welcome_id = await ui_get_welcome_id(state)
-    if welcome_id is not None:
-        edited = await safe_edit_message_text(
-            bot,
-            chat_id=chat_id,
-            message_id=int(welcome_id),
-            text=text,
-            logger=LOGGER,
-        )
-        if edited:
-            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id)
-            return int(welcome_id)
-
-    if welcome_id is None:
-        db = get_db()
-        persisted = db.get_welcome_message_id(chat_id)
-        if persisted is not None:
-            await ui_set_welcome_id(state, int(persisted), chat_id=chat_id)
-            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, persisted)
-            return int(persisted)
-
-    sent = await safe_send_message(bot, chat_id=chat_id, text=text, logger=LOGGER)
-    if sent:
-        await ui_set_welcome_id(state, int(sent.message_id), chat_id=chat_id)
-        get_db().set_welcome_message_id(chat_id, int(sent.message_id))
-        LOGGER.info("WELCOME created (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
-        return int(sent.message_id)
-    return 0
-
-
-async def ui_set_settings_mode_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
-    await ui_register_message(state, chat_id, message_id)
-
-
-async def ui_set_screen_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
-    await ui_register_message(state, chat_id, message_id)
-    await state.update_data(ui_screen_message_id=int(message_id), ui_chat_id=chat_id)
-
-
-async def ui_track_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
-    await ui_register_message(state, chat_id, message_id)
-
-
-async def ui_cleanup_to_context(
-    bot: Bot,
-    state: FSMContext,
-    chat_id: int,
-    context_name: str,
-    keep_ids: List[int] | None = None,

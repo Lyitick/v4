@@ -12,6 +12,7 @@ from Bot.config import settings
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.handlers.wishlist import run_byt_timer_check
+from Bot.utils.byt_utils import get_byt_source_category
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.keyboards.settings import (
     household_remove_keyboard,
@@ -566,7 +567,6 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
 
     user_id = message.from_user.id
     db = get_db()
-    _log_event(user_id, "BYT_MANUAL_CHECK", await state.get_state())
 
     db.ensure_byt_timer_defaults(user_id)
     data = await state.get_data()
@@ -590,6 +590,23 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         logger=LOGGER,
     )
 
+    source_category_id, source_category_title = get_byt_source_category(db, user_id)
+    if not source_category_title:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK META=source_category_id=None total=0 due=0 deferred=0",
+            user_id,
+        )
+        sent_id = await safe_answer(
+            message,
+            "Категория BYT не выбрана. Открой настройки и выбери категорию, "
+            "из которой брать напоминания.",
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+
     times = db.list_active_byt_timer_times(user_id)
     simulated_time = None
     if times:
@@ -603,8 +620,10 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
             simulated_time = None
 
     now_dt = now_tz()
-    total_items = db.get_active_byt_wishes(user_id)
-    due_items = db.list_active_byt_items_for_reminder(user_id, now_dt)
+    total_items = db.get_active_byt_wishes(user_id, source_category_title)
+    due_items = db.list_active_byt_items_for_reminder(
+        user_id, now_dt, source_category_title
+    )
     due_ids = {int(item.get("id")) for item in due_items if item.get("id") is not None}
     deferred_items = [
         item
@@ -622,17 +641,16 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
             continue
         if nearest_deferred is None or deferred_dt < nearest_deferred:
             nearest_deferred = deferred_dt
-    _log_event(
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CHECK META=source_category_id=%s total=%s due=%s deferred=%s",
         user_id,
-        "BYT_MANUAL_CHECK_SUMMARY",
-        None,
-        total_items=str(len(total_items)),
-        due_items=str(len(due_items)),
-        deferred_items=str(len(deferred_items)),
-        nearest_deferred=nearest_deferred.isoformat() if nearest_deferred else "None",
+        source_category_id,
+        len(total_items),
+        len(due_items),
+        len(deferred_items),
     )
     if not due_items:
-        text = "✅ Сейчас покупать ничего не нужно. Список пуст или всё отложено."
+        text = f"В категории {source_category_title} нет активных напоминаний."
         if deferred_items:
             if nearest_deferred:
                 nearest_label = nearest_deferred.strftime("%d.%m.%Y %H:%M")

@@ -12,6 +12,7 @@ from Bot.constants.ui_labels import (
     WISHLIST_DEBIT_CATEGORY_BACK,
     WISHLIST_DEBIT_CATEGORY_BUTTON,
     WISHLIST_DEBIT_CATEGORY_NONE,
+    WISHLIST_BYT_CATEGORY_BUTTON,
 )
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
@@ -28,6 +29,7 @@ from Bot.keyboards.settings import (
     settings_back_reply_keyboard,
     settings_home_reply_keyboard,
     wishlist_categories_select_reply_keyboard,
+    wishlist_byt_category_select_reply_keyboard,
     wishlist_debit_category_select_reply_keyboard,
     wishlist_purchased_mode_reply_keyboard,
     wishlist_settings_reply_keyboard,
@@ -39,6 +41,7 @@ from Bot.states.wishlist_states import (
     BytTimerState,
     WishlistSettingsState,
 )
+from Bot.utils.byt_utils import get_byt_source_category
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.telegram_safe import (
@@ -489,6 +492,42 @@ async def _render_wishlist_debit_category_menu(
         await state.set_state(WishlistSettingsState.waiting_for_debit_category)
 
 
+async def _render_wishlist_byt_category_menu(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> None:
+    categories = db.list_active_wishlist_categories(user_id)
+    _, byt_title = get_byt_source_category(db, user_id)
+    if categories:
+        text = "Выбери категорию напоминаний BYT."
+        if byt_title:
+            text = f"{text}\nТекущая: {byt_title}"
+        if error_message:
+            text = f"{error_message}\n\n{text}"
+    else:
+        text = "Категорий пока нет."
+    LOGGER.info("USER=%s ACTION=BYT_SOURCE_CATEGORY_MENU_OPEN", user_id)
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=text,
+        reply_markup=wishlist_byt_category_select_reply_keyboard(categories)
+        if categories
+        else back_only_keyboard(),
+        screen_id="wl:byt_category_menu",
+        force_new=True,
+    )
+    await state.update_data(
+        wl_byt_map={category.get("title", ""): category.get("id") for category in categories}
+    )
+    if categories:
+        await state.set_state(WishlistSettingsState.waiting_for_byt_category)
+
+
 def _format_category_text(
     title: str, categories: list[dict], error_message: str | None = None
 ) -> str:
@@ -507,6 +546,7 @@ def _format_category_text(
 def _format_wishlist_text(
     categories: list[dict],
     debit_category_title: str,
+    byt_category_title: str,
     error_message: str | None = None,
 ) -> str:
     lines: list[str] = ["🧾 ВИШЛИСТ — настройки", "", "Категории:", ""]
@@ -519,7 +559,13 @@ def _format_wishlist_text(
             else:
                 display = f"{days} дней"
             lines.append(f"{category.get('title', '')} — Купленное: {display}")
-    lines.extend(["", f"Категория списания: {debit_category_title}"])
+    lines.extend(
+        [
+            "",
+            f"Категория списания: {debit_category_title}",
+            f"Категория напоминаний (BYT): {byt_category_title}",
+        ]
+    )
     if error_message:
         lines.append("")
         lines.append(error_message)
@@ -600,16 +646,18 @@ async def _render_wishlist_settings(
 ) -> list[dict]:
     categories = db.list_active_wishlist_categories(user_id)
     debit_category = db.get_wishlist_debit_category(user_id)
+    _, byt_category_title = get_byt_source_category(db, user_id)
     debit_title = "Не выбрано"
     if debit_category:
         income_category = db.get_income_category_by_code(user_id, debit_category)
         debit_title = income_category.get("title", debit_category) if income_category else "Категория удалена"
+    byt_title = byt_category_title or "Не выбрано"
     LOGGER.info("Open wishlist settings (reply mode) user_id=%s", user_id)
     LOGGER.info("USER=%s ACTION=WISHLIST_SETTINGS_OPEN", user_id)
     await _render_reply_settings_page(
         message=message,
         state=state,
-        text=_format_wishlist_text(categories, debit_title, error_message),
+        text=_format_wishlist_text(categories, debit_title, byt_title, error_message),
         reply_markup=wishlist_settings_reply_keyboard(),
         screen_id="st:wishlist",
     )
@@ -902,6 +950,14 @@ async def render_settings_screen(
             user_id=user_id,
             error_message=error_message,
         )
+    elif screen_id == "wl:byt_category_menu":
+        await _render_wishlist_byt_category_menu(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
     elif screen_id == "st:byt_rules":
         await _render_byt_rules_settings(
             state=state,
@@ -1082,7 +1138,7 @@ async def open_income_settings_reply(message: Message, state: FSMContext) -> Non
     await _navigate_to_screen("st:income", message=message, state=state)
 
 
-@router.message(F.text.in_({"Назад", "⬅ Назад", "⬅️ Назад"}))
+@router.message(F.text.in_({"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}))
 async def settings_exit_via_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
@@ -1376,6 +1432,22 @@ async def wishlist_debit_category_menu_reply(message: Message, state: FSMContext
     await state.set_state(None)
     await _navigate_to_screen(
         "wl:debit_category_menu", message=message, state=state, force_new=True
+    )
+
+
+@router.message(F.text == WISHLIST_BYT_CATEGORY_BUTTON)
+async def wishlist_byt_category_menu_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if not data.get("in_settings"):
+        return
+    if data.get("settings_current_screen") != "st:wishlist":
+        return
+
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    await _navigate_to_screen(
+        "wl:byt_category_menu", message=message, state=state, force_new=True
     )
 
 
@@ -1803,6 +1875,51 @@ async def wishlist_debit_category_choice(message: Message, state: FSMContext) ->
         message=message,
         state=state,
         text="Категория списания обновлена.",
+    )
+    await state.set_state(None)
+    previous_screen = await _pop_previous_screen(state) or "st:wishlist"
+    await render_settings_screen(previous_screen, message=message, state=state)
+
+
+@router.message(WishlistSettingsState.waiting_for_byt_category)
+async def wishlist_byt_category_choice(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+
+    choice = (message.text or "").strip()
+    if choice in {"⏪ Назад", "⬅ Назад", "⬅️ Назад"}:
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "st:wishlist"
+        await render_settings_screen(previous_screen, message=message, state=state)
+        return
+    if choice in {"🏠 На главную", "⏪ На главную"}:
+        await _exit_settings_to_main(message, state)
+        return
+
+    mapping: dict[str, int] = data.get("wl_byt_map") or {}
+    category_id = mapping.get(choice)
+    if not category_id:
+        await render_settings_screen(
+            "wl:byt_category_menu",
+            message=message,
+            state=state,
+            error_message="Выбери категорию из списка.",
+            force_new=True,
+        )
+        return
+
+    db = get_db()
+    db.set_byt_wishlist_category_id(message.from_user.id, int(category_id))
+    LOGGER.info(
+        "USER=%s ACTION=BYT_SOURCE_CATEGORY_SET META=category_id=%s",
+        message.from_user.id,
+        category_id,
+    )
+    await _send_and_register(
+        message=message,
+        state=state,
+        text="Категория напоминаний BYT обновлена.",
     )
     await state.set_state(None)
     previous_screen = await _pop_previous_screen(state) or "st:wishlist"

@@ -5,6 +5,7 @@ from Bot.constants.ui_labels import (
     WISHLIST_DEBIT_CATEGORY_BACK,
     WISHLIST_DEBIT_CATEGORY_BUTTON,
     WISHLIST_DEBIT_CATEGORY_NONE,
+    WISHLIST_BYT_CATEGORY_BUTTON,
 )
 
 
@@ -178,6 +179,7 @@ def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="➖ Удалить категорию вишлиста"),
         ],
         [KeyboardButton(text="🕒 Настроить купленное")],
+        [KeyboardButton(text=WISHLIST_BYT_CATEGORY_BUTTON)],
         [KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BUTTON)],
         [KeyboardButton(text="⬅️ Назад")],
     ]
@@ -227,6 +229,24 @@ def wishlist_debit_category_select_reply_keyboard(
         rows.append(row)
     rows.append([KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_NONE)])
     rows.append([KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BACK)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def wishlist_byt_category_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting BYT wishlist category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text="⏪ Назад"), KeyboardButton(text="🏠 На главную")])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 

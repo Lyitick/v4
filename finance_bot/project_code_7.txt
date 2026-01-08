@@ -1,16 +1,5 @@
-            (3, "beta", "Beta", 50, 2),
-        )
-        db.connection.commit()
-
-        code, title = db.resolve_household_debit_category(3)
-        assert code == "alpha"
-        assert title == "Alpha"
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-
 ===== tests/unit/test_household_idempotency.py =====
+
 
 """Tests for household idempotency handling."""
 from types import SimpleNamespace
@@ -176,8 +165,8 @@ async def test_handle_household_answer_no_double_tap_is_idempotent(
     assert db_stub.apply_household_payment_answer.call_count == 1
     callback.bot.edit_message_text.assert_awaited_once()
 
-
 ===== tests/unit/test_household_payments.py =====
+
 
 """Tests for household payments workflow."""
 from datetime import datetime
@@ -319,8 +308,8 @@ async def test_question_flow_and_savings_update() -> None:
     savings_map = db.get_user_savings_map(user_id)
     assert savings_map.get("быт") == 5000
 
-
 ===== tests/unit/test_household_renderers.py =====
+
 
 """Tests for household renderers."""
 
@@ -349,8 +338,8 @@ def test_format_household_items() -> None:
     assert "❌" in text
     assert "Интернет" in text
 
-
 ===== tests/unit/test_household_services.py =====
+
 
 """Tests for household services."""
 
@@ -393,8 +382,8 @@ def test_idempotency_check() -> None:
     assert should_ignore_answer(answers, processed_steps, "q1", "no") is False
     assert should_ignore_answer(answers, processed_steps, "q2", "yes") is False
 
-
 ===== tests/unit/test_imports.py =====
+
 
 """Basic import tests."""
 
@@ -433,8 +422,8 @@ def test_register_routers_smoke() -> None:
     assert settings.router in routers
     assert wishlist.router in routers
 
-
 ===== tests/unit/test_income_categories.py =====
+
 
 """Tests for income category seeding and flow guards."""
 import asyncio
@@ -497,8 +486,8 @@ def test_start_income_flow_with_empty_categories(monkeypatch) -> None:
     message.answer.assert_awaited_once()
     assert "Категории дохода не настроены" in message.answer.await_args.args[0]
 
-
 ===== tests/unit/test_telegram_safe.py =====
+
 
 """Tests for telegram_safe utilities."""
 from unittest.mock import AsyncMock
@@ -531,8 +520,8 @@ async def test_safe_edit_message_text_retries_network_error() -> None:
     assert result is True
     assert bot.edit_message_text.call_count == 2
 
-
 ===== tests/unit/test_telegram_safe_delete.py =====
+
 
 """Tests for safe_delete_message."""
 
@@ -665,8 +654,8 @@ def test_safe_delete_message_not_found() -> None:
 
     asyncio.run(run())
 
-
 ===== tests/unit/test_text_sanitizer.py =====
+
 
 """Tests for income text sanitizer."""
 
@@ -699,8 +688,8 @@ def test_sanitize_income_title_removes_ozon_suffix() -> None:
     text = "что-то (озон)"
     assert sanitize_income_title(text) == "что-то"
 
-
 ===== tests/unit/test_ui_cleanup.py =====
+
 
 """Tests for UI cleanup utilities."""
 from types import SimpleNamespace
@@ -938,8 +927,8 @@ def test_welcome_reused_on_start() -> None:
 
     asyncio.run(run_test())
 
-
 ===== tests/unit/test_utils.py =====
+
 
 """Utility tests."""
 from datetime import datetime, time
@@ -994,6 +983,7 @@ def test_resolve_deferred_until_keeps_later() -> None:
 
 ===== tests/unit/test_wishlist_debit_category.py =====
 
+
 """Tests for wishlist debit category settings."""
 from Bot.database import crud
 
@@ -1018,8 +1008,8 @@ def test_set_and_get_wishlist_debit_category(tmp_path, monkeypatch) -> None:
         db.close()
         crud.FinanceDatabase._instance = None
 
-
 ===== tests/unit/test_wishlist_purchase.py =====
+
 
 """Tests for wishlist purchase flow."""
 from Bot.database import crud
@@ -1073,12 +1063,83 @@ def test_purchase_wishlist_debit_idempotent(tmp_path, monkeypatch) -> None:
         db.close()
         crud.FinanceDatabase._instance = None
 
-
 ===== utils/__init__.py =====
+
 
 from Bot.utils import *  # noqa: F401,F403
 
-
 ===== utils/logging.py =====
 
+
 from Bot.utils.logging import *  # noqa: F401,F403
+
+===== tests/unit/test_byt_source_category.py =====
+
+"""Tests for BYT source category selection."""
+
+from Bot.database import crud
+from Bot.utils.byt_utils import get_byt_source_category_id
+from Bot.utils.datetime_utils import now_tz
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_byt_source_category_respects_setting(tmp_path, monkeypatch) -> None:
+    """Return stored BYT source category id when configured."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "Дом")
+        db.set_byt_wishlist_category_id(1, category_id)
+        assert get_byt_source_category_id(db, 1) == category_id
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_source_category_fallback_by_name(tmp_path, monkeypatch) -> None:
+    """Fallback should pick wishlist category named 'быт' and persist it."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "быт")
+        assert get_byt_source_category_id(db, 1) == category_id
+        assert db.get_byt_wishlist_category_id(1) == category_id
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_source_category_missing_returns_none(tmp_path, monkeypatch) -> None:
+    """Return None when no BYT category is configured or found."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        assert get_byt_source_category_id(db, 1) is None
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_query_filters_by_category(tmp_path, monkeypatch) -> None:
+    """BYT query should return items only from selected category."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_a = db.create_wishlist_category(1, "быт")
+        category_b = db.create_wishlist_category(1, "подарки")
+        db.add_wish(1, "Швабра", 100, None, "быт")
+        db.add_wish(1, "Подарок", 200, None, "подарки")
+        now_dt = now_tz()
+        items = db.list_active_byt_items_for_reminder(1, now_dt, "быт")
+        assert {item["name"] for item in items} == {"Швабра"}
+        assert db.get_active_byt_wishes(1, "быт")[0]["name"] == "Швабра"
+        assert category_a != category_b
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None

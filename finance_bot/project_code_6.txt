@@ -1,54 +1,9 @@
-    """State machine for wishlist management."""
-
-    waiting_for_name = State()
-    waiting_for_price = State()
-    waiting_for_url = State()
-    waiting_for_category = State()
-
-
-class WishlistBytReminderState(StatesGroup):
-    """State machine for BYT reminder flow."""
-
-    waiting_answer = State()
-
-
-class BytDeferState(StatesGroup):
-    """State machine for deferring BYT wishlist items."""
-
-    waiting_for_days = State()
-
-
-class WishlistSettingsState(StatesGroup):
-    """States for wishlist settings inputs."""
-
-    waiting_for_category_title = State()
-    waiting_for_removal = State()
-    waiting_for_purchased_category = State()
-    waiting_for_purchased_mode = State()
-    waiting_for_purchased_days = State()
-    waiting_for_debit_category = State()
-
-
-class BytSettingsState(StatesGroup):
-    """States for BYT settings inputs."""
-
-    waiting_for_max_defer_days = State()
-
-
-class BytTimerState(StatesGroup):
-    """States for BYT timer settings inputs."""
-
-    waiting_for_removal = State()
-    waiting_for_time_add = State()
-    waiting_for_hour = State()
-    waiting_for_minute = State()
-
-
 ===== Bot/utils/__init__.py =====
 
 
 
 ===== Bot/utils/datetime_utils.py =====
+
 
 """Datetime utilities for the bot."""
 from datetime import datetime, time, timedelta
@@ -116,6 +71,7 @@ def resolve_deferred_until(
 
 ===== Bot/utils/logging.py =====
 
+
 """Logging utilities."""
 import logging
 
@@ -132,8 +88,8 @@ def init_logging() -> logging.Logger:
     setup_logging()
     return logging.getLogger(__name__)
 
-
 ===== Bot/utils/savings.py =====
+
 
 """Savings utility helpers."""
 from typing import Any, Dict, List, Tuple
@@ -187,8 +143,8 @@ def find_reached_goal(
             return category, data
     return None, None
 
-
 ===== Bot/utils/telegram_safe.py =====
+
 
 """Safe wrappers for Telegram API operations."""
 from __future__ import annotations
@@ -555,8 +511,8 @@ async def safe_callback_answer(
         if log.isEnabledFor(logging.DEBUG):
             log.debug("Safe callback answer unexpected error details", exc_info=True)
 
-
 ===== Bot/utils/text_sanitizer.py =====
+
 
 """Text sanitizers for user-facing labels."""
 from __future__ import annotations
@@ -581,8 +537,8 @@ def sanitize_income_title(text: str) -> str:
     value = re.sub(r"\s{2,}", " ", value)
     return value.strip(" -—:\t\n")
 
-
 ===== Bot/utils/ui_cleanup.py =====
+
 
 import logging
 from typing import List
@@ -836,8 +792,8 @@ async def ui_render_screen(
         return int(sent.message_id)
     return int(screen_id or 0)
 
-
 ===== Bot/utils/ui_flow.py =====
+
 
 import logging
 from collections.abc import Awaitable, Callable
@@ -915,12 +871,12 @@ async def ui_transition(
     await ui_set_screen_message(state, new_screen, sent.message_id)
     return sent
 
-
 ===== __init__.py =====
 
 
 
 ===== docs/AUDIT_REPORT.md =====
+
 
 # Audit Report (finance_bot v4)
 
@@ -942,8 +898,8 @@ async def ui_transition(
 - Expand safe Telegram wrapper adoption in remaining handlers and services.
 - Add safe reply markup editing helper if required by additional flows.
 
-
 ===== docs/RUNBOOK.md =====
+
 
 # Runbook
 
@@ -957,8 +913,8 @@ python Bot/main.py
 pytest
 ```
 
-
 ===== finance_bot.log =====
+
 
 [2025-11-25 14:56:00,395] [INFO] [database.crud] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
 [2025-11-25 14:56:00,396] [INFO] [__main__] Starting bot polling
@@ -1730,7 +1686,6 @@ aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: messa
 [2025-11-25 17:34:36,314] [INFO] [__main__] Bot shutdown complete
 [2025-11-25 17:34:36,315] [INFO] [aiogram.dispatcher] Polling stopped for bot @IanDyniBot id=8440100118 - 'Моя Боль ЯньДунь'
 
-
 ===== tests/__init__.py =====
 
 
@@ -1740,6 +1695,7 @@ aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: messa
 
 
 ===== tests/integration/test_database.py =====
+
 
 """Integration tests for database operations."""
 from Bot.database.crud import FinanceDatabase, TABLES
@@ -1777,8 +1733,8 @@ def test_update_saving_and_purchase() -> None:
     purchases = db.get_purchases_by_user(1)
     assert len(purchases) == 1
 
-
 ===== tests/integration/test_schema_migration.py =====
+
 
 """Integration tests for schema migration."""
 from __future__ import annotations
@@ -1907,8 +1863,8 @@ def test_schema_migration_renames_tables(tmp_path: Path) -> None:
 
     connection.close()
 
-
 ===== tests/run_all_tests.py =====
+
 
 """Run all pytest suites."""
 import pytest
@@ -1917,8 +1873,8 @@ import pytest
 if __name__ == "__main__":
     raise SystemExit(pytest.main(["-q", "tests"]))
 
-
 ===== tests/test_runner.py =====
+
 
 """Helper to run tests programmatically."""
 import subprocess
@@ -1937,12 +1893,12 @@ def main() -> int:
 if __name__ == "__main__":
     raise SystemExit(main())
 
-
 ===== tests/unit/__init__.py =====
 
 
 
 ===== tests/unit/test_handlers.py =====
+
 
 """Tests for handler utilities."""
 from Bot.handlers.finances import _format_savings_summary, _find_reached_goal
@@ -1965,8 +1921,8 @@ def test_find_reached_goal() -> None:
     assert category == "категория"
     assert data["goal"] == 100
 
-
 ===== tests/unit/test_household_debit_category.py =====
+
 
 """Tests for household debit category settings."""
 from Bot.database import crud
@@ -2031,3 +1987,78 @@ def test_resolve_household_debit_category_fallback(tmp_path, monkeypatch) -> Non
             INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
             VALUES (?, ?, ?, ?, ?, 1)
             """,
+
+===== Bot/utils/byt_utils.py =====
+
+"""Utilities for BYT reminder source category."""
+
+from __future__ import annotations
+
+import logging
+from typing import Optional
+
+from Bot.database.crud import FinanceDatabase
+
+LOGGER = logging.getLogger(__name__)
+
+
+def normalize_wishlist_category_title(value: str) -> str:
+    """Normalize wishlist category titles for comparison."""
+
+    normalized = str(value or "").strip().casefold()
+    if normalized == "byt":
+        return "быт"
+    return normalized
+
+
+def wishlist_category_matches(wish_category: str, source_title: str) -> bool:
+    """Return True when wish category matches selected BYT source."""
+
+    return normalize_wishlist_category_title(wish_category) == normalize_wishlist_category_title(
+        source_title
+    )
+
+
+def get_byt_source_category_id(db: FinanceDatabase, user_id: int) -> Optional[int]:
+    """Return BYT source wishlist category id with fallback by name."""
+
+    db.ensure_user_settings(user_id)
+    settings_row = db.get_user_settings(user_id)
+    raw_id = settings_row.get("byt_wishlist_category_id")
+    category_id: Optional[int] = None
+    if raw_id is not None:
+        try:
+            category_id = int(raw_id)
+        except (TypeError, ValueError):
+            category_id = None
+    if category_id is not None:
+        category_row = db.get_wishlist_category_by_id(user_id, category_id)
+        if category_row:
+            return int(category_row.get("id"))
+        db.set_byt_wishlist_category_id(user_id, None)
+
+    fallback = db.get_wishlist_category_by_title(user_id, "быт")
+    if fallback:
+        fallback_id = int(fallback.get("id"))
+        db.set_byt_wishlist_category_id(user_id, fallback_id)
+        LOGGER.info(
+            "USER=%s ACTION=BYT_SOURCE_CATEGORY_SET META=category_id=%s",
+            user_id,
+            fallback_id,
+        )
+        return fallback_id
+    return None
+
+
+def get_byt_source_category(
+    db: FinanceDatabase, user_id: int
+) -> tuple[Optional[int], Optional[str]]:
+    """Return BYT source category id and title."""
+
+    category_id = get_byt_source_category_id(db, user_id)
+    if category_id is None:
+        return None, None
+    category_row = db.get_wishlist_category_by_id(user_id, category_id)
+    if not category_row:
+        return None, None
+    return category_id, str(category_row.get("title", ""))

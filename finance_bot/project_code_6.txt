@@ -1,3 +1,10 @@
+        inline_keyboard.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def wishlist_url_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for skipping wishlist URL input."""
+
     buttons = [[InlineKeyboardButton(text="скип", callback_data="wishlist_skip_url")]]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
@@ -1991,10 +1998,3 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from Bot.utils.telegram_safe import safe_delete_message
-LOGGER = logging.getLogger(__name__)
-
-
-async def ui_get(state: FSMContext) -> dict[str, Any]:
-    data = await state.get_data()
-    return {
-        "greeting_id": data.get("ui_welcome_message_id"),

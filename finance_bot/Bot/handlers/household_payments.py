@@ -644,8 +644,8 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
 
     data = await state.get_data()
     current_date = now_dt.date().isoformat()
-    saved_date = data.get("byt_manual_check_date")
-    index = int(data.get("byt_manual_check_index") or -1)
+    saved_date = data.get("byt_manual_cursor_date")
+    index = int(data.get("byt_manual_cursor_index") or -1)
     if saved_date != current_date:
         index = -1
 
@@ -667,11 +667,17 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         for category in categories
         if selected_time in category_times.get(int(category.get("id") or 0), [])
     ]
+    categories_meta = [
+        str(category.get("title", ""))
+        for category in target_categories
+        if category.get("title")
+    ]
     LOGGER.info(
-        "USER=%s ACTION=BYT_MANUAL_CHECK_TIME META=time=%s categories=%s",
+        "USER=%s ACTION=BYT_MANUAL_CHECK_STEP META=time=%s index=%s/%s",
         user_id,
         selected_time,
-        len(target_categories),
+        next_index + 1,
+        len(times_sorted),
     )
     header_lines = ["⏰ Проверка напоминаний", f"Время: {selected_time}"]
     if restart_notice:
@@ -736,16 +742,17 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         if sent:
             await ui_register_message(state, sent.chat.id, sent.message_id)
     LOGGER.info(
-        "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=%s total=%s due=%s deferred=%s",
+        "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=%s categories=%s total=%s due=%s deferred=%s",
         user_id,
         selected_time,
+        categories_meta,
         total_count,
         due_count,
         deferred_count,
     )
     await state.update_data(
-        byt_manual_check_date=current_date,
-        byt_manual_check_index=next_index,
+        byt_manual_cursor_date=current_date,
+        byt_manual_cursor_index=next_index,
     )
 
 

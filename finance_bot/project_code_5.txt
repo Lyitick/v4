@@ -1,3 +1,10 @@
+            await _cleanup_input_ui(
+                message.bot,
+                data,
+                display_chat_key="percent_display_chat_id",
+                display_message_key="percent_display_message_id",
+            )
+            await _remove_calculator_keyboard(message)
             await _render_previous_screen_or_exit(message, state)
             return
 
@@ -1991,10 +1998,3 @@ def wishlist_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup
             inline_keyboard.append(row)
             row = []
     if row:
-        inline_keyboard.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def wishlist_url_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for skipping wishlist URL input."""
-

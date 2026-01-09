@@ -3,7 +3,11 @@
 from datetime import datetime
 
 from Bot.database import crud
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
+from Bot.keyboards.settings import byt_timer_categories_inline_keyboard
 from Bot.utils.byt_render import (
+    format_byt_categories_status_text,
     format_byt_category_checklist_text,
     format_byt_defer_confirmation_text,
 )
@@ -47,3 +51,22 @@ def test_defer_confirmation_text_contains_details() -> None:
     assert "Швабра" in text
     assert "2026-01-09 12:00" in text
     assert "Категория: Быт" in text
+
+
+def test_byt_categories_status_text_format() -> None:
+    categories = [
+        {"title": "Быт", "enabled": 1},
+        {"title": "Еда", "enabled": 0},
+    ]
+    text = format_byt_categories_status_text(categories)
+    lines = [line for line in text.splitlines() if line.strip()]
+    status_lines = lines[1:]
+    assert status_lines == ["✅ Быт", "❌ Еда"]
+    assert all(not any(char.isdigit() for char in line) for line in status_lines)
+
+
+def test_byt_timer_categories_keyboard_inline() -> None:
+    categories = [{"id": 1, "title": "Быт", "enabled": 1}]
+    keyboard = byt_timer_categories_inline_keyboard(categories, "byt:timer_category")
+    assert isinstance(keyboard, InlineKeyboardMarkup)
+    assert not isinstance(keyboard, ReplyKeyboardMarkup)

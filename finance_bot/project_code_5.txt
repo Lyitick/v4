@@ -1,3 +1,18 @@
+                message.bot,
+                chat_id=display_chat_id,
+                text=": 0",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            purchased_days_str=days_str,
+            purchased_display_chat_id=display_chat_id,
+            purchased_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "✅ Газ":
         try:
             days = int(days_str or "0")
         except ValueError:
@@ -1713,7 +1728,6 @@ async def handle_byt_defer_days_invalid(message: Message) -> None:
 ===== Bot/keyboards/__init__.py =====
 
 
-
 ===== Bot/keyboards/calculator.py =====
 
 """Calculator keyboard definitions."""
@@ -1984,17 +1998,3 @@ def household_debit_category_select_reply_keyboard(
 
 
 def household_payments_remove_reply_keyboard(
-    items: list[dict],
-) -> ReplyKeyboardMarkup:
-    """Reply keyboard for removing household payments in settings."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for item in items:
-        title = str(item.get("text", "")).rstrip("?")
-        amount = item.get("amount")
-        label = f"{title} — {amount}" if amount is not None else title
-        row.append(KeyboardButton(text=label))
-        if len(row) == 2:
-            rows.append(row)
-            row = []

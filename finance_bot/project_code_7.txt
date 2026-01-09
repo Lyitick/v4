@@ -1,4 +1,56 @@
 
+===== tests/integration/__init__.py =====
+
+
+===== tests/integration/test_database.py =====
+
+"""Integration tests for database operations."""
+from Bot.database.crud import FinanceDatabase, TABLES
+
+
+def setup_module(module) -> None:  # noqa: D401
+    """Clean database tables before tests."""
+
+    db = FinanceDatabase()
+    cursor = db.connection.cursor()
+    cursor.execute(f"DELETE FROM {TABLES.wishes}")
+    cursor.execute(f"DELETE FROM {TABLES.purchases}")
+    cursor.execute(f"DELETE FROM {TABLES.savings}")
+    db.connection.commit()
+
+
+def test_add_and_get_wish() -> None:
+    """Add wish and retrieve it."""
+
+    db = FinanceDatabase()
+    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
+    wish = db.get_wish(wish_id)
+    assert wish is not None
+    assert wish["name"] == "Test"
+
+
+def test_update_saving_and_purchase() -> None:
+    """Update savings and add purchase entry."""
+
+    db = FinanceDatabase()
+    db.update_saving(1, "Инструменты", 20.0)
+    savings = db.get_user_savings(1)
+    assert savings.get("Инструменты", {}).get("current") == 20.0
+    db.add_purchase(1, "Test", 10.0, "Инструменты")
+    purchases = db.get_purchases_by_user(1)
+    assert len(purchases) == 1
+
+===== tests/integration/test_schema_migration.py =====
+
+"""Integration tests for schema migration."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from Bot.database.crud import TABLES, migrate_schema
+
+
 def test_schema_migration_renames_tables(tmp_path: Path) -> None:
     """Rename legacy tables without losing data."""
 
@@ -148,7 +200,6 @@ if __name__ == "__main__":
 ===== tests/unit/__init__.py =====
 
 
-
 ===== tests/unit/test_byt_reminder_schedule.py =====
 
 """Tests for BYT reminder schedule helpers."""
@@ -183,7 +234,11 @@ def test_get_next_reminder_dt_default() -> None:
 from datetime import datetime
 
 from Bot.database import crud
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
+from Bot.keyboards.settings import byt_timer_categories_inline_keyboard
 from Bot.utils.byt_render import (
+    format_byt_categories_status_text,
     format_byt_category_checklist_text,
     format_byt_defer_confirmation_text,
 )
@@ -227,6 +282,25 @@ def test_defer_confirmation_text_contains_details() -> None:
     assert "Швабра" in text
     assert "2026-01-09 12:00" in text
     assert "Категория: Быт" in text
+
+
+def test_byt_categories_status_text_format() -> None:
+    categories = [
+        {"title": "Быт", "enabled": 1},
+        {"title": "Еда", "enabled": 0},
+    ]
+    text = format_byt_categories_status_text(categories)
+    lines = [line for line in text.splitlines() if line.strip()]
+    status_lines = lines[1:]
+    assert status_lines == ["✅ Быт", "❌ Еда"]
+    assert all(not any(char.isdigit() for char in line) for line in status_lines)
+
+
+def test_byt_timer_categories_keyboard_inline() -> None:
+    categories = [{"id": 1, "title": "Быт", "enabled": 1}]
+    keyboard = byt_timer_categories_inline_keyboard(categories, "byt:timer_category")
+    assert isinstance(keyboard, InlineKeyboardMarkup)
+    assert not isinstance(keyboard, ReplyKeyboardMarkup)
 
 ===== tests/unit/test_byt_source_category.py =====
 
@@ -1457,3 +1531,4 @@ from Bot.utils import *  # noqa: F401,F403
 ===== utils/logging.py =====
 
 from Bot.utils.logging import *  # noqa: F401,F403
+

@@ -1,3 +1,26 @@
+    buttons = [
+        [KeyboardButton(text="Купленное")],
+        [KeyboardButton(text="⏪ На главную")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for wishlist categories."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        row.append(
+            InlineKeyboardButton(
+                text=category.get("title", ""),
+                callback_data=f"wlcat:{category.get('id')}",
+            )
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
         inline_keyboard.append(row)
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
@@ -976,6 +999,40 @@ class BytTimerState(StatesGroup):
 ===== Bot/utils/__init__.py =====
 
 
+===== Bot/utils/byt_manual_check.py =====
+
+"""Helpers for manual BYT reminder checks."""
+
+
+def build_byt_times_sorted(times_by_category: dict[int, list[str]]) -> list[str]:
+    """Build a unique sorted list of HH:MM times from category mapping."""
+
+    times: set[str] = set()
+    for values in times_by_category.values():
+        for value in values:
+            cleaned = str(value).strip()
+            if cleaned:
+                times.add(cleaned)
+    return sorted(times)
+
+
+def select_next_byt_manual_time(
+    times_sorted: list[str],
+    current_date: str,
+    saved_date: str | None,
+    index: int,
+) -> tuple[str, int, str]:
+    """Select next time slot and return selected time, updated index, restart notice."""
+
+    if saved_date != current_date:
+        index = -1
+    next_index = index + 1
+    restart_notice = ""
+    if next_index >= len(times_sorted):
+        next_index = 0
+        restart_notice = "Сегодня все времена уже проверены — начинаю заново."
+    return times_sorted[next_index], next_index, restart_notice
+
 ===== Bot/utils/byt_render.py =====
 
 """Rendering helpers for BYT reminders."""
@@ -1941,60 +1998,3 @@ async def ui_cleanup_to_context(
     )
 
 
-async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
-    data = await state.get_data()
-    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
-    if chat_id is None:
-        return
-    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
-
-
-async def ui_render_screen(
-    bot: Bot,
-    state: FSMContext,
-    chat_id: int,
-    text: str,
-    reply_markup=None,
-    parse_mode: str | None = None,
-) -> int:
-    data = await state.get_data()
-    screen_id = data.get("ui_screen_message_id")
-    if screen_id is not None and not isinstance(
-        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
-    ):
-        edited = await safe_edit_message_text(
-            bot,
-            chat_id=chat_id,
-            message_id=int(screen_id),
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode,
-            logger=LOGGER,
-        )
-        if edited:
-            await ui_set_screen_message(state, chat_id, int(screen_id))
-            return int(screen_id)
-    sent = await safe_send_message(
-        bot,
-        chat_id=chat_id,
-        text=text,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode,
-        logger=LOGGER,
-    )
-    if sent:
-        await ui_set_screen_message(state, chat_id, sent.message_id)
-        return int(sent.message_id)
-    return int(screen_id or 0)
-
-===== Bot/utils/ui_flow.py =====
-
-import logging
-from collections.abc import Awaitable, Callable
-from typing import Any
-
-from aiogram import Bot
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
-
-from Bot.utils.telegram_safe import safe_delete_message

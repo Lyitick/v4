@@ -1,3 +1,104 @@
+        )
+    elif screen_id == "wl:purchased_mode":
+        data = await state.get_data()
+        category_id = data.get("editing_wl_category_id")
+        if category_id is not None:
+            await _render_wishlist_purchased_mode(
+                state=state,
+                message=message,
+                db=db,
+                user_id=user_id,
+                category_id=int(category_id),
+            )
+        else:
+            await _render_wishlist_settings(
+                state=state,
+                message=message,
+                db=db,
+                user_id=user_id,
+            )
+    elif screen_id == "wl:debit_category_menu":
+        await _render_wishlist_debit_category_menu(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "wl:byt_category_menu":
+        await _render_wishlist_byt_category_menu(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "st:byt_rules":
+        await _render_byt_rules_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "byt:timer_menu":
+        await _render_byt_timer_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "byt:timer_category":
+        data = await state.get_data()
+        category_id = data.get("byt_timer_category_id")
+        if category_id is not None:
+            await _render_byt_timer_category_settings(
+                state=state,
+                message=message,
+                db=db,
+                user_id=user_id,
+                category_id=int(category_id),
+                error_message=error_message,
+            )
+        else:
+            await _render_byt_timer_settings(
+                state=state,
+                message=message,
+                db=db,
+                user_id=user_id,
+                error_message=error_message,
+            )
+    elif screen_id == "bt:del_time_menu":
+        await _render_byt_timer_delete_menu(
+            state=state, message=message, db=db, user_id=user_id
+        )
+    elif screen_id == "hp:del_payment_menu":
+        await _render_household_delete_menu(
+            state=state, message=message, db=db, user_id=user_id
+        )
+    elif screen_id == "hp:debit_category_menu":
+        await _render_household_debit_category_menu(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    else:
+        await _render_settings_home(message, state)
+    await _set_current_screen(state, screen_id)
+
+
+async def _navigate_to_screen(
+    screen_id: str,
+    *,
+    message: Message,
+    state: FSMContext,
+    error_message: str | None = None,
+    force_new: bool = False,
+) -> None:
+    await _push_current_screen(state, screen_id)
     await render_settings_screen(
         screen_id,
         message=message,
@@ -1897,104 +1998,3 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
                 display_message_key="percent_display_message_id",
             )
             await _remove_calculator_keyboard(message)
-            await _render_previous_screen_or_exit(message, state)
-            return
-
-        if error_message is None:
-            db = get_db()
-            db.update_income_category_percent(message.from_user.id, category_id, percent)
-            total = db.sum_income_category_percents(message.from_user.id)
-
-            if total == 100:
-                LOGGER.info(
-                    "Percent saved: user=%s scope=%s category_id=%s value=%s",
-                    message.from_user.id,
-                    "income",
-                    category_id,
-                    percent,
-                )
-            else:
-                error_message = f"Сумма процентов сейчас {total}%. Нужно 100%."
-
-        await _cleanup_input_ui(
-            message.bot,
-            data,
-            display_chat_key="percent_display_chat_id",
-            display_message_key="percent_display_message_id",
-        )
-        await _remove_calculator_keyboard(message)
-        if error_message:
-            await state.set_state(IncomeSettingsState.waiting_for_percent_category)
-            await _render_income_percent_menu(
-                state=state,
-                message=message,
-                db=get_db(),
-                user_id=message.from_user.id,
-                error_message=error_message,
-            )
-            return
-
-        await state.set_state(None)
-        previous_screen = await _pop_previous_screen(state) or "st:income"
-        await render_settings_screen(previous_screen, message=message, state=state)
-
-
-@router.message(WishlistSettingsState.waiting_for_purchased_days)
-async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    text = (message.text or "").strip()
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    if text not in PERCENT_INPUT_BUTTONS:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Используй кнопки калькулятора.",
-            reply_markup=None,
-        )
-        return
-
-    days_str = data.get("purchased_days_str", "0")
-    display_chat_id = data.get("purchased_display_chat_id", message.chat.id)
-    display_message_id = data.get("purchased_display_message_id")
-
-    if text in PERCENT_DIGITS:
-        days_str = days_str.lstrip("0") if days_str != "0" else ""
-        days_str = f"{days_str}{text}" or "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=f": {days_str}",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=f": {days_str}",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            purchased_days_str=days_str,
-            purchased_display_chat_id=display_chat_id,
-            purchased_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "Очистить":
-        days_str = "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=": 0",
-            )
-        except Exception:
-            fallback = await safe_send_message(

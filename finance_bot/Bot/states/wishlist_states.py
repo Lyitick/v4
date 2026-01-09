@@ -32,7 +32,6 @@ class WishlistSettingsState(StatesGroup):
     waiting_for_purchased_mode = State()
     waiting_for_purchased_days = State()
     waiting_for_debit_category = State()
-    waiting_for_byt_category = State()
 
 
 class BytSettingsState(StatesGroup):
@@ -44,7 +43,4 @@ class BytSettingsState(StatesGroup):
 class BytTimerState(StatesGroup):
     """States for BYT timer settings inputs."""
 
-    waiting_for_removal = State()
     waiting_for_time_add = State()
-    waiting_for_hour = State()
-    waiting_for_minute = State()

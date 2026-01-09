@@ -73,7 +73,7 @@ async def _run_byt_scheduler(bot: Bot, db, timezone: ZoneInfo) -> None:
 
     while True:
         now = datetime.now(tz=timezone)
-        user_ids = set(db.get_users_with_byt_timer_times()) | set(
+        user_ids = set(db.get_users_with_byt_reminder_times()) | set(
             db.get_users_with_active_byt_wishes()
         )
         for uid in user_ids:

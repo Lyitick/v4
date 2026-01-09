@@ -249,6 +249,35 @@ def wishlist_byt_category_select_reply_keyboard(
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
+def byt_category_toggle_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for toggling BYT categories."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        enabled = bool(category.get("enabled", 0))
+        label = f"{'✅' if enabled else '❌'} {category.get('title', '')}"
+        next_state = 0 if enabled else 1
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"byt:category_toggle:{category.get('id')}:{next_state}",
+            )
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    inline_keyboard.append(
+        [
+            InlineKeyboardButton(text="⏪ Назад", callback_data="st:byt_rules"),
+            InlineKeyboardButton(text="🏠 На главную", callback_data="st:home"),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
 def wishlist_categories_select_keyboard(
     categories: list[dict], action_prefix: str
 ) -> InlineKeyboardMarkup:
@@ -286,6 +315,11 @@ def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
     inline_keyboard = [
         [
             InlineKeyboardButton(
+                text="Выбор категории для напоминаний", callback_data="wl:byt_category_menu"
+            )
+        ],
+        [
+            InlineKeyboardButton(
                 text="🔁 Вкл/Выкл напоминания", callback_data="byt:toggle_enabled"
             ),
             InlineKeyboardButton(
@@ -294,7 +328,7 @@ def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="⏳ Макс. дни отложить", callback_data="byt:edit_max_defer_days"),
-            InlineKeyboardButton(text="⏰ Таймер", callback_data="byt:timer_menu"),
+            InlineKeyboardButton(text="⏰ Время напоминаний", callback_data="byt:timer_menu"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
@@ -309,10 +343,7 @@ def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
             KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
         ],
-        [
-            KeyboardButton(text="➕ Добавить время напоминания"),
-            KeyboardButton(text="➖ Удалить время напоминания"),
-        ],
+        [KeyboardButton(text="⏰ Время напоминаний")],
         [KeyboardButton(text="⏳ Макс. дни отложить")],
         [KeyboardButton(text="⬅️ Назад")],
     ]
@@ -324,11 +355,12 @@ def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
 
     inline_keyboard = [
         [
-            InlineKeyboardButton(text="➕ Добавить время", callback_data="bt:add_time_hour"),
-            InlineKeyboardButton(text="➖ Удалить время", callback_data="bt:del_time_menu"),
+            InlineKeyboardButton(text="➕ Добавить время", callback_data="bt:add_time"),
+            InlineKeyboardButton(text="🗑 Удалить время", callback_data="bt:del_time_menu"),
         ],
         [
-            InlineKeyboardButton(text="🔁 Сбросить по умолчанию", callback_data="bt:reset_default"),
+            InlineKeyboardButton(text="⏪ Назад", callback_data="byt:timer_menu"),
+            InlineKeyboardButton(text="🏠 На главную", callback_data="st:home"),
         ],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
@@ -340,9 +372,8 @@ def byt_timer_reply_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [
             KeyboardButton(text="➕ Добавить время"),
-            KeyboardButton(text="➖ Удалить время"),
+            KeyboardButton(text="🗑 Удалить время"),
         ],
-        [KeyboardButton(text="🔁 Сбросить по умолчанию")],
         [KeyboardButton(text="⬅ Назад")],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -354,7 +385,10 @@ def byt_timer_times_select_reply_keyboard(times: list[dict]) -> ReplyKeyboardMar
     rows: list[list[KeyboardButton]] = []
     row: list[KeyboardButton] = []
     for timer in times:
-        label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+        if timer.get("time_hhmm"):
+            label = str(timer.get("time_hhmm"))
+        else:
+            label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
         row.append(KeyboardButton(text=label))
         if len(row) == 2:
             rows.append(row)
@@ -371,9 +405,14 @@ def byt_timer_times_select_keyboard(times: list[dict], action_prefix: str) -> In
     inline_keyboard: list[list[InlineKeyboardButton]] = []
     row: list[InlineKeyboardButton] = []
     for timer in times:
-        label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+        if timer.get("time_hhmm"):
+            label = str(timer.get("time_hhmm"))
+            callback_value = label
+        else:
+            label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+            callback_value = str(timer.get("id"))
         row.append(
-            InlineKeyboardButton(text=label, callback_data=f"{action_prefix}:{timer.get('id')}")
+            InlineKeyboardButton(text=label, callback_data=f"{action_prefix}:{callback_value}")
         )
         if len(row) == 2:
             inline_keyboard.append(row)

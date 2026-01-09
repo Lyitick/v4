@@ -18,9 +18,10 @@ from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import back_only_keyboard
 from Bot.keyboards.settings import (
+    byt_category_toggle_keyboard,
     byt_rules_reply_keyboard,
-    byt_timer_reply_keyboard,
-    byt_timer_times_select_reply_keyboard,
+    byt_timer_inline_keyboard,
+    byt_timer_times_select_keyboard,
     household_debit_category_select_reply_keyboard,
     household_payments_remove_reply_keyboard,
     household_settings_reply_keyboard,
@@ -29,7 +30,6 @@ from Bot.keyboards.settings import (
     settings_back_reply_keyboard,
     settings_home_reply_keyboard,
     wishlist_categories_select_reply_keyboard,
-    wishlist_byt_category_select_reply_keyboard,
     wishlist_debit_category_select_reply_keyboard,
     wishlist_purchased_mode_reply_keyboard,
     wishlist_settings_reply_keyboard,
@@ -41,7 +41,6 @@ from Bot.states.wishlist_states import (
     BytTimerState,
     WishlistSettingsState,
 )
-from Bot.utils.byt_utils import get_byt_source_category
 from Bot.utils.datetime_utils import current_month_str
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.telegram_safe import (
@@ -500,32 +499,29 @@ async def _render_wishlist_byt_category_menu(
     user_id: int,
     error_message: str | None = None,
 ) -> None:
-    categories = db.list_active_wishlist_categories(user_id)
-    _, byt_title = get_byt_source_category(db, user_id)
+    categories = db.list_byt_reminder_categories(user_id)
     if categories:
-        text = "Выбери категорию для напоминаний."
-        if byt_title:
-            text = f"{text}\nТекущая: {byt_title}"
+        lines = ["Выбор категорий для напоминаний:", ""]
+        for category in categories:
+            status = "✅" if category.get("enabled") else "❌"
+            lines.append(f"{status} {category.get('title', '')}")
+        text = "\n".join(lines)
         if error_message:
             text = f"{error_message}\n\n{text}"
     else:
         text = "Категорий пока нет."
-    LOGGER.info("USER=%s ACTION=BYT_SOURCE_CATEGORY_MENU_OPEN", user_id)
-    await _render_reply_settings_page(
-        message=message,
+    LOGGER.info("USER=%s ACTION=BYT_CATEGORY_MENU_OPEN", user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
         state=state,
+        chat_id=chat_id,
+        message_id=message_id,
         text=text,
-        reply_markup=wishlist_byt_category_select_reply_keyboard(categories)
+        reply_markup=byt_category_toggle_keyboard(categories)
         if categories
         else back_only_keyboard(),
-        screen_id="wl:byt_category_menu",
-        force_new=True,
     )
-    await state.update_data(
-        wl_byt_map={category.get("title", ""): category.get("id") for category in categories}
-    )
-    if categories:
-        await state.set_state(WishlistSettingsState.waiting_for_byt_category)
 
 
 def _format_category_text(
@@ -572,42 +568,56 @@ def _format_wishlist_text(
 
 def _format_byt_rules_text(
     settings: dict,
-    times: list[dict],
-    category_title: str,
+    categories: list[dict],
     error_message: str | None = None,
 ) -> str:
     on_off = {True: "ДА", False: "НЕТ", 1: "ДА", 0: "НЕТ"}
+    enabled_titles = [str(category.get("title", "")) for category in categories]
+    categories_label = ", ".join(enabled_titles) if enabled_titles else "не выбраны"
     lines = [
         "🔔 Напоминания — условия",
         "",
-        f"Категория для напоминаний: {category_title}",
+        f"Категории для напоминаний: {categories_label}",
         f"Напоминания включены: {on_off.get(settings.get('byt_reminders_enabled', 1), 'НЕТ')}",
         "Слать если список пуст: НЕТ",
         'Формат: "Что ты купил?" (кнопки-товары)',
         f"ОТЛОЖИТЬ: {on_off.get(settings.get('byt_defer_enabled', 1), 'НЕТ')}",
         f"Макс. дней отложить: {settings.get('byt_defer_max_days', 365)}",
         "",
-        "Таймер:",
-        "",
+        "Время напоминаний настраивается по категориям.",
     ]
-    if times:
-        for timer in times:
-            lines.append(
-                f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
-            )
-    else:
-        lines.append("(пусто)")
     if error_message:
         lines.append("")
         lines.append(error_message)
     return "\n".join(lines)
 
 
-def _format_byt_timer_text(times: list[dict], error_message: str | None = None) -> str:
-    lines = ["⏰ Напоминания — таймер", "Текущие времена:", ""]
+def _format_byt_timer_menu_text(
+    categories: list[dict], error_message: str | None = None
+) -> str:
+    lines = ["⏰ Время напоминаний", "", "Выбери категорию:"]
+    for category in categories:
+        lines.append(f"• {category.get('title', '')}")
+    if not categories:
+        lines.append("(категорий нет)")
+    if error_message:
+        lines.append("")
+        lines.append(error_message)
+    return "\n".join(lines)
+
+
+def _format_byt_timer_category_text(
+    category_title: str, times: list[dict], error_message: str | None = None
+) -> str:
+    lines = [f"⏰ Время для категории: {category_title}", "", "Текущие времена:", ""]
     if times:
         for timer in times:
-            lines.append(f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}")
+            if timer.get("time_hhmm"):
+                lines.append(str(timer.get("time_hhmm")))
+            else:
+                lines.append(
+                    f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+                )
     else:
         lines.append("(пусто)")
     if error_message:
@@ -674,15 +684,12 @@ async def _render_byt_rules_settings(
 ) -> dict:
     db.ensure_user_settings(user_id)
     settings_row = db.get_user_settings(user_id)
-    db.ensure_byt_timer_defaults(user_id)
-    times = db.list_active_byt_timer_times(user_id)
-    _, byt_category_title = get_byt_source_category(db, user_id)
-    category_title = byt_category_title or "не выбрана"
+    categories = db.list_enabled_byt_reminder_categories(user_id)
     LOGGER.info("Open byt conditions settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(
         message=message,
         state=state,
-        text=_format_byt_rules_text(settings_row, times, category_title, error_message),
+        text=_format_byt_rules_text(settings_row, categories, error_message),
         reply_markup=byt_rules_reply_keyboard(),
         screen_id="st:byt_rules",
     )
@@ -697,14 +704,43 @@ async def _render_byt_timer_settings(
     user_id: int,
     error_message: str | None = None,
 ) -> list[dict]:
-    db.ensure_byt_timer_defaults(user_id)
-    times = db.list_active_byt_timer_times(user_id)
-    await _render_reply_settings_page(
-        message=message,
+    categories = db.list_active_wishlist_categories(user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
         state=state,
-        text=_format_byt_timer_text(times, error_message),
-        reply_markup=byt_timer_reply_keyboard(),
-        screen_id="byt:timer_menu",
+        chat_id=chat_id,
+        message_id=message_id,
+        text=_format_byt_timer_menu_text(categories, error_message),
+        reply_markup=wishlist_categories_select_keyboard(
+            categories, "byt:timer_category"
+        )
+        if categories
+        else back_only_keyboard(),
+    )
+    return categories
+
+
+async def _render_byt_timer_category_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    category_id: int,
+    error_message: str | None = None,
+) -> list[dict]:
+    category = db.get_wishlist_category_by_id(user_id, category_id)
+    category_title = category.get("title") if category else "категория"
+    times = db.list_byt_reminder_times(user_id, category_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=_format_byt_timer_category_text(category_title, times, error_message),
+        reply_markup=byt_timer_inline_keyboard(),
     )
     return times
 
@@ -843,27 +879,25 @@ async def _render_wishlist_purchased_mode(
 async def _render_byt_timer_delete_menu(
     *, state: FSMContext, message: Message, db, user_id: int
 ) -> None:
-    times = db.list_active_byt_timer_times(user_id)
-    await _render_reply_settings_page(
-        message=message,
+    data = await state.get_data()
+    category_id = data.get("byt_timer_category_id")
+    if category_id is None:
+        await _render_byt_timer_settings(
+            state=state, message=message, db=db, user_id=user_id
+        )
+        return
+    times = db.list_byt_reminder_times(user_id, int(category_id))
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
         state=state,
+        chat_id=chat_id,
+        message_id=message_id,
         text="Что удалить?" if times else "Времена пока не заданы.",
-        reply_markup=byt_timer_times_select_reply_keyboard(times)
+        reply_markup=byt_timer_times_select_keyboard(times, "bt:del_time")
         if times
-        else byt_timer_reply_keyboard(),
-        screen_id="bt:del_time_menu",
-        force_new=True,
+        else byt_timer_inline_keyboard(),
     )
-    await state.update_data(
-        bt_delete_map={
-            f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}": timer.get(
-                "id"
-            )
-            for timer in times
-        }
-    )
-    if times:
-        await state.set_state(BytTimerState.waiting_for_removal)
 
 
 async def render_settings_screen(
@@ -976,6 +1010,26 @@ async def render_settings_screen(
             user_id=user_id,
             error_message=error_message,
         )
+    elif screen_id == "byt:timer_category":
+        data = await state.get_data()
+        category_id = data.get("byt_timer_category_id")
+        if category_id is not None:
+            await _render_byt_timer_category_settings(
+                state=state,
+                message=message,
+                db=db,
+                user_id=user_id,
+                category_id=int(category_id),
+                error_message=error_message,
+            )
+        else:
+            await _render_byt_timer_settings(
+                state=state,
+                message=message,
+                db=db,
+                user_id=user_id,
+                error_message=error_message,
+            )
     elif screen_id == "bt:del_time_menu":
         await _render_byt_timer_delete_menu(
             state=state, message=message, db=db, user_id=user_id
@@ -1057,16 +1111,6 @@ async def handle_settings_back_action(message: Message, state: FSMContext) -> No
         BytSettingsState.waiting_for_max_defer_days.state: {
             "display_chat_key": "byt_max_display_chat_id",
             "display_message_key": "byt_max_display_message_id",
-        },
-        BytTimerState.waiting_for_hour.state: {
-            "display_chat_key": "bt_hour_display_chat_id",
-            "display_message_key": "bt_hour_display_message_id",
-        },
-        BytTimerState.waiting_for_minute.state: {
-            "display_chat_key": "bt_min_display_chat_id",
-            "display_message_key": "bt_min_display_message_id",
-            "prompt_chat_key": "bt_min_prompt_chat_id",
-            "prompt_message_key": "bt_min_prompt_message_id",
         },
     }
 
@@ -1522,7 +1566,7 @@ async def edit_byt_max_defer_days_reply(message: Message, state: FSMContext) -> 
     )
 
 
-@router.message(F.text.in_({"⏰ Таймер", "⏱ Таймер"}))
+@router.message(F.text.in_({"⏰ Время напоминаний", "⏰ Таймер", "⏱ Таймер"}))
 async def open_byt_timer_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if data.get("settings_current_screen") != "st:byt_rules":
@@ -1537,7 +1581,12 @@ async def open_byt_timer_menu_reply(message: Message, state: FSMContext) -> None
 @router.message(F.text == "⚙ Условия")
 async def open_byt_rules_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    if data.get("settings_current_screen") not in {"st:byt_rules", "byt:timer_menu"}:
+    if data.get("settings_current_screen") not in {
+        "st:byt_rules",
+        "byt:timer_menu",
+        "byt:timer_category",
+        "bt:del_time_menu",
+    }:
         return
 
     await _register_user_message(state, message)
@@ -1550,41 +1599,30 @@ async def open_byt_rules_reply(message: Message, state: FSMContext) -> None:
 
 
 @router.message(F.text == "➕ Добавить время")
-async def byt_timer_add_hour_reply(message: Message, state: FSMContext) -> None:
+async def byt_timer_add_time_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    if data.get("settings_current_screen") != "byt:timer_menu":
+    if data.get("settings_current_screen") != "byt:timer_category":
         return
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    await _push_current_screen(state, "bt:add_time_hour")
-    await state.set_state(BytTimerState.waiting_for_hour)
-    await state.update_data(bt_hour_str="0")
+    await _push_current_screen(state, "bt:add_time")
+    await state.set_state(BytTimerState.waiting_for_time_add)
     chat_id, message_id = await _get_settings_message_ids(state, message)
     await _edit_settings_page(
         bot=message.bot,
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text="Введи ЧАС (0–23)",
+        text="Введи время в формате HH:MM",
         reply_markup=None,
     )
-    prompt = await _send_and_register(
-        message=message,
-        state=state,
-        text=": 0",
-        reply_markup=income_calculator_keyboard(),
-    )
-    await state.update_data(
-        bt_hour_display_chat_id=prompt.chat.id,
-        bt_hour_display_message_id=prompt.message_id,
-    )
 
 
-@router.message(F.text == "➖ Удалить время")
+@router.message(F.text == "🗑 Удалить время")
 async def byt_timer_delete_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    if data.get("settings_current_screen") != "byt:timer_menu":
+    if data.get("settings_current_screen") != "byt:timer_category":
         return
 
     await _register_user_message(state, message)
@@ -1612,6 +1650,15 @@ async def open_byt_rules(callback: CallbackQuery, state: FSMContext) -> None:
     await _navigate_to_screen("st:byt_rules", message=callback.message, state=state)
 
 
+@router.callback_query(F.data == "wl:byt_category_menu")
+async def open_byt_category_menu(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(None)
+    await _navigate_to_screen(
+        "wl:byt_category_menu", message=callback.message, state=state, force_new=True
+    )
+
+
 @router.callback_query(F.data == "byt:toggle_enabled")
 async def toggle_byt_enabled(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
@@ -1635,6 +1682,33 @@ async def toggle_byt_defer(callback: CallbackQuery, state: FSMContext) -> None:
     db.set_byt_defer_enabled(callback.from_user.id, not current)
     await render_settings_screen(
         "st:byt_rules", message=callback.message, state=state
+    )
+
+
+@router.callback_query(F.data.startswith("byt:category_toggle:"))
+async def toggle_byt_category(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    db = get_db()
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        return
+    try:
+        category_id = int(parts[2])
+        target_state = int(parts[3])
+    except ValueError:
+        return
+    current = db.get_byt_reminder_category_enabled(callback.from_user.id, category_id)
+    if int(current) == target_state:
+        return
+    enabled = db.toggle_byt_reminder_category(callback.from_user.id, category_id)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_CATEGORY_TOGGLE META=category=%s enabled=%s",
+        callback.from_user.id,
+        category_id,
+        enabled,
+    )
+    await render_settings_screen(
+        "wl:byt_category_menu", message=callback.message, state=state
     )
 
 
@@ -1669,30 +1743,19 @@ async def edit_byt_max_defer_days(callback: CallbackQuery, state: FSMContext) ->
     )
 
 
-@router.callback_query(F.data == "bt:add_time_hour")
-async def byt_timer_add_hour(callback: CallbackQuery, state: FSMContext) -> None:
+@router.callback_query(F.data == "bt:add_time")
+async def byt_timer_add_time(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    await _push_current_screen(state, "bt:add_time_hour")
-    await state.set_state(BytTimerState.waiting_for_hour)
-    await state.update_data(bt_hour_str="0")
+    await _push_current_screen(state, "bt:add_time")
+    await state.set_state(BytTimerState.waiting_for_time_add)
     chat_id, message_id = await _get_settings_message_ids(state, callback.message)
     await _edit_settings_page(
         bot=callback.message.bot,
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text="Введи ЧАС (0–23)",
+        text="Введи время в формате HH:MM",
         reply_markup=None,
-    )
-    prompt = await _send_and_register(
-        message=callback.message,
-        state=state,
-        text=": 0",
-        reply_markup=income_calculator_keyboard(),
-    )
-    await state.update_data(
-        bt_hour_display_chat_id=prompt.chat.id,
-        bt_hour_display_message_id=prompt.message_id,
     )
 
 
@@ -1706,26 +1769,22 @@ async def byt_timer_delete_menu(callback: CallbackQuery, state: FSMContext) -> N
 @router.callback_query(F.data.startswith("bt:del_time:"))
 async def byt_timer_delete(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
-    try:
-        timer_id = int(callback.data.split(":")[2])
-    except (IndexError, ValueError):
+    parts = callback.data.split(":")
+    if len(parts) < 3:
         return
-
+    time_hhmm = parts[2]
+    data = await state.get_data()
+    category_id = data.get("byt_timer_category_id")
+    if category_id is None:
+        return
     db = get_db()
-    times = db.list_active_byt_timer_times(callback.from_user.id)
-    if len(times) <= 1:
-        await _render_byt_timer_settings(
-            state=state,
-            message=callback.message,
-            db=db,
-            user_id=callback.from_user.id,
-            error_message="Нельзя удалить последнее время.",
-        )
-        return
-
-    db.deactivate_byt_timer_time(callback.from_user.id, timer_id)
-    await _render_byt_timer_settings(
-        state=state, message=callback.message, db=db, user_id=callback.from_user.id
+    db.remove_byt_reminder_time(callback.from_user.id, int(category_id), time_hhmm)
+    await _render_byt_timer_category_settings(
+        state=state,
+        message=callback.message,
+        db=db,
+        user_id=callback.from_user.id,
+        category_id=int(category_id),
     )
 
 
@@ -1744,6 +1803,20 @@ async def open_byt_timer_menu(callback: CallbackQuery, state: FSMContext) -> Non
     await callback.answer()
     await state.set_state(None)
     await _navigate_to_screen("byt:timer_menu", message=callback.message, state=state)
+
+
+@router.callback_query(F.data.startswith("byt:timer_category:"))
+async def open_byt_timer_category(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        return
+    try:
+        category_id = int(parts[2])
+    except ValueError:
+        return
+    await state.update_data(byt_timer_category_id=category_id)
+    await _navigate_to_screen("byt:timer_category", message=callback.message, state=state)
 
 
 @router.message(HouseholdSettingsState.waiting_for_removal)
@@ -1880,51 +1953,6 @@ async def wishlist_debit_category_choice(message: Message, state: FSMContext) ->
     )
     await state.set_state(None)
     previous_screen = await _pop_previous_screen(state) or "st:wishlist"
-    await render_settings_screen(previous_screen, message=message, state=state)
-
-
-@router.message(WishlistSettingsState.waiting_for_byt_category)
-async def wishlist_byt_category_choice(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-
-    choice = (message.text or "").strip()
-    if choice in {"⏪ Назад", "⬅ Назад", "⬅️ Назад"}:
-        await state.set_state(None)
-        previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
-        await render_settings_screen(previous_screen, message=message, state=state)
-        return
-    if choice in {"🏠 На главную", "⏪ На главную"}:
-        await _exit_settings_to_main(message, state)
-        return
-
-    mapping: dict[str, int] = data.get("wl_byt_map") or {}
-    category_id = mapping.get(choice)
-    if not category_id:
-        await render_settings_screen(
-            "wl:byt_category_menu",
-            message=message,
-            state=state,
-            error_message="Выбери категорию из списка.",
-            force_new=True,
-        )
-        return
-
-    db = get_db()
-    db.set_byt_wishlist_category_id(message.from_user.id, int(category_id))
-    LOGGER.info(
-        "USER=%s ACTION=BYT_SOURCE_CATEGORY_SET META=category_id=%s",
-        message.from_user.id,
-        category_id,
-    )
-    await _send_and_register(
-        message=message,
-        state=state,
-        text="Категория для напоминаний обновлена.",
-    )
-    await state.set_state(None)
-    previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
     await render_settings_screen(previous_screen, message=message, state=state)
 
 
@@ -2195,49 +2223,6 @@ async def wishlist_purchased_mode_choice(message: Message, state: FSMContext) ->
     )
 
 
-@router.message(BytTimerState.waiting_for_removal)
-async def byt_timer_delete_choice(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-
-    choice = (message.text or "").strip()
-    if choice == "⬅ Назад":
-        await state.set_state(None)
-        await _render_previous_screen_or_exit(message, state)
-        return
-
-    mapping: dict[str, int] = data.get("bt_delete_map") or {}
-    timer_id = mapping.get(choice)
-    if not timer_id:
-        await render_settings_screen(
-            "bt:del_time_menu",
-            message=message,
-            state=state,
-            error_message="Выбери время из списка.",
-            force_new=True,
-        )
-        return
-
-    db = get_db()
-    times = db.list_active_byt_timer_times(message.from_user.id)
-    if len(times) <= 1:
-        await state.set_state(None)
-        await _render_byt_timer_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=message.from_user.id,
-            error_message="Нельзя удалить последнее время.",
-        )
-        return
-
-    db.deactivate_byt_timer_time(message.from_user.id, timer_id)
-    await state.set_state(None)
-    previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
-    await render_settings_screen(previous_screen, message=message, state=state)
-
-
 @router.message(BytTimerState.waiting_for_time_add)
 async def byt_timer_add_time_value(message: Message, state: FSMContext) -> None:
     await _register_user_message(state, message)
@@ -2257,11 +2242,18 @@ async def byt_timer_add_time_value(message: Message, state: FSMContext) -> None:
         return
 
     hour, minute = parsed
+    data = await state.get_data()
+    category_id = data.get("byt_timer_category_id")
+    if category_id is None:
+        await state.set_state(None)
+        await render_settings_screen("byt:timer_menu", message=message, state=state)
+        return
     db = get_db()
-    db.add_byt_timer_time(message.from_user.id, hour, minute)
+    db.add_byt_reminder_time(
+        message.from_user.id, int(category_id), f"{hour:02d}:{minute:02d}"
+    )
     await state.set_state(None)
-    previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
-    await render_settings_screen(previous_screen, message=message, state=state)
+    await render_settings_screen("byt:timer_category", message=message, state=state)
 
 @router.callback_query(F.data == "inc:add")
 async def category_add(callback: CallbackQuery, state: FSMContext) -> None:
@@ -3222,198 +3214,3 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             message=message,
             state=state,
         )
-
-@router.message(BytTimerState.waiting_for_hour, F.text.in_(PERCENT_INPUT_BUTTONS))
-async def byt_timer_hour_input(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    text = (message.text or "").strip()
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    hour_str = data.get("bt_hour_str", "0")
-    display_chat_id = data.get("bt_hour_display_chat_id", message.chat.id)
-    display_message_id = data.get("bt_hour_display_message_id")
-
-    if text in PERCENT_DIGITS:
-        hour_str = hour_str.lstrip("0") if hour_str != "0" else ""
-        hour_str = f"{hour_str}{text}" or "0"
-        try:
-            await _safe_edit(message.bot, 
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=f": {hour_str}",
-            )
-        except Exception:
-            prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=f": {hour_str}")
-            if prompt:
-                display_message_id = prompt.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            bt_hour_str=hour_str,
-            bt_hour_display_chat_id=display_chat_id,
-            bt_hour_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "Очистить":
-        hour_str = "0"
-        try:
-            await _safe_edit(message.bot, 
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=": 0",
-            )
-        except Exception:
-            prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=": 0")
-            if prompt:
-                display_message_id = prompt.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            bt_hour_str=hour_str,
-            bt_hour_display_chat_id=display_chat_id,
-            bt_hour_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "✅ Газ":
-        try:
-            hour = int(hour_str or "0")
-        except ValueError:
-            chat_id, message_id = await _get_settings_message_ids(state, message)
-            await _edit_settings_page(
-                bot=message.bot,
-                state=state,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Нужно ввести число.",
-                reply_markup=None,
-            )
-            return
-        if hour < 0 or hour > 23:
-            chat_id, message_id = await _get_settings_message_ids(state, message)
-            await _edit_settings_page(
-                bot=message.bot,
-                state=state,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Часы должны быть 0–23.",
-                reply_markup=None,
-            )
-            return
-        await _cleanup_input_ui(
-            message.bot,
-            data,
-            display_chat_key="bt_hour_display_chat_id",
-            display_message_key="bt_hour_display_message_id",
-        )
-        await state.set_state(BytTimerState.waiting_for_minute)
-        await state.update_data(selected_hour=hour, bt_minute_str="0")
-        await _set_current_screen(state, "bt:add_time_minute")
-        prompt_message = await _send_and_register(
-            message=message,
-            state=state,
-            text="Введи МИНУТЫ (0–59)",
-        )
-        prompt = await _send_and_register(
-            message=message,
-            state=state,
-            text=": 0",
-            reply_markup=income_calculator_keyboard(),
-        )
-        await state.update_data(
-            bt_min_prompt_chat_id=prompt_message.chat.id,
-            bt_min_prompt_message_id=prompt_message.message_id,
-            bt_min_display_chat_id=prompt.chat.id,
-            bt_min_display_message_id=prompt.message_id,
-        )
-
-@router.message(BytTimerState.waiting_for_minute, F.text.in_(PERCENT_INPUT_BUTTONS))
-async def byt_timer_minute_input(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    text = (message.text or "").strip()
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    minute_str = data.get("bt_minute_str", "0")
-    display_chat_id = data.get("bt_min_display_chat_id", message.chat.id)
-    display_message_id = data.get("bt_min_display_message_id")
-
-    if text in PERCENT_DIGITS:
-        minute_str = minute_str.lstrip("0") if minute_str != "0" else ""
-        minute_str = f"{minute_str}{text}" or "0"
-        try:
-            await _safe_edit(message.bot, 
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=f": {minute_str}",
-            )
-        except Exception:
-            prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=f": {minute_str}")
-            if prompt:
-                display_message_id = prompt.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            bt_minute_str=minute_str,
-            bt_min_display_chat_id=display_chat_id,
-            bt_min_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "Очистить":
-        minute_str = "0"
-        try:
-            await _safe_edit(message.bot, 
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=": 0",
-            )
-        except Exception:
-            prompt = await safe_send_message(message.bot, chat_id=display_chat_id, text=": 0")
-            if prompt:
-                display_message_id = prompt.message_id
-            await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            bt_minute_str=minute_str,
-            bt_min_display_chat_id=display_chat_id,
-            bt_min_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "✅ Газ":
-        try:
-            minute = int(minute_str or "0")
-        except ValueError:
-            chat_id, message_id = await _get_settings_message_ids(state, message)
-            await _edit_settings_page(
-                bot=message.bot,
-                state=state,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Нужно ввести число.",
-                reply_markup=None,
-            )
-            return
-        if minute < 0 or minute > 59:
-            chat_id, message_id = await _get_settings_message_ids(state, message)
-            await _edit_settings_page(
-                bot=message.bot,
-                state=state,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Минуты должны быть 0–59.",
-                reply_markup=None,
-            )
-            return
-        db = get_db()
-        selected_hour = int(data.get("selected_hour", 0))
-        db.add_byt_timer_time(message.from_user.id, selected_hour, minute)
-        await _cleanup_input_ui(
-            message.bot,
-            data,
-            display_chat_key="bt_min_display_chat_id",
-            display_message_key="bt_min_display_message_id",
-            prompt_chat_key="bt_min_prompt_chat_id",
-            prompt_message_key="bt_min_prompt_message_id",
-        )
-        await _remove_calculator_keyboard(message)
-        await state.set_state(None)
-        previous_screen = await _pop_previous_screen(state) or "byt:timer_menu"
-        await render_settings_screen(previous_screen, message=message, state=state)

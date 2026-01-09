@@ -1,5 +1,6 @@
 """Datetime utilities for the bot."""
 from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
 
 from Bot.config import settings
 
@@ -49,6 +50,47 @@ def get_next_byt_run_dt(now: datetime, schedule_times: list[time]) -> datetime:
     ]
     for candidate in candidates:
         if candidate >= now:
+            return candidate
+    return candidates[0] + timedelta(days=1)
+
+
+def get_next_reminder_dt(
+    now: datetime, times_hhmm: list[str], tz: ZoneInfo | None = None
+) -> datetime:
+    """Return next reminder datetime based on HH:MM list."""
+
+    timezone = tz or now.tzinfo
+    valid_times: list[time] = []
+    for raw in times_hhmm:
+        if not raw:
+            continue
+        parts = str(raw).strip().split(":", maxsplit=1)
+        if len(parts) != 2:
+            continue
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except (TypeError, ValueError):
+            continue
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            continue
+        valid_times.append(time(hour=hour, minute=minute))
+    if not valid_times:
+        valid_times = [time(hour=12, minute=0)]
+
+    sorted_times = sorted(valid_times, key=lambda value: (value.hour, value.minute))
+    candidates = [
+        now.replace(
+            hour=slot.hour,
+            minute=slot.minute,
+            second=0,
+            microsecond=0,
+            tzinfo=timezone,
+        )
+        for slot in sorted_times
+    ]
+    for candidate in candidates:
+        if candidate > now:
             return candidate
     return candidates[0] + timedelta(days=1)
 

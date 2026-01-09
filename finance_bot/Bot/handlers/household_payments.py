@@ -1,5 +1,5 @@
 """Handlers for household payments scenario."""
-from datetime import datetime, time as dt_time
+from datetime import datetime
 import logging
 import time
 from typing import Dict, List
@@ -11,8 +11,11 @@ from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 from Bot.config import settings
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
-from Bot.handlers.wishlist import run_byt_timer_check
-from Bot.utils.byt_utils import get_byt_source_category
+from Bot.handlers.wishlist import _build_byt_items_keyboard
+from Bot.utils.byt_render import (
+    format_byt_category_checklist_text,
+    get_byt_category_items,
+)
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.keyboards.settings import (
     household_remove_keyboard,
@@ -568,7 +571,6 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     user_id = message.from_user.id
     db = get_db()
 
-    db.ensure_byt_timer_defaults(user_id)
     data = await state.get_data()
     last_ts = data.get("byt_manual_check_ts")
     current_ts = time.time()
@@ -590,15 +592,15 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         logger=LOGGER,
     )
 
-    source_category_id, source_category_title = get_byt_source_category(db, user_id)
-    if not source_category_title:
+    categories = db.list_enabled_byt_reminder_categories(user_id)
+    if not categories:
         LOGGER.info(
-            "USER=%s ACTION=BYT_MANUAL_CHECK META=source_category_id=None total=0 due=0 deferred=0",
+            "USER=%s ACTION=BYT_MANUAL_CHECK META=categories=0 total=0 due=0 deferred=0",
             user_id,
         )
         sent_id = await safe_answer(
             message,
-            "Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
+            "Категории для напоминаний не выбраны. Открой настройки → Напоминания → "
             "Выбор категории для напоминаний.",
             reply_markup=await build_main_menu_for_user(user_id),
             logger=LOGGER,
@@ -607,74 +609,43 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
             await ui_register_message(state, message.chat.id, sent_id)
         return
 
-    times = db.list_active_byt_timer_times(user_id)
-    simulated_time = None
-    if times:
-        first_time = times[0]
-        try:
-            simulated_time = dt_time(
-                hour=int(first_time.get("hour", 0)),
-                minute=int(first_time.get("minute", 0)),
-            )
-        except Exception:
-            simulated_time = None
-
     now_dt = now_tz()
-    total_items = db.get_active_byt_wishes(user_id, source_category_title)
-    due_items = db.list_active_byt_items_for_reminder(
-        user_id, now_dt, source_category_title
-    )
-    due_ids = {int(item.get("id")) for item in due_items if item.get("id") is not None}
-    deferred_items = [
-        item
-        for item in total_items
-        if item.get("id") is not None and int(item.get("id")) not in due_ids
-    ]
-    nearest_deferred = None
-    for item in deferred_items:
-        deferred_until = item.get("deferred_until")
-        if not deferred_until:
-            continue
-        try:
-            deferred_dt = datetime.fromisoformat(str(deferred_until))
-        except ValueError:
-            continue
-        if nearest_deferred is None or deferred_dt < nearest_deferred:
-            nearest_deferred = deferred_dt
-    LOGGER.info(
-        "USER=%s ACTION=BYT_MANUAL_CHECK META=source_category_id=%s total=%s due=%s deferred=%s",
-        user_id,
-        source_category_id,
-        len(total_items),
-        len(due_items),
-        len(deferred_items),
-    )
-    if not due_items:
-        text = f"В категории {source_category_title} нет активных напоминаний."
-        if deferred_items:
-            if nearest_deferred:
-                nearest_label = nearest_deferred.strftime("%d.%m.%Y %H:%M")
-                text = (
-                    f"{text}\nЕсть отложенные покупки: {len(deferred_items)} шт. "
-                    f"(ближайшая — {nearest_label})"
-                )
-            else:
-                text = (
-                    f"{text}\nЕсть отложенные покупки: {len(deferred_items)} шт."
-                )
-        sent_id = await safe_answer(
-            message,
-            text,
-            reply_markup=await build_main_menu_for_user(user_id),
+    settings_row = db.get_user_settings(user_id)
+    allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
+    for category in categories:
+        category_id = int(category.get("id"))
+        category_title = str(category.get("title", ""))
+        due_items, deferred_items = get_byt_category_items(
+            db, user_id, category_title, now_dt
+        )
+        total_items = len(due_items) + len(deferred_items)
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK META=category_id=%s total=%s due=%s deferred=%s",
+            user_id,
+            category_id,
+            total_items,
+            len(due_items),
+            len(deferred_items),
+        )
+        text = format_byt_category_checklist_text(
+            category_title, due_items, deferred_items
+        )
+        keyboard = (
+            _build_byt_items_keyboard(
+                due_items, allow_defer=allow_defer, category_id=category_id
+            )
+            if due_items
+            else None
+        )
+        sent = await safe_send_message(
+            message.bot,
+            chat_id=message.chat.id,
+            text=text,
+            reply_markup=keyboard,
             logger=LOGGER,
         )
-        if sent_id:
-            await ui_register_message(state, message.chat.id, sent_id)
-        return
-
-    await run_byt_timer_check(
-        message.bot, db, user_id=user_id, simulated_time=simulated_time
-    )
+        if sent:
+            await ui_register_message(state, sent.chat.id, sent.message_id)
 
 
 @router.callback_query(

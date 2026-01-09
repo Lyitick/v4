@@ -1,42 +1,3 @@
-    if user_id is None:
-        return
-
-    db = db or get_db()
-    savings_map = db.get_user_savings_map(user_id)
-    wishes = db.get_wishes_by_user(user_id)
-    debit_category = db.get_wishlist_debit_category(user_id)
-    if not debit_category:
-        return
-    if not db.get_income_category_by_code(user_id, debit_category):
-        return
-
-    affordable: List[Dict[str, Any]] = []
-    for wish in wishes:
-        if wish.get("is_purchased"):
-            continue
-
-        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
-        price = _to_float(wish.get("price"))
-        available = _to_float(savings_map.get(debit_category))
-        if price <= 0 or available < price:
-            continue
-
-        wish_copy: Dict[str, Any] = dict(wish)
-        wish_copy["price"] = price
-        wish_copy["wishlist_category"] = wishlist_category
-        affordable.append(wish_copy)
-
-    if not affordable:
-        return
-
-    lines = ["Ты уже можешь купить:"]
-    for wish in affordable:
-        lines.append(
-            f"• {wish['name']} — {wish['price']:.2f} ₽ (категория: {wish['wishlist_category']})"
-        )
-    lines.append("Нажми на кнопку под нужным товаром, если купил.")
-
-    keyboard = _build_affordable_wishes_keyboard(affordable)
     await message.answer("\n".join(lines), reply_markup=keyboard)
 
 
@@ -963,7 +924,14 @@ from aiogram import F, Router
 from aiogram.filters import BaseFilter
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
 from Bot.constants.ui_labels import (
     WISHLIST_DEBIT_CATEGORY_BACK,
@@ -977,6 +945,7 @@ from Bot.keyboards.main import back_only_keyboard
 from Bot.keyboards.settings import (
     byt_category_toggle_keyboard,
     byt_rules_reply_keyboard,
+    byt_timer_categories_inline_keyboard,
     byt_timer_inline_keyboard,
     byt_timer_times_select_keyboard,
     household_debit_category_select_reply_keyboard,
@@ -991,6 +960,7 @@ from Bot.keyboards.settings import (
     wishlist_purchased_mode_reply_keyboard,
     wishlist_settings_reply_keyboard,
 )
+from Bot.utils.byt_render import format_byt_categories_status_text
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.money_states import HouseholdSettingsState, IncomeSettingsState
 from Bot.states.wishlist_states import (
@@ -1529,12 +1499,10 @@ def _format_byt_rules_text(
     error_message: str | None = None,
 ) -> str:
     on_off = {True: "ДА", False: "НЕТ", 1: "ДА", 0: "НЕТ"}
-    enabled_titles = [str(category.get("title", "")) for category in categories]
-    categories_label = ", ".join(enabled_titles) if enabled_titles else "не выбраны"
     lines = [
         "🔔 Напоминания — условия",
         "",
-        f"Категории для напоминаний: {categories_label}",
+        format_byt_categories_status_text(categories),
         f"Напоминания включены: {on_off.get(settings.get('byt_reminders_enabled', 1), 'НЕТ')}",
         "Слать если список пуст: НЕТ",
         'Формат: "Что ты купил?" (кнопки-товары)',
@@ -1552,11 +1520,10 @@ def _format_byt_rules_text(
 def _format_byt_timer_menu_text(
     categories: list[dict], error_message: str | None = None
 ) -> str:
-    lines = ["⏰ Время напоминаний", "", "Выбери категорию:"]
-    for category in categories:
-        lines.append(f"• {category.get('title', '')}")
+    lines = ["⏰ Время напоминаний", "", "Выбери категорию, затем выбери время(я)."]
     if not categories:
-        lines.append("(категорий нет)")
+        lines.append("")
+        lines.append("Категорий пока нет.")
     if error_message:
         lines.append("")
         lines.append(error_message)
@@ -1566,7 +1533,14 @@ def _format_byt_timer_menu_text(
 def _format_byt_timer_category_text(
     category_title: str, times: list[dict], error_message: str | None = None
 ) -> str:
-    lines = [f"⏰ Время для категории: {category_title}", "", "Текущие времена:", ""]
+    lines = [
+        "⏰ Время напоминаний",
+        "",
+        f"Категория: {category_title}",
+        "",
+        "Текущие времена:",
+        "",
+    ]
     if times:
         for timer in times:
             if timer.get("time_hhmm"):
@@ -1576,7 +1550,7 @@ def _format_byt_timer_category_text(
                     f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
                 )
     else:
-        lines.append("(пусто)")
+        lines.append("Время не задано")
     if error_message:
         lines.append("")
         lines.append(error_message)
@@ -1641,7 +1615,7 @@ async def _render_byt_rules_settings(
 ) -> dict:
     db.ensure_user_settings(user_id)
     settings_row = db.get_user_settings(user_id)
-    categories = db.list_enabled_byt_reminder_categories(user_id)
+    categories = db.list_byt_reminder_categories(user_id)
     LOGGER.info("Open byt conditions settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(
         message=message,
@@ -1661,7 +1635,7 @@ async def _render_byt_timer_settings(
     user_id: int,
     error_message: str | None = None,
 ) -> list[dict]:
-    categories = db.list_active_wishlist_categories(user_id)
+    categories = db.list_byt_reminder_categories(user_id)
     chat_id, message_id = await _get_settings_message_ids(state, message)
     await _edit_settings_page(
         bot=message.bot,
@@ -1669,11 +1643,18 @@ async def _render_byt_timer_settings(
         chat_id=chat_id,
         message_id=message_id,
         text=_format_byt_timer_menu_text(categories, error_message),
-        reply_markup=wishlist_categories_select_keyboard(
+        reply_markup=byt_timer_categories_inline_keyboard(
             categories, "byt:timer_category"
         )
         if categories
-        else back_only_keyboard(),
+        else InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="⏪ Назад", callback_data="st:byt_rules"),
+                    InlineKeyboardButton(text="🏠 На главную", callback_data="st:home"),
+                ]
+            ]
+        ),
     )
     return categories
 
@@ -1998,3 +1979,22 @@ async def render_settings_screen(
     elif screen_id == "hp:debit_category_menu":
         await _render_household_debit_category_menu(
             state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    else:
+        await _render_settings_home(message, state)
+    await _set_current_screen(state, screen_id)
+
+
+async def _navigate_to_screen(
+    screen_id: str,
+    *,
+    message: Message,
+    state: FSMContext,
+    error_message: str | None = None,
+    force_new: bool = False,
+) -> None:
+    await _push_current_screen(state, screen_id)

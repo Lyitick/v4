@@ -95,6 +95,10 @@ from Bot.services.household import (
     update_flow_state,
 )
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
+from Bot.utils.byt_manual_check import (
+    build_byt_times_sorted,
+    select_next_byt_manual_time,
+)
 from Bot.utils.datetime_utils import current_month_str, now_tz
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.telegram_safe import (
@@ -668,21 +672,28 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         return
 
     now_dt = now_tz()
-    selected_times: set[str] = set()
     category_times: dict[int, list[str]] = {}
+    enabled_category_ids: list[int] = []
     for category in categories:
         category_id = int(category.get("id") or 0)
+        enabled_category_ids.append(category_id)
         times = db.list_byt_reminder_times(user_id, category_id)
         times_hhmm = [
-            str(item.get("time_hhmm", ""))
+            str(item.get("time_hhmm", "")).strip()
             for item in times
             if item.get("time_hhmm")
         ]
         if times_hhmm:
             category_times[category_id] = times_hhmm
-            selected_times.update(times_hhmm)
 
-    times_sorted = sorted(selected_times)
+    times_sorted = build_byt_times_sorted(category_times)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_TIMES_BUILD META=enabled_categories=%s times_by_category=%s times_sorted=%s",
+        user_id,
+        enabled_category_ids,
+        category_times,
+        times_sorted,
+    )
     if not times_sorted:
         LOGGER.info(
             "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=- total=0 due=0 deferred=0",
@@ -702,16 +713,23 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     current_date = now_dt.date().isoformat()
     saved_date = data.get("byt_manual_cursor_date")
     index = int(data.get("byt_manual_cursor_index") or -1)
-    if saved_date != current_date:
-        index = -1
-
-    next_index = index + 1
-    restart_notice = ""
-    if next_index >= len(times_sorted):
-        next_index = 0
-        restart_notice = "Сегодня все времена уже проверены — начинаю заново."
-
-    selected_time = times_sorted[next_index]
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CURSOR META=before date=%s index=%s",
+        user_id,
+        saved_date,
+        index,
+    )
+    selected_time, next_index, restart_notice = select_next_byt_manual_time(
+        times_sorted, current_date, saved_date, index
+    )
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CURSOR META=after date=%s index=%s selected_time=%s len=%s",
+        user_id,
+        current_date,
+        next_index,
+        selected_time,
+        len(times_sorted),
+    )
     trigger_dt = now_dt.replace(
         hour=int(selected_time.split(":")[0]),
         minute=int(selected_time.split(":")[1]),
@@ -735,7 +753,12 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         next_index + 1,
         len(times_sorted),
     )
-    header_lines = ["⏰ Проверка напоминаний", f"Время: {selected_time}"]
+    category_label = ", ".join(categories_meta) if categories_meta else "нет"
+    header_lines = [
+        "⏰ Проверка напоминаний",
+        f"🕒 Время: {selected_time}",
+        f"Категории: {category_label}",
+    ]
     if restart_notice:
         header_lines.append(restart_notice)
     header_text = "\n".join(header_lines)
@@ -1975,26 +1998,3 @@ async def render_settings_screen(
         )
     elif screen_id == "inc:pct_menu":
         await _render_income_percent_menu(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "st:wishlist":
-        await _render_wishlist_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "st:household_payments":
-        await _render_household_payments_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-            force_new_keyboard=force_new,
-        )

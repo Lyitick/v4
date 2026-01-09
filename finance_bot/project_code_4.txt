@@ -1,3 +1,26 @@
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "st:wishlist":
+        await _render_wishlist_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "st:household_payments":
+        await _render_household_payments_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+            force_new_keyboard=force_new,
+        )
     elif screen_id == "wl:del_cat_menu":
         await _render_wishlist_delete_menu(
             state=state, message=message, db=db, user_id=user_id
@@ -1975,26 +1998,3 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
                 chat_id=display_chat_id,
                 text=": 0",
             )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            percent_str=percent_str,
-            percent_display_chat_id=display_chat_id,
-            percent_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "✅ Газ":
-        error_message = None
-        try:
-            percent = int(percent_str or "0")
-        except ValueError:
-            error_message = "Процент должен быть числом."
-        else:
-            if percent < 0 or percent > 100:
-                error_message = "Процент должен быть в диапазоне 0–100."
-
-        category_id = data.get("editing_category_id")
-        if category_id is None:
-            await state.set_state(None)

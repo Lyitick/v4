@@ -299,6 +299,36 @@ def wishlist_categories_select_keyboard(
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
+def byt_timer_categories_inline_keyboard(
+    categories: list[dict], action_prefix: str
+) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting BYT timer category."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        enabled = bool(category.get("enabled", 0))
+        label = f"{'✅' if enabled else '❌'} {category.get('title', '')}"
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"{action_prefix}:{category.get('id')}",
+            )
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    inline_keyboard.append(
+        [
+            InlineKeyboardButton(text="⏪ Назад", callback_data="st:byt_rules"),
+            InlineKeyboardButton(text="🏠 На главную", callback_data="st:home"),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
 def wishlist_purchased_mode_keyboard() -> InlineKeyboardMarkup:
     """Inline keyboard for selecting wishlist purchased mode."""
 

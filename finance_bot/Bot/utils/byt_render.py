@@ -66,6 +66,19 @@ def format_byt_category_checklist_text(
     return "\n".join(lines)
 
 
+def format_byt_categories_status_text(categories: list[dict]) -> str:
+    """Format BYT reminder category statuses as a checklist."""
+
+    lines = ["Категории для напоминаний:", ""]
+    if categories:
+        for category in categories:
+            status = "✅" if category.get("enabled") else "❌"
+            lines.append(f"{status} {category.get('title', '')}")
+    else:
+        lines.append("Категорий пока нет.")
+    return "\n".join(lines)
+
+
 def format_byt_defer_confirmation_text(
     item: dict, category_title: str, deferred_until: datetime, checklist_text: str
 ) -> str:

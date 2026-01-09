@@ -152,6 +152,58 @@ from pathlib import Path
 from Bot.database.crud import TABLES, migrate_schema
 
 
+===== tests/integration/__init__.py =====
+
+
+===== tests/integration/test_database.py =====
+
+"""Integration tests for database operations."""
+from Bot.database.crud import FinanceDatabase, TABLES
+
+
+def setup_module(module) -> None:  # noqa: D401
+    """Clean database tables before tests."""
+
+    db = FinanceDatabase()
+    cursor = db.connection.cursor()
+    cursor.execute(f"DELETE FROM {TABLES.wishes}")
+    cursor.execute(f"DELETE FROM {TABLES.purchases}")
+    cursor.execute(f"DELETE FROM {TABLES.savings}")
+    db.connection.commit()
+
+
+def test_add_and_get_wish() -> None:
+    """Add wish and retrieve it."""
+
+    db = FinanceDatabase()
+    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
+    wish = db.get_wish(wish_id)
+    assert wish is not None
+    assert wish["name"] == "Test"
+
+
+def test_update_saving_and_purchase() -> None:
+    """Update savings and add purchase entry."""
+
+    db = FinanceDatabase()
+    db.update_saving(1, "Инструменты", 20.0)
+    savings = db.get_user_savings(1)
+    assert savings.get("Инструменты", {}).get("current") == 20.0
+    db.add_purchase(1, "Test", 10.0, "Инструменты")
+    purchases = db.get_purchases_by_user(1)
+    assert len(purchases) == 1
+
+===== tests/integration/test_schema_migration.py =====
+
+"""Integration tests for schema migration."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from Bot.database.crud import TABLES, migrate_schema
+
+
 def test_schema_migration_renames_tables(tmp_path: Path) -> None:
     """Rename legacy tables without losing data."""
 

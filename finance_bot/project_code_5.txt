@@ -1,3 +1,149 @@
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            percent_str=percent_str,
+            percent_display_chat_id=display_chat_id,
+            percent_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "✅ Газ":
+        error_message = None
+        try:
+            percent = int(percent_str or "0")
+        except ValueError:
+            error_message = "Процент должен быть числом."
+        else:
+            if percent < 0 or percent > 100:
+                error_message = "Процент должен быть в диапазоне 0–100."
+
+        category_id = data.get("editing_category_id")
+        if category_id is None:
+            await state.set_state(None)
+            await _cleanup_input_ui(
+                message.bot,
+                data,
+                display_chat_key="percent_display_chat_id",
+                display_message_key="percent_display_message_id",
+            )
+            await _remove_calculator_keyboard(message)
+            await _render_previous_screen_or_exit(message, state)
+            return
+
+        if error_message is None:
+            db = get_db()
+            db.update_income_category_percent(message.from_user.id, category_id, percent)
+            total = db.sum_income_category_percents(message.from_user.id)
+
+            if total == 100:
+                LOGGER.info(
+                    "Percent saved: user=%s scope=%s category_id=%s value=%s",
+                    message.from_user.id,
+                    "income",
+                    category_id,
+                    percent,
+                )
+            else:
+                error_message = f"Сумма процентов сейчас {total}%. Нужно 100%."
+
+        await _cleanup_input_ui(
+            message.bot,
+            data,
+            display_chat_key="percent_display_chat_id",
+            display_message_key="percent_display_message_id",
+        )
+        await _remove_calculator_keyboard(message)
+        if error_message:
+            await state.set_state(IncomeSettingsState.waiting_for_percent_category)
+            await _render_income_percent_menu(
+                state=state,
+                message=message,
+                db=get_db(),
+                user_id=message.from_user.id,
+                error_message=error_message,
+            )
+            return
+
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "st:income"
+        await render_settings_screen(previous_screen, message=message, state=state)
+
+
+@router.message(WishlistSettingsState.waiting_for_purchased_days)
+async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    if text not in PERCENT_INPUT_BUTTONS:
+        chat_id, message_id = await _get_settings_message_ids(state, message)
+        await _edit_settings_page(
+            bot=message.bot,
+            state=state,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="Используй кнопки калькулятора.",
+            reply_markup=None,
+        )
+        return
+
+    days_str = data.get("purchased_days_str", "0")
+    display_chat_id = data.get("purchased_display_chat_id", message.chat.id)
+    display_message_id = data.get("purchased_display_message_id")
+
+    if text in PERCENT_DIGITS:
+        days_str = days_str.lstrip("0") if days_str != "0" else ""
+        days_str = f"{days_str}{text}" or "0"
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {days_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {days_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            purchased_days_str=days_str,
+            purchased_display_chat_id=display_chat_id,
+            purchased_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "Очистить":
+        days_str = "0"
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=": 0",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=": 0",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            purchased_days_str=days_str,
+            purchased_display_chat_id=display_chat_id,
+            purchased_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "✅ Газ":
         try:
             days = int(days_str or "0")
         except ValueError:
@@ -1713,7 +1859,6 @@ async def handle_byt_defer_days_invalid(message: Message) -> None:
 ===== Bot/keyboards/__init__.py =====
 
 
-
 ===== Bot/keyboards/calculator.py =====
 
 """Calculator keyboard definitions."""
@@ -1806,7 +1951,7 @@ def main_menu_keyboard(
     if show_settings:
         buttons.append([KeyboardButton(text="⚙️")])
     if show_test_button:
-        buttons.append([KeyboardButton(text="Проверить быт")])  # TODO: удалить после тестов
+        buttons.append([KeyboardButton(text="Проверить напоминания")])  # TODO: удалить после тестов
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -1853,148 +1998,3 @@ def wishlist_reply_keyboard() -> ReplyKeyboardMarkup:
 def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
     """Keyboard for wishlist actions without add button (+)."""
 
-    buttons = [
-        [KeyboardButton(text="Купленное")],
-        [KeyboardButton(text="⏪ На главную")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def wishlist_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
-    """Inline keyboard for wishlist categories."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for category in categories:
-        row.append(
-            InlineKeyboardButton(
-                text=category.get("title", ""),
-                callback_data=f"wlcat:{category.get('id')}",
-            )
-        )
-        if len(row) == 2:
-            inline_keyboard.append(row)
-            row = []
-    if row:
-        inline_keyboard.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def wishlist_url_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for skipping wishlist URL input."""
-
-    buttons = [[InlineKeyboardButton(text="скип", callback_data="wishlist_skip_url")]]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def purchase_confirmation_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard for confirming purchase suggestion."""
-
-    buttons = [[KeyboardButton(text="✅ Купил"), KeyboardButton(text="🔄 Продолжить копить")]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
-
-
-def income_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard with confirm income button."""
-
-    buttons = [[InlineKeyboardButton(text="✅ Получено", callback_data="income_confirm")]]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-===== Bot/keyboards/settings.py =====
-
-"""Settings keyboards."""
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
-
-from Bot.constants.ui_labels import (
-    WISHLIST_DEBIT_CATEGORY_BACK,
-    WISHLIST_DEBIT_CATEGORY_BUTTON,
-    WISHLIST_DEBIT_CATEGORY_NONE,
-    WISHLIST_BYT_CATEGORY_BUTTON,
-)
-
-
-def settings_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for settings menu."""
-
-    buttons = [
-        [KeyboardButton(text="⚙️ Бытовые платежи ⚙️")],
-        [KeyboardButton(text="⏪ На главную")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def household_settings_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for household settings actions."""
-
-    buttons = [
-        [
-            InlineKeyboardButton(text="➕", callback_data="hh_set:add"),
-            InlineKeyboardButton(text="➖", callback_data="hh_set:del"),
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def household_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
-    """Inline keyboard for removing household items."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    for item in items:
-        title = str(item.get("text", "")).rstrip("?")
-        amount = item.get("amount")
-        label = f"{title} — {amount}" if amount is not None else title
-        inline_keyboard.append(
-            [
-                InlineKeyboardButton(
-                    text=label,
-                    callback_data=f"hh_set:remove:{item.get('code', '')}",
-                )
-            ]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for household payments settings actions."""
-
-    buttons = [
-        [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
-        [KeyboardButton(text="💰 Категория списания"), KeyboardButton(text="🧹 Обнулить")],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def household_debit_category_select_reply_keyboard(
-    categories: list[dict],
-) -> ReplyKeyboardMarkup:
-    """Reply keyboard for selecting household debit category."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for category in categories:
-        row.append(KeyboardButton(text=category.get("title", "")))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text="⬅ Назад")])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def household_payments_remove_reply_keyboard(
-    items: list[dict],
-) -> ReplyKeyboardMarkup:
-    """Reply keyboard for removing household payments in settings."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for item in items:
-        title = str(item.get("text", "")).rstrip("?")
-        amount = item.get("amount")
-        label = f"{title} — {amount}" if amount is not None else title
-        row.append(KeyboardButton(text=label))
-        if len(row) == 2:
-            rows.append(row)
-            row = []

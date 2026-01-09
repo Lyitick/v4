@@ -1,42 +1,3 @@
-    if user_id is None:
-        return
-
-    db = db or get_db()
-    savings_map = db.get_user_savings_map(user_id)
-    wishes = db.get_wishes_by_user(user_id)
-    debit_category = db.get_wishlist_debit_category(user_id)
-    if not debit_category:
-        return
-    if not db.get_income_category_by_code(user_id, debit_category):
-        return
-
-    affordable: List[Dict[str, Any]] = []
-    for wish in wishes:
-        if wish.get("is_purchased"):
-            continue
-
-        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
-        price = _to_float(wish.get("price"))
-        available = _to_float(savings_map.get(debit_category))
-        if price <= 0 or available < price:
-            continue
-
-        wish_copy: Dict[str, Any] = dict(wish)
-        wish_copy["price"] = price
-        wish_copy["wishlist_category"] = wishlist_category
-        affordable.append(wish_copy)
-
-    if not affordable:
-        return
-
-    lines = ["Ты уже можешь купить:"]
-    for wish in affordable:
-        lines.append(
-            f"• {wish['name']} — {wish['price']:.2f} ₽ (категория: {wish['wishlist_category']})"
-        )
-    lines.append("Нажми на кнопку под нужным товаром, если купил.")
-
-    keyboard = _build_affordable_wishes_keyboard(affordable)
     await message.answer("\n".join(lines), reply_markup=keyboard)
 
 
@@ -134,6 +95,10 @@ from Bot.services.household import (
     update_flow_state,
 )
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
+from Bot.utils.byt_manual_check import (
+    build_byt_times_sorted,
+    select_next_byt_manual_time,
+)
 from Bot.utils.datetime_utils import current_month_str, now_tz
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.telegram_safe import (
@@ -142,6 +107,7 @@ from Bot.utils.telegram_safe import (
     safe_delete_message,
     safe_edit_message_text,
     safe_edit_message_text_with_status,
+    safe_send_message,
 )
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
@@ -659,7 +625,7 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(F.text == "Проверить быт")
+@router.message(F.text == "Проверить напоминания")
 async def trigger_household_notifications(message: Message, state: FSMContext) -> None:
     """Trigger BYT purchases check (household wishlist) as if timer fired."""
 
@@ -688,9 +654,10 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     )
 
     categories = db.list_enabled_byt_reminder_categories(user_id)
+    LOGGER.info("USER=%s ACTION=BYT_MANUAL_CHECK_PRESS META=-", user_id)
     if not categories:
         LOGGER.info(
-            "USER=%s ACTION=BYT_MANUAL_CHECK META=categories=0 total=0 due=0 deferred=0",
+            "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=- total=0 due=0 deferred=0",
             user_id,
         )
         sent_id = await safe_answer(
@@ -705,23 +672,135 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         return
 
     now_dt = now_tz()
+    category_times: dict[int, list[str]] = {}
+    enabled_category_ids: list[int] = []
+    for category in categories:
+        category_id = int(category.get("id") or 0)
+        enabled_category_ids.append(category_id)
+        times = db.list_byt_reminder_times(user_id, category_id)
+        times_hhmm = [
+            str(item.get("time_hhmm", "")).strip()
+            for item in times
+            if item.get("time_hhmm")
+        ]
+        if times_hhmm:
+            category_times[category_id] = times_hhmm
+
+    times_sorted = build_byt_times_sorted(category_times)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_TIMES_BUILD META=enabled_categories=%s times_by_category=%s times_sorted=%s",
+        user_id,
+        enabled_category_ids,
+        category_times,
+        times_sorted,
+    )
+    if not times_sorted:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=- total=0 due=0 deferred=0",
+            user_id,
+        )
+        sent_id = await safe_answer(
+            message,
+            "Время напоминаний не задано. Открой настройки → Напоминания → Время напоминаний.",
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+
+    data = await state.get_data()
+    current_date = now_dt.date().isoformat()
+    saved_date = data.get("byt_manual_cursor_date")
+    index = int(data.get("byt_manual_cursor_index") or -1)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CURSOR META=before date=%s index=%s",
+        user_id,
+        saved_date,
+        index,
+    )
+    selected_time, next_index, restart_notice = select_next_byt_manual_time(
+        times_sorted, current_date, saved_date, index
+    )
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CURSOR META=after date=%s index=%s selected_time=%s len=%s",
+        user_id,
+        current_date,
+        next_index,
+        selected_time,
+        len(times_sorted),
+    )
+    trigger_dt = now_dt.replace(
+        hour=int(selected_time.split(":")[0]),
+        minute=int(selected_time.split(":")[1]),
+        second=0,
+        microsecond=0,
+    )
+    target_categories = [
+        category
+        for category in categories
+        if selected_time in category_times.get(int(category.get("id") or 0), [])
+    ]
+    categories_meta = [
+        str(category.get("title", ""))
+        for category in target_categories
+        if category.get("title")
+    ]
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CHECK_STEP META=time=%s index=%s/%s",
+        user_id,
+        selected_time,
+        next_index + 1,
+        len(times_sorted),
+    )
+    category_label = ", ".join(categories_meta) if categories_meta else "нет"
+    header_lines = [
+        "⏰ Проверка напоминаний",
+        f"🕒 Время: {selected_time}",
+        f"Категории: {category_label}",
+    ]
+    if restart_notice:
+        header_lines.append(restart_notice)
+    header_text = "\n".join(header_lines)
+    header_message_id = data.get("byt_manual_check_message_id")
+    edited = False
+    if header_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=int(header_message_id),
+            text=header_text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+    if not edited:
+        sent = await safe_send_message(
+            message.bot,
+            chat_id=message.chat.id,
+            text=header_text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent:
+            await ui_register_message(state, sent.chat.id, sent.message_id)
+            await state.update_data(byt_manual_check_message_id=sent.message_id)
+
     settings_row = db.get_user_settings(user_id)
     allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
-    for category in categories:
-        category_id = int(category.get("id"))
+    total_count = 0
+    due_count = 0
+    deferred_count = 0
+    for category in target_categories:
+        category_id = int(category.get("id") or 0)
         category_title = str(category.get("title", ""))
+        db.cleanup_old_byt_purchases(user_id, category_title, trigger_dt)
         due_items, deferred_items = get_byt_category_items(
-            db, user_id, category_title, now_dt
+            db, user_id, category_title, trigger_dt
         )
         total_items = len(due_items) + len(deferred_items)
-        LOGGER.info(
-            "USER=%s ACTION=BYT_MANUAL_CHECK META=category_id=%s total=%s due=%s deferred=%s",
-            user_id,
-            category_id,
-            total_items,
-            len(due_items),
-            len(deferred_items),
-        )
+        total_count += total_items
+        due_count += len(due_items)
+        deferred_count += len(deferred_items)
         text = format_byt_category_checklist_text(
             category_title, due_items, deferred_items
         )
@@ -741,6 +820,19 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         )
         if sent:
             await ui_register_message(state, sent.chat.id, sent.message_id)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=%s categories=%s total=%s due=%s deferred=%s",
+        user_id,
+        selected_time,
+        categories_meta,
+        total_count,
+        due_count,
+        deferred_count,
+    )
+    await state.update_data(
+        byt_manual_cursor_date=current_date,
+        byt_manual_cursor_index=next_index,
+    )
 
 
 @router.callback_query(
@@ -963,7 +1055,14 @@ from aiogram import F, Router
 from aiogram.filters import BaseFilter
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 
 from Bot.constants.ui_labels import (
     WISHLIST_DEBIT_CATEGORY_BACK,
@@ -977,6 +1076,7 @@ from Bot.keyboards.main import back_only_keyboard
 from Bot.keyboards.settings import (
     byt_category_toggle_keyboard,
     byt_rules_reply_keyboard,
+    byt_timer_categories_inline_keyboard,
     byt_timer_inline_keyboard,
     byt_timer_times_select_keyboard,
     household_debit_category_select_reply_keyboard,
@@ -991,6 +1091,7 @@ from Bot.keyboards.settings import (
     wishlist_purchased_mode_reply_keyboard,
     wishlist_settings_reply_keyboard,
 )
+from Bot.utils.byt_render import format_byt_categories_status_text
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.money_states import HouseholdSettingsState, IncomeSettingsState
 from Bot.states.wishlist_states import (
@@ -1529,12 +1630,10 @@ def _format_byt_rules_text(
     error_message: str | None = None,
 ) -> str:
     on_off = {True: "ДА", False: "НЕТ", 1: "ДА", 0: "НЕТ"}
-    enabled_titles = [str(category.get("title", "")) for category in categories]
-    categories_label = ", ".join(enabled_titles) if enabled_titles else "не выбраны"
     lines = [
         "🔔 Напоминания — условия",
         "",
-        f"Категории для напоминаний: {categories_label}",
+        format_byt_categories_status_text(categories),
         f"Напоминания включены: {on_off.get(settings.get('byt_reminders_enabled', 1), 'НЕТ')}",
         "Слать если список пуст: НЕТ",
         'Формат: "Что ты купил?" (кнопки-товары)',
@@ -1552,11 +1651,10 @@ def _format_byt_rules_text(
 def _format_byt_timer_menu_text(
     categories: list[dict], error_message: str | None = None
 ) -> str:
-    lines = ["⏰ Время напоминаний", "", "Выбери категорию:"]
-    for category in categories:
-        lines.append(f"• {category.get('title', '')}")
+    lines = ["⏰ Время напоминаний", "", "Выбери категорию, затем выбери время(я)."]
     if not categories:
-        lines.append("(категорий нет)")
+        lines.append("")
+        lines.append("Категорий пока нет.")
     if error_message:
         lines.append("")
         lines.append(error_message)
@@ -1566,7 +1664,14 @@ def _format_byt_timer_menu_text(
 def _format_byt_timer_category_text(
     category_title: str, times: list[dict], error_message: str | None = None
 ) -> str:
-    lines = [f"⏰ Время для категории: {category_title}", "", "Текущие времена:", ""]
+    lines = [
+        "⏰ Время напоминаний",
+        "",
+        f"Категория: {category_title}",
+        "",
+        "Текущие времена:",
+        "",
+    ]
     if times:
         for timer in times:
             if timer.get("time_hhmm"):
@@ -1576,7 +1681,7 @@ def _format_byt_timer_category_text(
                     f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
                 )
     else:
-        lines.append("(пусто)")
+        lines.append("Время не задано")
     if error_message:
         lines.append("")
         lines.append(error_message)
@@ -1641,7 +1746,7 @@ async def _render_byt_rules_settings(
 ) -> dict:
     db.ensure_user_settings(user_id)
     settings_row = db.get_user_settings(user_id)
-    categories = db.list_enabled_byt_reminder_categories(user_id)
+    categories = db.list_byt_reminder_categories(user_id)
     LOGGER.info("Open byt conditions settings (reply mode) user_id=%s", user_id)
     await _render_reply_settings_page(
         message=message,
@@ -1661,7 +1766,7 @@ async def _render_byt_timer_settings(
     user_id: int,
     error_message: str | None = None,
 ) -> list[dict]:
-    categories = db.list_active_wishlist_categories(user_id)
+    categories = db.list_byt_reminder_categories(user_id)
     chat_id, message_id = await _get_settings_message_ids(state, message)
     await _edit_settings_page(
         bot=message.bot,
@@ -1669,11 +1774,18 @@ async def _render_byt_timer_settings(
         chat_id=chat_id,
         message_id=message_id,
         text=_format_byt_timer_menu_text(categories, error_message),
-        reply_markup=wishlist_categories_select_keyboard(
+        reply_markup=byt_timer_categories_inline_keyboard(
             categories, "byt:timer_category"
         )
         if categories
-        else back_only_keyboard(),
+        else InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text="⏪ Назад", callback_data="st:byt_rules"),
+                    InlineKeyboardButton(text="🏠 На главную", callback_data="st:home"),
+                ]
+            ]
+        ),
     )
     return categories
 
@@ -1886,115 +1998,3 @@ async def render_settings_screen(
         )
     elif screen_id == "inc:pct_menu":
         await _render_income_percent_menu(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "st:wishlist":
-        await _render_wishlist_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "st:household_payments":
-        await _render_household_payments_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-            force_new_keyboard=force_new,
-        )
-    elif screen_id == "wl:del_cat_menu":
-        await _render_wishlist_delete_menu(
-            state=state, message=message, db=db, user_id=user_id
-        )
-    elif screen_id == "wl:purchased_select_category":
-        await _render_wishlist_purchased_select_menu(
-            state=state, message=message, db=db, user_id=user_id
-        )
-    elif screen_id == "wl:purchased_mode":
-        data = await state.get_data()
-        category_id = data.get("editing_wl_category_id")
-        if category_id is not None:
-            await _render_wishlist_purchased_mode(
-                state=state,
-                message=message,
-                db=db,
-                user_id=user_id,
-                category_id=int(category_id),
-            )
-        else:
-            await _render_wishlist_settings(
-                state=state,
-                message=message,
-                db=db,
-                user_id=user_id,
-            )
-    elif screen_id == "wl:debit_category_menu":
-        await _render_wishlist_debit_category_menu(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "wl:byt_category_menu":
-        await _render_wishlist_byt_category_menu(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "st:byt_rules":
-        await _render_byt_rules_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "byt:timer_menu":
-        await _render_byt_timer_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "byt:timer_category":
-        data = await state.get_data()
-        category_id = data.get("byt_timer_category_id")
-        if category_id is not None:
-            await _render_byt_timer_category_settings(
-                state=state,
-                message=message,
-                db=db,
-                user_id=user_id,
-                category_id=int(category_id),
-                error_message=error_message,
-            )
-        else:
-            await _render_byt_timer_settings(
-                state=state,
-                message=message,
-                db=db,
-                user_id=user_id,
-                error_message=error_message,
-            )
-    elif screen_id == "bt:del_time_menu":
-        await _render_byt_timer_delete_menu(
-            state=state, message=message, db=db, user_id=user_id
-        )
-    elif screen_id == "hp:del_payment_menu":
-        await _render_household_delete_menu(
-            state=state, message=message, db=db, user_id=user_id
-        )
-    elif screen_id == "hp:debit_category_menu":
-        await _render_household_debit_category_menu(
-            state=state,

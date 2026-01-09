@@ -39,6 +39,10 @@ from Bot.services.household import (
     update_flow_state,
 )
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
+from Bot.utils.byt_manual_check import (
+    build_byt_times_sorted,
+    select_next_byt_manual_time,
+)
 from Bot.utils.datetime_utils import current_month_str, now_tz
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.telegram_safe import (
@@ -47,6 +51,7 @@ from Bot.utils.telegram_safe import (
     safe_delete_message,
     safe_edit_message_text,
     safe_edit_message_text_with_status,
+    safe_send_message,
 )
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
@@ -564,7 +569,7 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(F.text == "Проверить быт")
+@router.message(F.text == "Проверить напоминания")
 async def trigger_household_notifications(message: Message, state: FSMContext) -> None:
     """Trigger BYT purchases check (household wishlist) as if timer fired."""
 
@@ -593,9 +598,10 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     )
 
     categories = db.list_enabled_byt_reminder_categories(user_id)
+    LOGGER.info("USER=%s ACTION=BYT_MANUAL_CHECK_PRESS META=-", user_id)
     if not categories:
         LOGGER.info(
-            "USER=%s ACTION=BYT_MANUAL_CHECK META=categories=0 total=0 due=0 deferred=0",
+            "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=- total=0 due=0 deferred=0",
             user_id,
         )
         sent_id = await safe_answer(
@@ -610,23 +616,135 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         return
 
     now_dt = now_tz()
+    category_times: dict[int, list[str]] = {}
+    enabled_category_ids: list[int] = []
+    for category in categories:
+        category_id = int(category.get("id") or 0)
+        enabled_category_ids.append(category_id)
+        times = db.list_byt_reminder_times(user_id, category_id)
+        times_hhmm = [
+            str(item.get("time_hhmm", "")).strip()
+            for item in times
+            if item.get("time_hhmm")
+        ]
+        if times_hhmm:
+            category_times[category_id] = times_hhmm
+
+    times_sorted = build_byt_times_sorted(category_times)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_TIMES_BUILD META=enabled_categories=%s times_by_category=%s times_sorted=%s",
+        user_id,
+        enabled_category_ids,
+        category_times,
+        times_sorted,
+    )
+    if not times_sorted:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=- total=0 due=0 deferred=0",
+            user_id,
+        )
+        sent_id = await safe_answer(
+            message,
+            "Время напоминаний не задано. Открой настройки → Напоминания → Время напоминаний.",
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+
+    data = await state.get_data()
+    current_date = now_dt.date().isoformat()
+    saved_date = data.get("byt_manual_cursor_date")
+    index = int(data.get("byt_manual_cursor_index") or -1)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CURSOR META=before date=%s index=%s",
+        user_id,
+        saved_date,
+        index,
+    )
+    selected_time, next_index, restart_notice = select_next_byt_manual_time(
+        times_sorted, current_date, saved_date, index
+    )
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CURSOR META=after date=%s index=%s selected_time=%s len=%s",
+        user_id,
+        current_date,
+        next_index,
+        selected_time,
+        len(times_sorted),
+    )
+    trigger_dt = now_dt.replace(
+        hour=int(selected_time.split(":")[0]),
+        minute=int(selected_time.split(":")[1]),
+        second=0,
+        microsecond=0,
+    )
+    target_categories = [
+        category
+        for category in categories
+        if selected_time in category_times.get(int(category.get("id") or 0), [])
+    ]
+    categories_meta = [
+        str(category.get("title", ""))
+        for category in target_categories
+        if category.get("title")
+    ]
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CHECK_STEP META=time=%s index=%s/%s",
+        user_id,
+        selected_time,
+        next_index + 1,
+        len(times_sorted),
+    )
+    category_label = ", ".join(categories_meta) if categories_meta else "нет"
+    header_lines = [
+        "⏰ Проверка напоминаний",
+        f"🕒 Время: {selected_time}",
+        f"Категории: {category_label}",
+    ]
+    if restart_notice:
+        header_lines.append(restart_notice)
+    header_text = "\n".join(header_lines)
+    header_message_id = data.get("byt_manual_check_message_id")
+    edited = False
+    if header_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=int(header_message_id),
+            text=header_text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+    if not edited:
+        sent = await safe_send_message(
+            message.bot,
+            chat_id=message.chat.id,
+            text=header_text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent:
+            await ui_register_message(state, sent.chat.id, sent.message_id)
+            await state.update_data(byt_manual_check_message_id=sent.message_id)
+
     settings_row = db.get_user_settings(user_id)
     allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
-    for category in categories:
-        category_id = int(category.get("id"))
+    total_count = 0
+    due_count = 0
+    deferred_count = 0
+    for category in target_categories:
+        category_id = int(category.get("id") or 0)
         category_title = str(category.get("title", ""))
+        db.cleanup_old_byt_purchases(user_id, category_title, trigger_dt)
         due_items, deferred_items = get_byt_category_items(
-            db, user_id, category_title, now_dt
+            db, user_id, category_title, trigger_dt
         )
         total_items = len(due_items) + len(deferred_items)
-        LOGGER.info(
-            "USER=%s ACTION=BYT_MANUAL_CHECK META=category_id=%s total=%s due=%s deferred=%s",
-            user_id,
-            category_id,
-            total_items,
-            len(due_items),
-            len(deferred_items),
-        )
+        total_count += total_items
+        due_count += len(due_items)
+        deferred_count += len(deferred_items)
         text = format_byt_category_checklist_text(
             category_title, due_items, deferred_items
         )
@@ -646,6 +764,19 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         )
         if sent:
             await ui_register_message(state, sent.chat.id, sent.message_id)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=%s categories=%s total=%s due=%s deferred=%s",
+        user_id,
+        selected_time,
+        categories_meta,
+        total_count,
+        due_count,
+        deferred_count,
+    )
+    await state.update_data(
+        byt_manual_cursor_date=current_date,
+        byt_manual_cursor_index=next_index,
+    )
 
 
 @router.callback_query(

@@ -2,43 +2,6 @@
 
 BOT_TOKEN=
 
-===== .pytest_cache/.gitignore =====
-
-# Created by pytest automatically.
-*
-
-===== .pytest_cache/CACHEDIR.TAG =====
-
-Signature: 8a477f597d28d172789f06886806bc55
-# This file is a cache directory tag created by pytest.
-# For information about cache directory tags, see:
-#	https://bford.info/cachedir/spec.html
-
-===== .pytest_cache/README.md =====
-
-# pytest cache directory #
-
-This directory contains data from the pytest's cache plugin,
-which provides the `--lf` and `--ff` options, as well as the `cache` fixture.
-
-**Do not** commit this to version control.
-
-See [the docs](https://docs.pytest.org/en/stable/how-to/cache.html) for more information.
-
-===== .pytest_cache/v/cache/lastfailed =====
-
-{}
-
-===== .pytest_cache/v/cache/nodeids =====
-
-[
-  "tests/unit/test_byt_reminder_schedule.py::test_get_next_reminder_dt_default",
-  "tests/unit/test_byt_reminder_schedule.py::test_get_next_reminder_dt_today",
-  "tests/unit/test_byt_reminder_schedule.py::test_get_next_reminder_dt_tomorrow",
-  "tests/unit/test_byt_reminder_settings.py::test_defer_confirmation_text_contains_details",
-  "tests/unit/test_byt_reminder_settings.py::test_toggle_byt_category_and_times"
-]
-
 ===== AUDIT_household_payments_ui.md =====
 
 # Audit: household payments UI
@@ -63,8 +26,8 @@ See [the docs](https://docs.pytest.org/en/stable/how-to/cache.html) for more inf
 
 """Package initializer for finance bot modules."""
 
-===== Bot/config/__init__.py =====
 
+===== Bot/config/__init__.py =====
 
 
 ===== Bot/config/logging_config.py =====
@@ -179,7 +142,6 @@ WISHLIST_DEBIT_CATEGORY_BACK = "⬅️ Назад"
 WISHLIST_BYT_CATEGORY_BUTTON = "Выбор категории для напоминаний"
 
 ===== Bot/database/__init__.py =====
-
 
 
 ===== Bot/database/crud.py =====
@@ -1998,3 +1960,41 @@ class FinanceDatabase:
         cursor: sqlite3.Cursor,
         user_id: int,
         category: str,
+        amount_delta: float,
+    ) -> None:
+        cursor.execute(
+            f"SELECT id, current FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
+            (user_id, category),
+        )
+        row = cursor.fetchone()
+        delta = self._to_float(amount_delta)
+        if row:
+            current = self._to_float(row["current"])
+            new_value = current + delta
+            cursor.execute(
+                f"UPDATE {TABLES.savings} SET current = ? WHERE id = ?",
+                (new_value, row["id"]),
+            )
+        else:
+            cursor.execute(
+                f"INSERT INTO {TABLES.savings} (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
+                (user_id, category, delta),
+            )
+
+    def decrease_savings(self, user_id: int, category: str, amount: float) -> None:
+        """Decrease savings for category by amount."""
+
+        self.update_saving(user_id, category, -abs(amount))
+
+    def set_goal(self, user_id: int, category: str, goal: float, purpose: str) -> None:
+        """Set goal and purpose for saving category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT id FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
+                (user_id, category),
+            )
+            row = cursor.fetchone()
+            if row:
+                cursor.execute(

@@ -1,3 +1,220 @@
+async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
+    data = await state.get_data()
+    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
+    if chat_id is None:
+        return
+    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
+
+
+async def ui_render_screen(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> int:
+    data = await state.get_data()
+    screen_id = data.get("ui_screen_message_id")
+    if screen_id is not None and not isinstance(
+        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
+    ):
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(screen_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            logger=LOGGER,
+        )
+        if edited:
+            await ui_set_screen_message(state, chat_id, int(screen_id))
+            return int(screen_id)
+    sent = await safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
+    )
+    if sent:
+        await ui_set_screen_message(state, chat_id, sent.message_id)
+        return int(sent.message_id)
+    return int(screen_id or 0)
+
+===== Bot/utils/ui_flow.py =====
+
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
+
+from Bot.utils.telegram_safe import safe_delete_message
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_get(state: FSMContext) -> dict[str, Any]:
+    data = await state.get_data()
+    return {
+        "greeting_id": data.get("ui_welcome_message_id"),
+        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
+    }
+
+
+async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
+    ui = await ui_get(state)
+    if ui.get("greeting_id") is not None:
+        return
+    # greeting_id не удаляем никогда
+    await state.update_data(ui_welcome_message_id=int(message_id))
+
+
+async def ui_track(
+    state: FSMContext, message_id: int, kind: str, screen: str | None
+) -> None:
+    ui = await ui_get(state)
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    tracked.append(int(message_id))
+    if len(tracked) > 300:
+        tracked = tracked[-300:]
+    await state.update_data(ui_tracked_message_ids=tracked)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, screen: str, message_id: int
+) -> None:
+    await ui_track(state, message_id, kind="ui", screen=screen)
+
+
+async def ui_cleanup_for_transition(
+    bot: Bot, state: FSMContext, chat_id: int, keep_greeting: bool = True
+) -> None:
+    ui = await ui_get(state)
+    greeting_id = ui.get("greeting_id") if keep_greeting else None
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    ids = [int(item) for item in tracked]
+    for message_id in ids:
+        if greeting_id and message_id == greeting_id:
+            continue
+        await safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            logger=LOGGER,
+        )
+    await state.update_data(ui_tracked_message_ids=[])
+
+
+async def ui_transition(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    new_screen: str,
+    send_screen: Callable[[], Awaitable[Message]],
+) -> Message:
+    await ui_cleanup_for_transition(bot, state, chat_id, keep_greeting=True)
+    sent = await send_screen()
+    await ui_set_screen_message(state, new_screen, sent.message_id)
+    return sent
+
+===== __init__.py =====
+
+
+===== docs/AUDIT_REPORT.md =====
+
+# Audit Report (finance_bot v4)
+
+## Found issues
+- UI cleanup tracked multiple message lists and could retain welcome in tracked ids.
+- Welcome message id was not persisted and could be duplicated after state loss.
+- Direct Telegram edit/delete calls could fail on network errors or invalid reply keyboards.
+- Income category titles contained bank/service suffixes and older rows were not sanitized.
+- Database access used direct `FinanceDatabase()` construction across handlers.
+
+## Fixes applied
+- Unified UI tracking to `ui_tracked_message_ids` and excluded welcome from tracked ids after cleanup.
+- Added persistent welcome id storage in `ui_pins` table and reused it on startup.
+- Implemented safe Telegram operations with retries and guarded edits against reply keyboards.
+- Added income title sanitizer and migration to update existing stored titles.
+- Introduced `get_db()` for a shared database instance and updated handlers.
+
+## Backlog / Follow-up
+- Expand safe Telegram wrapper adoption in remaining handlers and services.
+- Add safe reply markup editing helper if required by additional flows.
+
+===== docs/RUNBOOK.md =====
+
+# Runbook
+
+## Запуск бота
+```bash
+python Bot/main.py
+```
+
+## Прогон тестов
+```bash
+pytest
+```
+
+===== tests/__init__.py =====
+
+
+===== tests/integration/__init__.py =====
+
+
+===== tests/integration/test_database.py =====
+
+"""Integration tests for database operations."""
+from Bot.database.crud import FinanceDatabase, TABLES
+
+
+def setup_module(module) -> None:  # noqa: D401
+    """Clean database tables before tests."""
+
+    db = FinanceDatabase()
+    cursor = db.connection.cursor()
+    cursor.execute(f"DELETE FROM {TABLES.wishes}")
+    cursor.execute(f"DELETE FROM {TABLES.purchases}")
+    cursor.execute(f"DELETE FROM {TABLES.savings}")
+    db.connection.commit()
+
+
+def test_add_and_get_wish() -> None:
+    """Add wish and retrieve it."""
+
+    db = FinanceDatabase()
+    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
+    wish = db.get_wish(wish_id)
+    assert wish is not None
+    assert wish["name"] == "Test"
+
+
+def test_update_saving_and_purchase() -> None:
+    """Update savings and add purchase entry."""
+
+    db = FinanceDatabase()
+    db.update_saving(1, "Инструменты", 20.0)
+    savings = db.get_user_savings(1)
+    assert savings.get("Инструменты", {}).get("current") == 20.0
+    db.add_purchase(1, "Test", 10.0, "Инструменты")
+    purchases = db.get_purchases_by_user(1)
+    assert len(purchases) == 1
+
+===== tests/integration/test_schema_migration.py =====
+
+"""Integration tests for schema migration."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from Bot.database.crud import TABLES, migrate_schema
+
 
 def test_schema_migration_renames_tables(tmp_path: Path) -> None:
     """Rename legacy tables without losing data."""
@@ -148,6 +365,47 @@ if __name__ == "__main__":
 ===== tests/unit/__init__.py =====
 
 
+===== tests/unit/test_byt_manual_check.py =====
+
+"""Tests for manual BYT reminder check helpers."""
+
+from Bot.utils.byt_manual_check import (
+    build_byt_times_sorted,
+    select_next_byt_manual_time,
+)
+
+
+def test_build_byt_times_sorted_unique_sorted() -> None:
+    times_by_category = {
+        1: ["12:00", "18:00"],
+        2: ["14:00", "12:00"],
+    }
+    assert build_byt_times_sorted(times_by_category) == ["12:00", "14:00", "18:00"]
+
+
+def test_select_next_byt_manual_time_cycles() -> None:
+    times_sorted = ["12:00", "14:00"]
+    current_date = "2026-01-09"
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, -1
+    )
+    assert selected == "12:00"
+    assert index == 0
+    assert notice == ""
+
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, index
+    )
+    assert selected == "14:00"
+    assert index == 1
+    assert notice == ""
+
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, index
+    )
+    assert selected == "12:00"
+    assert index == 0
+    assert notice == "Сегодня все времена уже проверены — начинаю заново."
 
 ===== tests/unit/test_byt_reminder_schedule.py =====
 
@@ -183,7 +441,11 @@ def test_get_next_reminder_dt_default() -> None:
 from datetime import datetime
 
 from Bot.database import crud
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
+from Bot.keyboards.settings import byt_timer_categories_inline_keyboard
 from Bot.utils.byt_render import (
+    format_byt_categories_status_text,
     format_byt_category_checklist_text,
     format_byt_defer_confirmation_text,
 )
@@ -227,6 +489,25 @@ def test_defer_confirmation_text_contains_details() -> None:
     assert "Швабра" in text
     assert "2026-01-09 12:00" in text
     assert "Категория: Быт" in text
+
+
+def test_byt_categories_status_text_format() -> None:
+    categories = [
+        {"title": "Быт", "enabled": 1},
+        {"title": "Еда", "enabled": 0},
+    ]
+    text = format_byt_categories_status_text(categories)
+    lines = [line for line in text.splitlines() if line.strip()]
+    status_lines = lines[1:]
+    assert status_lines == ["✅ Быт", "❌ Еда"]
+    assert all(not any(char.isdigit() for char in line) for line in status_lines)
+
+
+def test_byt_timer_categories_keyboard_inline() -> None:
+    categories = [{"id": 1, "title": "Быт", "enabled": 1}]
+    keyboard = byt_timer_categories_inline_keyboard(categories, "byt:timer_category")
+    assert isinstance(keyboard, InlineKeyboardMarkup)
+    assert not isinstance(keyboard, ReplyKeyboardMarkup)
 
 ===== tests/unit/test_byt_source_category.py =====
 
@@ -1457,3 +1738,4 @@ from Bot.utils import *  # noqa: F401,F403
 ===== utils/logging.py =====
 
 from Bot.utils.logging import *  # noqa: F401,F403
+

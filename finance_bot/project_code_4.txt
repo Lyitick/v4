@@ -1,22 +1,3 @@
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    else:
-        await _render_settings_home(message, state)
-    await _set_current_screen(state, screen_id)
-
-
-async def _navigate_to_screen(
-    screen_id: str,
-    *,
-    message: Message,
-    state: FSMContext,
-    error_message: str | None = None,
-    force_new: bool = False,
-) -> None:
-    await _push_current_screen(state, screen_id)
     await render_settings_screen(
         screen_id,
         message=message,
@@ -532,7 +513,31 @@ async def open_byt_timer_menu_reply(message: Message, state: FSMContext) -> None
     await _register_user_message(state, message)
     await _delete_user_message(message)
     await state.set_state(None)
-    await _navigate_to_screen("byt:timer_menu", message=message, state=state)
+    try:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_TIMER_MENU_OPEN STATE=%s META=-",
+            message.from_user.id,
+            await state.get_state(),
+        )
+        await _navigate_to_screen("byt:timer_menu", message=message, state=state)
+    except Exception:  # noqa: BLE001
+        LOGGER.error(
+            "Failed to open BYT timer menu (reply) user_id=%s",
+            message.from_user.id,
+            exc_info=True,
+        )
+        error_keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="⏪ Назад", callback_data="st:byt_rules")]
+            ]
+        )
+        await safe_send_message(
+            message.bot,
+            message.chat.id,
+            "⚠️ Не удалось открыть настройки времени напоминаний. Попробуй ещё раз.",
+            reply_markup=error_keyboard,
+            logger=LOGGER,
+        )
 
 
 @router.message(F.text == "⚙ Условия")
@@ -759,6 +764,11 @@ async def byt_timer_reset(callback: CallbackQuery, state: FSMContext) -> None:
 async def open_byt_timer_menu(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
     await state.set_state(None)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_TIMER_MENU_OPEN STATE=%s META=-",
+        callback.from_user.id,
+        await state.get_state(),
+    )
     await _navigate_to_screen("byt:timer_menu", message=callback.message, state=state)
 
 
@@ -772,6 +782,11 @@ async def open_byt_timer_category(callback: CallbackQuery, state: FSMContext) ->
         category_id = int(parts[2])
     except ValueError:
         return
+    LOGGER.info(
+        "USER=%s ACTION=BYT_TIMER_CATEGORY_SELECT META=category_id=%s",
+        callback.from_user.id,
+        category_id,
+    )
     await state.update_data(byt_timer_category_id=category_id)
     await _navigate_to_screen("byt:timer_category", message=callback.message, state=state)
 
@@ -1983,18 +1998,3 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
             )
         except Exception:
             fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=": 0",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            purchased_days_str=days_str,
-            purchased_display_chat_id=display_chat_id,
-            purchased_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "✅ Газ":

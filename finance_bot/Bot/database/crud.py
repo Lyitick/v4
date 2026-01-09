@@ -33,6 +33,8 @@ class TableNames:
     wishlist_categories: str = "категории_желаний"
     user_settings: str = "настройки_пользователя"
     byt_timer_times: str = "время_быт_таймера"
+    byt_reminder_categories: str = "категории_быт_напоминаний"
+    byt_reminder_times: str = "время_быт_напоминаний"
 
 
 TABLES = TableNames()
@@ -48,6 +50,8 @@ TABLE_RENAMES: dict[str, str] = {
     "wishlist_categories": TABLES.wishlist_categories,
     "user_settings": TABLES.user_settings,
     "byt_timer_times": TABLES.byt_timer_times,
+    "byt_reminder_categories": TABLES.byt_reminder_categories,
+    "byt_reminder_times": TABLES.byt_reminder_times,
 }
 LEGACY_TABLE_NAMES = tuple(TABLE_RENAMES.keys())
 
@@ -350,6 +354,26 @@ class FinanceDatabase:
                 hour INTEGER NOT NULL,
                 minute INTEGER NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.byt_reminder_categories}" (
+                user_id INTEGER NOT NULL,
+                category_id INTEGER NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (user_id, category_id)
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.byt_reminder_times}" (
+                user_id INTEGER NOT NULL,
+                category_id INTEGER NOT NULL,
+                time_hhmm TEXT NOT NULL,
+                PRIMARY KEY (user_id, category_id, time_hhmm)
             )
             """
         )
@@ -680,6 +704,276 @@ class FinanceDatabase:
             LOGGER.info("Seeded default BYT timer times for user %s", user_id)
         except sqlite3.Error as error:
             LOGGER.error("Failed to seed BYT timer times for user %s: %s", user_id, error)
+
+    def ensure_byt_reminder_migration(self, user_id: int) -> None:
+        """Migrate legacy BYT category/time settings into per-category tables."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT 1
+                FROM {TABLES.byt_reminder_categories}
+                WHERE user_id = ?
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            if cursor.fetchone():
+                return
+            self.ensure_byt_timer_defaults(user_id)
+            settings_row = self.get_user_settings(user_id)
+            raw_category_id = settings_row.get("byt_wishlist_category_id")
+            try:
+                category_id = int(raw_category_id) if raw_category_id is not None else None
+            except (TypeError, ValueError):
+                category_id = None
+            if category_id is None:
+                return
+            cursor.execute(
+                f"""
+                INSERT OR IGNORE INTO {TABLES.byt_reminder_categories} (user_id, category_id, enabled)
+                VALUES (?, ?, 1)
+                """,
+                (user_id, category_id),
+            )
+            cursor.execute(
+                f"""
+                SELECT hour, minute
+                FROM {TABLES.byt_timer_times}
+                WHERE user_id = ? AND is_active = 1
+                """,
+                (user_id,),
+            )
+            for row in cursor.fetchall():
+                time_hhmm = f"{int(row['hour']):02d}:{int(row['minute']):02d}"
+                cursor.execute(
+                    f"""
+                    INSERT OR IGNORE INTO {TABLES.byt_reminder_times} (user_id, category_id, time_hhmm)
+                    VALUES (?, ?, ?)
+                    """,
+                    (user_id, category_id, time_hhmm),
+                )
+            self.connection.commit()
+            LOGGER.info(
+                "Migrated legacy BYT settings to reminder tables (user_id=%s, category_id=%s)",
+                user_id,
+                category_id,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to migrate BYT reminder settings for user %s: %s", user_id, error)
+
+    def list_byt_reminder_categories(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return wishlist categories with BYT reminder enabled flag."""
+
+        self.ensure_byt_reminder_migration(user_id)
+        categories = self.list_active_wishlist_categories(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT category_id, enabled
+                FROM {TABLES.byt_reminder_categories}
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            )
+            enabled_map = {int(row["category_id"]): int(row["enabled"]) for row in cursor.fetchall()}
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch BYT reminder categories for user %s: %s",
+                user_id,
+                error,
+            )
+            enabled_map = {}
+        for category in categories:
+            category_id = int(category.get("id") or 0)
+            category["enabled"] = int(enabled_map.get(category_id, 0))
+        return categories
+
+    def list_enabled_byt_reminder_categories(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return enabled wishlist categories for BYT reminders."""
+
+        self.ensure_byt_reminder_migration(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT wc.id, wc.title, wc.position
+                FROM {TABLES.wishlist_categories} AS wc
+                JOIN {TABLES.byt_reminder_categories} AS brc
+                  ON wc.id = brc.category_id
+                WHERE wc.user_id = ? AND wc.is_active = 1 AND brc.enabled = 1
+                ORDER BY wc.position, wc.id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to list enabled BYT reminder categories for user %s: %s",
+                user_id,
+                error,
+            )
+            return []
+
+    def toggle_byt_reminder_category(self, user_id: int, category_id: int) -> bool:
+        """Toggle BYT reminder category enabled flag and return new state."""
+
+        self.ensure_byt_reminder_migration(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT enabled
+                FROM {TABLES.byt_reminder_categories}
+                WHERE user_id = ? AND category_id = ?
+                """,
+                (user_id, category_id),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                new_enabled = 1
+                cursor.execute(
+                    f"""
+                    INSERT INTO {TABLES.byt_reminder_categories} (user_id, category_id, enabled)
+                    VALUES (?, ?, 1)
+                    """,
+                    (user_id, category_id),
+                )
+            else:
+                current = int(row["enabled"])
+                new_enabled = 0 if current else 1
+                cursor.execute(
+                    f"""
+                    UPDATE {TABLES.byt_reminder_categories}
+                    SET enabled = ?
+                    WHERE user_id = ? AND category_id = ?
+                    """,
+                    (new_enabled, user_id, category_id),
+                )
+            self.connection.commit()
+            return bool(new_enabled)
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to toggle BYT reminder category for user %s: %s",
+                user_id,
+                error,
+            )
+            return False
+
+    def get_byt_reminder_category_enabled(self, user_id: int, category_id: int) -> bool:
+        """Return True when BYT reminders are enabled for category."""
+
+        self.ensure_byt_reminder_migration(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT enabled
+                FROM {TABLES.byt_reminder_categories}
+                WHERE user_id = ? AND category_id = ?
+                """,
+                (user_id, category_id),
+            )
+            row = cursor.fetchone()
+            return bool(row and int(row["enabled"]))
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to get BYT reminder category status for user %s: %s",
+                user_id,
+                error,
+            )
+            return False
+
+    def list_byt_reminder_times(self, user_id: int, category_id: int) -> List[Dict[str, Any]]:
+        """Return BYT reminder times for category."""
+
+        self.ensure_byt_reminder_migration(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT time_hhmm
+                FROM {TABLES.byt_reminder_times}
+                WHERE user_id = ? AND category_id = ?
+                ORDER BY time_hhmm
+                """,
+                (user_id, category_id),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch BYT reminder times for user %s: %s",
+                user_id,
+                error,
+            )
+            return []
+
+    def add_byt_reminder_time(
+        self, user_id: int, category_id: int, time_hhmm: str
+    ) -> None:
+        """Add a new BYT reminder time for category."""
+
+        self.ensure_byt_reminder_migration(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT OR IGNORE INTO {TABLES.byt_reminder_times} (user_id, category_id, time_hhmm)
+                VALUES (?, ?, ?)
+                """,
+                (user_id, category_id, time_hhmm),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to add BYT reminder time for user %s: %s",
+                user_id,
+                error,
+            )
+
+    def remove_byt_reminder_time(
+        self, user_id: int, category_id: int, time_hhmm: str
+    ) -> None:
+        """Remove BYT reminder time for category."""
+
+        self.ensure_byt_reminder_migration(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                DELETE FROM {TABLES.byt_reminder_times}
+                WHERE user_id = ? AND category_id = ? AND time_hhmm = ?
+                """,
+                (user_id, category_id, time_hhmm),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to remove BYT reminder time for user %s: %s",
+                user_id,
+                error,
+            )
+
+    def get_users_with_byt_reminder_times(self) -> List[int]:
+        """Return users that have BYT reminder times configured."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT DISTINCT user_id
+                FROM {TABLES.byt_reminder_times}
+                """
+            )
+            rows = cursor.fetchall()
+            return [int(row["user_id"]) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get users with BYT reminder times: %s", error)
+            return []
 
     def list_active_expense_categories(self, user_id: int) -> List[Dict[str, Any]]:
         """Return active expense categories ordered by position."""

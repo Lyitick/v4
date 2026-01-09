@@ -1,5 +1,404 @@
-===== tests/unit/test_household_idempotency.py =====
 
+def test_schema_migration_renames_tables(tmp_path: Path) -> None:
+    """Rename legacy tables without losing data."""
+
+    db_path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(db_path)
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE savings (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            category TEXT,
+            current REAL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE wishes (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            name TEXT,
+            price REAL,
+            category TEXT,
+            is_purchased INTEGER,
+            saved_amount REAL,
+            purchased_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE purchases (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            wish_name TEXT,
+            price REAL,
+            category TEXT,
+            purchased_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE household_payment_items (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            code TEXT,
+            text TEXT,
+            amount INTEGER,
+            position INTEGER,
+            is_active INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE household_payments (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            month TEXT,
+            question_code TEXT,
+            is_paid INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        "INSERT INTO savings (user_id, category, current) VALUES (?,?,?)",
+        (1, "БЫТ", 500.0),
+    )
+    cursor.execute(
+        """
+        INSERT INTO wishes (user_id, name, price, category, is_purchased, saved_amount, purchased_at)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (1, "Чайник", 1200.0, "БЫТ", 0, 0, None),
+    )
+    cursor.execute(
+        "INSERT INTO purchases (user_id, wish_name, price, category, purchased_at) VALUES (?,?,?,?,?)",
+        (1, "Тест", 100.0, "БЫТ", "2025-01-01"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO household_payment_items (user_id, code, text, amount, position, is_active)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (1, "rent", "Квартплата", 4000, 1, 1),
+    )
+    cursor.execute(
+        """
+        INSERT INTO household_payments (user_id, month, question_code, is_paid)
+        VALUES (?,?,?,?)
+        """,
+        (1, "2025-01", "rent", 0),
+    )
+    connection.commit()
+
+    migrate_schema(connection)
+    migrate_schema(connection)
+
+    cursor.execute(f"SELECT category, current FROM {TABLES.savings}")
+    savings_row = cursor.fetchone()
+    assert savings_row == ("БЫТ", 500.0)
+
+    cursor.execute(f"SELECT name FROM {TABLES.wishes}")
+    assert cursor.fetchone()[0] == "Чайник"
+
+    cursor.execute(f"SELECT wish_name FROM {TABLES.purchases}")
+    assert cursor.fetchone()[0] == "Тест"
+
+    cursor.execute(f"SELECT code FROM {TABLES.household_payment_items}")
+    assert cursor.fetchone()[0] == "rent"
+
+    cursor.execute(f"SELECT question_code FROM {TABLES.household_payments}")
+    assert cursor.fetchone()[0] == "rent"
+
+    connection.close()
+
+===== tests/run_all_tests.py =====
+
+"""Run all pytest suites."""
+import pytest
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main(["-q", "tests"]))
+
+===== tests/test_runner.py =====
+
+"""Helper to run tests programmatically."""
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    """Run pytest suite and return exit code."""
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", str(root / "tests")], check=False)
+    return result.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+===== tests/unit/__init__.py =====
+
+
+
+===== tests/unit/test_byt_reminder_schedule.py =====
+
+"""Tests for BYT reminder schedule helpers."""
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from Bot.utils.datetime_utils import get_next_reminder_dt
+
+
+def test_get_next_reminder_dt_today() -> None:
+    now = datetime(2026, 1, 8, 10, 30, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, ["12:00", "18:00"])
+    assert result == datetime(2026, 1, 8, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_get_next_reminder_dt_tomorrow() -> None:
+    now = datetime(2026, 1, 8, 19, 0, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, ["12:00", "18:00"])
+    assert result == datetime(2026, 1, 9, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_get_next_reminder_dt_default() -> None:
+    now = datetime(2026, 1, 8, 13, 0, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, [])
+    assert result == datetime(2026, 1, 9, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+===== tests/unit/test_byt_reminder_settings.py =====
+
+"""Tests for BYT reminder category and time settings."""
+
+from datetime import datetime
+
+from Bot.database import crud
+from Bot.utils.byt_render import (
+    format_byt_category_checklist_text,
+    format_byt_defer_confirmation_text,
+)
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_toggle_byt_category_and_times(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "Дом")
+        assert db.get_byt_reminder_category_enabled(1, category_id) is False
+        enabled = db.toggle_byt_reminder_category(1, category_id)
+        assert enabled is True
+        assert db.get_byt_reminder_category_enabled(1, category_id) is True
+        enabled = db.toggle_byt_reminder_category(1, category_id)
+        assert enabled is False
+
+        db.add_byt_reminder_time(1, category_id, "09:00")
+        times = db.list_byt_reminder_times(1, category_id)
+        assert times == [{"time_hhmm": "09:00"}]
+        db.remove_byt_reminder_time(1, category_id, "09:00")
+        assert db.list_byt_reminder_times(1, category_id) == []
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_defer_confirmation_text_contains_details() -> None:
+    item = {"name": "Швабра", "price": 1990}
+    deferred_until = datetime(2026, 1, 9, 12, 0)
+    checklist_text = format_byt_category_checklist_text("Быт", [item], [])
+    text = format_byt_defer_confirmation_text(
+        item, "Быт", deferred_until, checklist_text
+    )
+    assert "Швабра" in text
+    assert "2026-01-09 12:00" in text
+    assert "Категория: Быт" in text
+
+===== tests/unit/test_byt_source_category.py =====
+
+"""Tests for BYT source category selection."""
+
+from Bot.database import crud
+from Bot.utils.byt_utils import get_byt_source_category_id
+from Bot.utils.datetime_utils import now_tz
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_byt_source_category_respects_setting(tmp_path, monkeypatch) -> None:
+    """Return stored BYT source category id when configured."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "Дом")
+        db.set_byt_wishlist_category_id(1, category_id)
+        assert get_byt_source_category_id(db, 1) == category_id
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_source_category_fallback_by_name(tmp_path, monkeypatch) -> None:
+    """Fallback should pick wishlist category named 'быт' and persist it."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "быт")
+        assert get_byt_source_category_id(db, 1) == category_id
+        assert db.get_byt_wishlist_category_id(1) == category_id
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_source_category_missing_returns_none(tmp_path, monkeypatch) -> None:
+    """Return None when no BYT category is configured or found."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        assert get_byt_source_category_id(db, 1) is None
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_query_filters_by_category(tmp_path, monkeypatch) -> None:
+    """BYT query should return items only from selected category."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_a = db.create_wishlist_category(1, "быт")
+        category_b = db.create_wishlist_category(1, "подарки")
+        db.add_wish(1, "Швабра", 100, None, "быт")
+        db.add_wish(1, "Подарок", 200, None, "подарки")
+        now_dt = now_tz()
+        items = db.list_active_byt_items_for_reminder(1, now_dt, "быт")
+        assert {item["name"] for item in items} == {"Швабра"}
+        assert db.get_active_byt_wishes(1, "быт")[0]["name"] == "Швабра"
+        assert category_a != category_b
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+===== tests/unit/test_handlers.py =====
+
+"""Tests for handler utilities."""
+from Bot.handlers.finances import _format_savings_summary, _find_reached_goal
+
+
+def test_format_savings_summary_empty() -> None:
+    """Empty savings returns default message."""
+
+    assert _format_savings_summary({}) == "Пока нет накоплений."
+
+
+def test_find_reached_goal() -> None:
+    """Goal detection returns first satisfied category."""
+
+    savings = {
+        "категория": {"current": 150, "goal": 100, "purpose": "test"},
+        "другая": {"current": 50, "goal": 100, "purpose": "none"},
+    }
+    category, data = _find_reached_goal(savings)
+    assert category == "категория"
+    assert data["goal"] == 100
+
+===== tests/unit/test_household_debit_category.py =====
+
+"""Tests for household debit category settings."""
+from Bot.database import crud
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_set_and_get_household_debit_category(tmp_path, monkeypatch) -> None:
+    """Household debit category should persist in user settings."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.set_household_debit_category(1, "alpha")
+        assert db.get_household_debit_category(1) == "alpha"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_apply_household_debit_category_updates_savings(tmp_path, monkeypatch) -> None:
+    """Yes answer should debit savings from selected category."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.set_household_debit_category(2, "custom_cat")
+        changed = db.apply_household_payment_answer(
+            user_id=2,
+            month="2026-01",
+            question_code="q1",
+            amount=100.0,
+            answer="yes",
+            debit_category="custom_cat",
+        )
+        assert changed is True
+        savings_map = db.get_user_savings_map(2)
+        assert savings_map.get("custom_cat") == -100.0
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_resolve_household_debit_category_fallback(tmp_path, monkeypatch) -> None:
+    """Fallback should select first available income category."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute(
+            f"""
+            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (3, "alpha", "Alpha", 50, 1),
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (3, "beta", "Beta", 50, 2),
+        )
+        db.connection.commit()
+
+        code, title = db.resolve_household_debit_category(3)
+        assert code == "alpha"
+        assert title == "Alpha"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+===== tests/unit/test_household_idempotency.py =====
 
 """Tests for household idempotency handling."""
 from types import SimpleNamespace
@@ -167,7 +566,6 @@ async def test_handle_household_answer_no_double_tap_is_idempotent(
 
 ===== tests/unit/test_household_payments.py =====
 
-
 """Tests for household payments workflow."""
 from datetime import datetime
 
@@ -310,7 +708,6 @@ async def test_question_flow_and_savings_update() -> None:
 
 ===== tests/unit/test_household_renderers.py =====
 
-
 """Tests for household renderers."""
 
 from Bot.renderers.household import format_household_items, render_household_questions_text
@@ -339,7 +736,6 @@ def test_format_household_items() -> None:
     assert "Интернет" in text
 
 ===== tests/unit/test_household_services.py =====
-
 
 """Tests for household services."""
 
@@ -384,7 +780,6 @@ def test_idempotency_check() -> None:
 
 ===== tests/unit/test_imports.py =====
 
-
 """Basic import tests."""
 
 
@@ -423,7 +818,6 @@ def test_register_routers_smoke() -> None:
     assert wishlist.router in routers
 
 ===== tests/unit/test_income_categories.py =====
-
 
 """Tests for income category seeding and flow guards."""
 import asyncio
@@ -488,7 +882,6 @@ def test_start_income_flow_with_empty_categories(monkeypatch) -> None:
 
 ===== tests/unit/test_telegram_safe.py =====
 
-
 """Tests for telegram_safe utilities."""
 from unittest.mock import AsyncMock
 
@@ -521,7 +914,6 @@ async def test_safe_edit_message_text_retries_network_error() -> None:
     assert bot.edit_message_text.call_count == 2
 
 ===== tests/unit/test_telegram_safe_delete.py =====
-
 
 """Tests for safe_delete_message."""
 
@@ -656,7 +1048,6 @@ def test_safe_delete_message_not_found() -> None:
 
 ===== tests/unit/test_text_sanitizer.py =====
 
-
 """Tests for income text sanitizer."""
 
 import sys
@@ -689,7 +1080,6 @@ def test_sanitize_income_title_removes_ozon_suffix() -> None:
     assert sanitize_income_title(text) == "что-то"
 
 ===== tests/unit/test_ui_cleanup.py =====
-
 
 """Tests for UI cleanup utilities."""
 from types import SimpleNamespace
@@ -929,7 +1319,6 @@ def test_welcome_reused_on_start() -> None:
 
 ===== tests/unit/test_utils.py =====
 
-
 """Utility tests."""
 from datetime import datetime, time
 from zoneinfo import ZoneInfo
@@ -983,7 +1372,6 @@ def test_resolve_deferred_until_keeps_later() -> None:
 
 ===== tests/unit/test_wishlist_debit_category.py =====
 
-
 """Tests for wishlist debit category settings."""
 from Bot.database import crud
 
@@ -1009,7 +1397,6 @@ def test_set_and_get_wishlist_debit_category(tmp_path, monkeypatch) -> None:
         crud.FinanceDatabase._instance = None
 
 ===== tests/unit/test_wishlist_purchase.py =====
-
 
 """Tests for wishlist purchase flow."""
 from Bot.database import crud
@@ -1065,81 +1452,8 @@ def test_purchase_wishlist_debit_idempotent(tmp_path, monkeypatch) -> None:
 
 ===== utils/__init__.py =====
 
-
 from Bot.utils import *  # noqa: F401,F403
 
 ===== utils/logging.py =====
 
-
 from Bot.utils.logging import *  # noqa: F401,F403
-
-===== tests/unit/test_byt_source_category.py =====
-
-"""Tests for BYT source category selection."""
-
-from Bot.database import crud
-from Bot.utils.byt_utils import get_byt_source_category_id
-from Bot.utils.datetime_utils import now_tz
-
-
-def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
-    db_path = tmp_path / "finance.db"
-    monkeypatch.setattr(crud, "DB_PATH", db_path)
-    crud.FinanceDatabase._instance = None
-    return crud.FinanceDatabase()
-
-
-def test_byt_source_category_respects_setting(tmp_path, monkeypatch) -> None:
-    """Return stored BYT source category id when configured."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        category_id = db.create_wishlist_category(1, "Дом")
-        db.set_byt_wishlist_category_id(1, category_id)
-        assert get_byt_source_category_id(db, 1) == category_id
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-
-def test_byt_source_category_fallback_by_name(tmp_path, monkeypatch) -> None:
-    """Fallback should pick wishlist category named 'быт' and persist it."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        category_id = db.create_wishlist_category(1, "быт")
-        assert get_byt_source_category_id(db, 1) == category_id
-        assert db.get_byt_wishlist_category_id(1) == category_id
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-
-def test_byt_source_category_missing_returns_none(tmp_path, monkeypatch) -> None:
-    """Return None when no BYT category is configured or found."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        assert get_byt_source_category_id(db, 1) is None
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-
-def test_byt_query_filters_by_category(tmp_path, monkeypatch) -> None:
-    """BYT query should return items only from selected category."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        category_a = db.create_wishlist_category(1, "быт")
-        category_b = db.create_wishlist_category(1, "подарки")
-        db.add_wish(1, "Швабра", 100, None, "быт")
-        db.add_wish(1, "Подарок", 200, None, "подарки")
-        now_dt = now_tz()
-        items = db.list_active_byt_items_for_reminder(1, now_dt, "быт")
-        assert {item["name"] for item in items} == {"Швабра"}
-        assert db.get_active_byt_wishes(1, "быт")[0]["name"] == "Швабра"
-        assert category_a != category_b
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None

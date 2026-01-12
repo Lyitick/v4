@@ -2,6 +2,7 @@
 
 from Bot.utils.byt_manual_check import (
     build_byt_times_sorted,
+    parse_byt_manual_cursor_index,
     select_next_byt_manual_time,
 )
 
@@ -37,3 +38,15 @@ def test_select_next_byt_manual_time_cycles() -> None:
     assert selected == "12:00"
     assert index == 0
     assert notice == "Сегодня все времена уже проверены — начинаю заново."
+
+
+def test_parse_byt_manual_cursor_index_zero_is_valid() -> None:
+    assert parse_byt_manual_cursor_index(0) == 0
+    assert parse_byt_manual_cursor_index("0") == 0
+
+
+def test_parse_byt_manual_cursor_index_invalid_returns_minus_one() -> None:
+    assert parse_byt_manual_cursor_index(None) == -1
+    assert parse_byt_manual_cursor_index("") == -1
+    assert parse_byt_manual_cursor_index("   ") == -1
+    assert parse_byt_manual_cursor_index("abc") == -1

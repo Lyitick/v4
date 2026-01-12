@@ -128,6 +128,12 @@ def _assert_no_legacy_table_names(cursor: sqlite3.Cursor) -> None:
                 )
 
 
+def _table_has_column(cursor, table_name: str, column_name: str) -> bool:
+    cursor.execute(f'PRAGMA table_info("{table_name}")')
+    cols = [row[1] for row in cursor.fetchall()]  # row[1] = name
+    return column_name in cols
+
+
 def migrate_schema(connection: sqlite3.Connection) -> None:
     cursor = connection.cursor()
     current_version = _get_user_version(cursor)
@@ -1758,9 +1764,14 @@ class FinanceDatabase:
         cursor.execute(
             f'CREATE INDEX IF NOT EXISTS idx_household_items_user_id ON "{TABLES.household_payment_items}" (user_id)'
         )
-        cursor.execute(
-            f'CREATE INDEX IF NOT EXISTS idx_ui_pins_user_id ON "{TABLES.ui_pins}" (user_id)'
-        )
+        if _table_has_column(cursor, TABLES.ui_pins, "user_id"):
+            cursor.execute(
+                f'CREATE INDEX IF NOT EXISTS idx_ui_pins_user_id ON "{TABLES.ui_pins}" (user_id)'
+            )
+        else:
+            LOGGER.warning(
+                "ui_pins has no column user_id, skipping idx_ui_pins_user_id"
+            )
         cursor.execute(
             f'CREATE INDEX IF NOT EXISTS idx_income_categories_user_id ON "{TABLES.income_categories}" (user_id)'
         )

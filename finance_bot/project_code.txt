@@ -278,6 +278,12 @@ def _assert_no_legacy_table_names(cursor: sqlite3.Cursor) -> None:
                 )
 
 
+def _table_has_column(cursor, table_name: str, column_name: str) -> bool:
+    cursor.execute(f'PRAGMA table_info("{table_name}")')
+    cols = [row[1] for row in cursor.fetchall()]  # row[1] = name
+    return column_name in cols
+
+
 def migrate_schema(connection: sqlite3.Connection) -> None:
     cursor = connection.cursor()
     current_version = _get_user_version(cursor)
@@ -1908,9 +1914,14 @@ class FinanceDatabase:
         cursor.execute(
             f'CREATE INDEX IF NOT EXISTS idx_household_items_user_id ON "{TABLES.household_payment_items}" (user_id)'
         )
-        cursor.execute(
-            f'CREATE INDEX IF NOT EXISTS idx_ui_pins_user_id ON "{TABLES.ui_pins}" (user_id)'
-        )
+        if _table_has_column(cursor, TABLES.ui_pins, "user_id"):
+            cursor.execute(
+                f'CREATE INDEX IF NOT EXISTS idx_ui_pins_user_id ON "{TABLES.ui_pins}" (user_id)'
+            )
+        else:
+            LOGGER.warning(
+                "ui_pins has no column user_id, skipping idx_ui_pins_user_id"
+            )
         cursor.execute(
             f'CREATE INDEX IF NOT EXISTS idx_income_categories_user_id ON "{TABLES.income_categories}" (user_id)'
         )
@@ -1998,3 +2009,1048 @@ class FinanceDatabase:
             )
             rows = cursor.fetchall()
             mapping = {}
+            for row in rows:
+                mapping[row["category"]] = self._to_float(row["current"])
+            LOGGER.info("Fetched savings map for user %s", user_id)
+            return mapping
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to fetch savings map for user %s: %s", user_id, error)
+            return {}
+
+    def update_saving(self, user_id: int, category: str, amount_delta: float) -> None:
+        """Update saving for category by amount delta.
+
+        Args:
+            user_id (int): Telegram user id.
+            category (str): Category name.
+            amount_delta (float): Amount to add or subtract.
+        """
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT id, current FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
+                (user_id, category),
+            )
+            row = cursor.fetchone()
+            delta = self._to_float(amount_delta)
+            if row:
+                current = self._to_float(row["current"])
+                new_value = current + delta
+                cursor.execute(
+                    f"UPDATE {TABLES.savings} SET current = ? WHERE id = ?",
+                    (new_value, row["id"]),
+                )
+            else:
+                cursor.execute(
+                    f"INSERT INTO {TABLES.savings} (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
+                    (user_id, category, delta),
+                )
+            self.connection.commit()
+            LOGGER.info(
+                "Updated saving for user %s category %s by %s",
+                user_id,
+                category,
+                amount_delta,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to update saving for user %s category %s: %s",
+                user_id,
+                category,
+                error,
+            )
+
+    def _update_saving_in_transaction(
+        self,
+        cursor: sqlite3.Cursor,
+        user_id: int,
+        category: str,
+        amount_delta: float,
+    ) -> None:
+        cursor.execute(
+            f"SELECT id, current FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
+            (user_id, category),
+        )
+        row = cursor.fetchone()
+        delta = self._to_float(amount_delta)
+        if row:
+            current = self._to_float(row["current"])
+            new_value = current + delta
+            cursor.execute(
+                f"UPDATE {TABLES.savings} SET current = ? WHERE id = ?",
+                (new_value, row["id"]),
+            )
+        else:
+            cursor.execute(
+                f"INSERT INTO {TABLES.savings} (user_id, category, current, goal, purpose) VALUES (?, ?, ?, 0, '')",
+                (user_id, category, delta),
+            )
+
+    def decrease_savings(self, user_id: int, category: str, amount: float) -> None:
+        """Decrease savings for category by amount."""
+
+        self.update_saving(user_id, category, -abs(amount))
+
+    def set_goal(self, user_id: int, category: str, goal: float, purpose: str) -> None:
+        """Set goal and purpose for saving category."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT id FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
+                (user_id, category),
+            )
+            row = cursor.fetchone()
+            if row:
+                cursor.execute(
+                    f"UPDATE {TABLES.savings} SET goal = ?, purpose = ? WHERE id = ?",
+                    (goal, purpose, row["id"]),
+                )
+            else:
+                cursor.execute(
+                    f"INSERT INTO {TABLES.savings} (user_id, category, current, goal, purpose) VALUES (?, ?, 0, ?, ?)",
+                    (user_id, category, goal, goal, purpose),
+                )
+            self.connection.commit()
+            LOGGER.info("Set goal for user %s category %s", user_id, category)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to set goal for user %s category %s: %s", user_id, category, error)
+
+    def reset_goals(self, user_id: int) -> None:
+        """Reset goals for user."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"UPDATE {TABLES.savings} SET goal = 0, purpose = '' WHERE user_id = ?",
+                (user_id,),
+            )
+            self.connection.commit()
+            LOGGER.info("Reset goals for user %s", user_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to reset goals for user %s: %s", user_id, error)
+
+    def add_wish(self, user_id: int, name: str, price: float, url: Optional[str], category: str) -> int:
+        """Add a wish to the wishlist."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"INSERT INTO {TABLES.wishes} (user_id, name, price, url, category, is_purchased, saved_amount, purchased_at) VALUES (?, ?, ?, ?, ?, 0, 0, NULL)",
+                (user_id, name, price, url, category),
+            )
+            self.connection.commit()
+            wish_id = cursor.lastrowid
+            LOGGER.info("Added wish %s for user %s", wish_id, user_id)
+            return wish_id
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to add wish for user %s: %s", user_id, error)
+            return 0
+
+    def get_wishes_by_user(self, user_id: int) -> List[Dict[str, Any]]:
+        """Get all wishes for a user."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until
+                FROM {TABLES.wishes}
+                WHERE user_id = ?
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            LOGGER.info("Fetched wishes for user %s", user_id)
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to fetch wishes for user %s: %s", user_id, error)
+            return []
+
+    def get_wish(self, wish_id: int) -> Optional[Dict[str, Any]]:
+        """Get wish by id."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until
+                FROM {TABLES.wishes}
+                WHERE id = ?
+                """,
+                (wish_id,),
+            )
+            row = cursor.fetchone()
+            LOGGER.info("Fetched wish %s", wish_id)
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to fetch wish %s: %s", wish_id, error)
+            return None
+
+    def get_active_byt_wishes(self, user_id: int, category_title: str) -> List[Dict[str, Any]]:
+        """Return active BYT wishes for user and category."""
+
+        if not category_title:
+            return []
+        try:
+            cursor = self.connection.cursor()
+            category_sql = "lower(trim(category)) = lower(trim(?))"
+            params: tuple[Any, ...] = (user_id, category_title)
+            if category_title.strip().casefold() == "быт":
+                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
+            cursor.execute(
+                f"""
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                FROM {TABLES.wishes}
+                WHERE user_id = ?
+                  AND {category_sql}
+                  AND (is_purchased = 0 OR is_purchased IS NULL)
+                ORDER BY id
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+            LOGGER.info("Fetched active BYT wishes for user %s", user_id)
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to fetch BYT wishes for user %s: %s", user_id, error)
+            return []
+
+    def list_active_byt_items_for_reminder(
+        self, user_id: int, now_dt: datetime, category_title: str
+    ) -> List[Dict[str, Any]]:
+        """Return BYT wishlist items available for reminders at given time."""
+
+        if not category_title:
+            return []
+        try:
+            cursor = self.connection.cursor()
+            category_sql = "lower(trim(category)) = lower(trim(?))"
+            params: tuple[Any, ...] = (user_id, category_title, now_dt.isoformat())
+            if category_title.strip().casefold() == "быт":
+                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
+            cursor.execute(
+                f"""
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
+                FROM {TABLES.wishes}
+                WHERE user_id = ?
+                  AND {category_sql}
+                  AND (is_purchased = 0 OR is_purchased IS NULL)
+                  AND (deferred_until IS NULL OR deferred_until <= ?)
+                ORDER BY id
+                """,
+                params,
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch BYT reminder wishes for user %s: %s", user_id, error
+            )
+            return []
+
+    def set_wishlist_item_deferred_until(
+        self, user_id: int, item_id: int, deferred_until_iso: Optional[str]
+    ) -> None:
+        """Set deferred_until for wishlist item."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.wishes}
+                SET deferred_until = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (deferred_until_iso, item_id, user_id),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Set deferred_until for wish %s user %s to %s",
+                item_id,
+                user_id,
+                deferred_until_iso,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to set deferred_until for wish %s user %s: %s",
+                item_id,
+                user_id,
+                error,
+            )
+
+    def mark_wish_purchased(self, wish_id: int, purchased_at: Optional[datetime] = None) -> None:
+        """Mark wish as purchased with timestamp."""
+
+        try:
+            cursor = self.connection.cursor()
+            purchased_value = (
+                purchased_at
+                or datetime.now(tz=settings.TIMEZONE)
+            ).isoformat()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.wishes}
+                SET is_purchased = 1, purchased_at = ?, deferred_until = NULL
+                WHERE id = ?
+                """,
+                (purchased_value, wish_id),
+            )
+            self.connection.commit()
+            LOGGER.info("Marked wish %s as purchased", wish_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to mark wish %s as purchased: %s", wish_id, error)
+
+    def purchase_wish(
+        self,
+        user_id: int,
+        wish_id: int,
+        debit_category: str | None,
+        purchased_at: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Purchase wish with debit in a single transaction."""
+
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                f"""
+                SELECT id, user_id, name, price, category, is_purchased, debited_at
+                FROM {TABLES.wishes}
+                WHERE id = ? AND user_id = ?
+                LIMIT 1
+                """,
+                (wish_id, user_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                cursor.execute("ROLLBACK")
+                return {"status": "not_found"}
+
+            if row["is_purchased"] or row["debited_at"]:
+                cursor.execute("ROLLBACK")
+                return {"status": "already"}
+
+            price = self._to_float(row["price"])
+            if price <= 0 or debit_category is None:
+                purchased_value = (
+                    purchased_at or datetime.now(tz=settings.TIMEZONE)
+                ).isoformat()
+                cursor.execute(
+                    f"""
+                    UPDATE {TABLES.wishes}
+                    SET is_purchased = 1, purchased_at = ?, deferred_until = NULL
+                    WHERE id = ?
+                    """,
+                    (purchased_value, wish_id),
+                )
+                cursor.execute(
+                    f"""
+                    INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, row["name"], price, row["category"], purchased_value),
+                )
+                cursor.execute("COMMIT")
+                return {
+                    "status": "no_debit",
+                    "price": price,
+                    "wish_name": row["name"],
+                    "category": row["category"],
+                }
+
+            cursor.execute(
+                f"SELECT id, current FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
+                (user_id, debit_category),
+            )
+            savings_row = cursor.fetchone()
+            savings_before = self._to_float(savings_row["current"]) if savings_row else 0.0
+            if savings_before < price:
+                cursor.execute("ROLLBACK")
+                return {
+                    "status": "insufficient",
+                    "price": price,
+                    "available": savings_before,
+                }
+
+            self._update_saving_in_transaction(cursor, user_id, debit_category, -price)
+            purchased_value = (
+                purchased_at or datetime.now(tz=settings.TIMEZONE)
+            ).isoformat()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.wishes}
+                SET is_purchased = 1, purchased_at = ?, debited_at = ?, deferred_until = NULL
+                WHERE id = ?
+                """,
+                (purchased_value, purchased_value, wish_id),
+            )
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (user_id, row["name"], price, row["category"], purchased_value),
+            )
+            cursor.execute("COMMIT")
+            return {
+                "status": "debited",
+                "price": price,
+                "wish_name": row["name"],
+                "category": row["category"],
+                "savings_before": savings_before,
+            }
+        except sqlite3.Error as error:
+            cursor.execute("ROLLBACK")
+            LOGGER.error("Failed to purchase wish %s for user %s: %s", wish_id, user_id, error)
+            return {"status": "error"}
+
+    def add_purchase(
+        self,
+        user_id: int,
+        wish_name: str,
+        price: float,
+        category: str,
+        purchased_at: Optional[datetime] = None,
+    ) -> None:
+        """Add purchase record."""
+
+        try:
+            cursor = self.connection.cursor()
+            purchased_value = (
+                purchased_at or datetime.now(tz=settings.TIMEZONE)
+            ).isoformat()
+            cursor.execute(
+                f"INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at) VALUES (?, ?, ?, ?, ?)",
+                (user_id, wish_name, price, category, purchased_value),
+            )
+            self.connection.commit()
+            LOGGER.info("Added purchase for user %s", user_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to add purchase for user %s: %s", user_id, error)
+
+    async def household_status_exists(self, user_id: int, month: str) -> bool:
+        """Check if household payment statuses exist for month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT 1 FROM {TABLES.household_payments} WHERE user_id = ? AND month = ? LIMIT 1",
+                (user_id, month),
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to check household status for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return False
+
+    async def init_household_questions_for_month(self, user_id: int, month: str) -> None:
+        """Initialize household payment questions for month."""
+
+        try:
+            if BOT_USER_ID is not None and user_id == BOT_USER_ID:
+                LOGGER.warning(
+                    "Skipping household questions init for bot user %s", user_id
+                )
+                return
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT OR IGNORE INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
+                SELECT ?, ?, code, 0
+                FROM {TABLES.household_payment_items}
+                WHERE user_id = ? AND is_active = 1
+                """,
+                (user_id, month, user_id),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Initialized household questions for user %s month %s", user_id, month
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to init household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+
+    async def mark_household_question_paid(
+        self, user_id: int, month: str, question_code: str
+    ) -> None:
+        """Mark household question as paid."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(user_id, month, question_code)
+                DO UPDATE SET is_paid = excluded.is_paid
+                """,
+                (user_id, month, question_code),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Marked household question %s as paid for user %s month %s",
+                question_code,
+                user_id,
+                month,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to mark household question %s paid for user %s month %s: %s",
+                question_code,
+                user_id,
+                month,
+                error,
+            )
+
+    async def mark_household_question_unpaid(
+        self, user_id: int, month: str, question_code: str
+    ) -> None:
+        """Mark household question as unpaid."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
+                VALUES (?, ?, ?, 0)
+                ON CONFLICT(user_id, month, question_code)
+                DO UPDATE SET is_paid = excluded.is_paid
+                """,
+                (user_id, month, question_code),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Marked household question %s as unpaid for user %s month %s",
+                question_code,
+                user_id,
+                month,
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to mark household question %s unpaid for user %s month %s: %s",
+                question_code,
+                user_id,
+                month,
+                error,
+            )
+
+    def apply_household_payment_answer(
+        self,
+        user_id: int,
+        month: str,
+        question_code: str,
+        amount: float | None,
+        answer: str,
+        debit_category: str | None = None,
+    ) -> bool:
+        """Apply household answer and savings update atomically.
+
+        Returns True if state changed, False if it was already applied.
+        """
+
+        try:
+            cursor = self.connection.cursor()
+            self.connection.execute("BEGIN")
+            cursor.execute(
+                f"""
+                SELECT is_paid
+                FROM {TABLES.household_payments}
+                WHERE user_id = ? AND month = ? AND question_code = ?
+                """,
+                (user_id, month, question_code),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                cursor.execute(
+                    f"""
+                    INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
+                    VALUES (?, ?, ?, 0)
+                    """,
+                    (user_id, month, question_code),
+                )
+                current_paid = 0
+            else:
+                current_paid = int(row["is_paid"])
+
+            target_paid = 1 if answer == "yes" else 0
+            if current_paid == target_paid:
+                self.connection.commit()
+                return False
+
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.household_payments}
+                SET is_paid = ?
+                WHERE user_id = ? AND month = ? AND question_code = ?
+                """,
+                (target_paid, user_id, month, question_code),
+            )
+            if amount is not None:
+                delta = -abs(amount) if answer == "yes" else abs(amount)
+                target_category = debit_category or "быт"
+                self._update_saving_in_transaction(cursor, user_id, target_category, delta)
+            self.connection.commit()
+            return True
+        except sqlite3.Error as error:
+            self.connection.rollback()
+            LOGGER.error(
+                "Failed to apply household answer for user %s month %s code %s: %s",
+                user_id,
+                month,
+                question_code,
+                error,
+            )
+            return False
+
+    async def get_unpaid_household_questions(self, user_id: int, month: str) -> List[str]:
+        """Get unpaid household question codes for user and month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT items.code
+                FROM {TABLES.household_payment_items} AS items
+                LEFT JOIN {TABLES.household_payments} AS payments
+                  ON payments.user_id = items.user_id
+                 AND payments.month = ?
+                 AND payments.question_code = items.code
+                WHERE items.user_id = ?
+                  AND items.is_active = 1
+                  AND COALESCE(payments.is_paid, 0) = 0
+                ORDER BY items.position, items.id
+                """,
+                (month, user_id),
+            )
+            rows = cursor.fetchall()
+            return [row["code"] for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to get unpaid household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return []
+
+    async def get_household_payment_status_map(
+        self, user_id: int, month: str
+    ) -> Dict[str, int]:
+        """Return mapping: question_code -> is_paid (0/1) for the given month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT items.code, COALESCE(payments.is_paid, 0) AS is_paid
+                FROM {TABLES.household_payment_items} AS items
+                LEFT JOIN {TABLES.household_payments} AS payments
+                  ON payments.user_id = items.user_id
+                 AND payments.month = ?
+                 AND payments.question_code = items.code
+                WHERE items.user_id = ? AND items.is_active = 1
+                """,
+                (month, user_id),
+            )
+            rows = cursor.fetchall()
+            return {row["code"]: int(row["is_paid"]) for row in rows}
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to get household payment status for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return {}
+
+    async def has_unpaid_household_questions(self, user_id: int, month: str) -> bool:
+        """Return True if unpaid household questions exist for month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT 1
+                FROM {TABLES.household_payment_items} AS items
+                LEFT JOIN {TABLES.household_payments} AS payments
+                  ON payments.user_id = items.user_id
+                 AND payments.month = ?
+                 AND payments.question_code = items.code
+                WHERE items.user_id = ?
+                  AND items.is_active = 1
+                  AND COALESCE(payments.is_paid, 0) = 0
+                LIMIT 1
+                """,
+                (month, user_id),
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to check unpaid household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return False
+
+    async def should_show_household_payments_button(
+        self, user_id: int, month: str
+    ) -> bool:
+        """Return True if any active household payment is unpaid for the month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT 1
+                FROM {TABLES.household_payment_items} AS items
+                LEFT JOIN {TABLES.household_payments} AS payments
+                  ON payments.user_id = items.user_id
+                 AND payments.month = ?
+                 AND payments.question_code = items.code
+                WHERE items.user_id = ?
+                  AND items.is_active = 1
+                  AND COALESCE(payments.is_paid, 0) = 0
+                LIMIT 1
+                """,
+                (month, user_id),
+            )
+            return cursor.fetchone() is not None
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to decide household payments button for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+            return False
+
+    async def reset_household_questions_for_month(self, user_id: int, month: str) -> None:
+        """Reset household payment progress for a specific month."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.household_payments}
+                SET is_paid = 0
+                WHERE user_id = ? AND month = ?
+                """,
+                (user_id, month),
+            )
+            cursor.execute(
+                f"""
+                INSERT OR IGNORE INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
+                SELECT ?, ?, code, 0
+                FROM {TABLES.household_payment_items}
+                WHERE user_id = ? AND is_active = 1
+                """,
+                (user_id, month, user_id),
+            )
+            self.connection.commit()
+            LOGGER.info(
+                "Reset household questions for user %s month %s", user_id, month
+            )
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to reset household questions for user %s month %s: %s",
+                user_id,
+                month,
+                error,
+            )
+
+    def get_purchases_by_user(self, user_id: int) -> List[Dict[str, Any]]:
+        """Get purchases for user honoring retention settings."""
+
+        self.ensure_user_settings(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT id, wish_name, price, category, purchased_at FROM {TABLES.purchases} WHERE user_id = ? ORDER BY purchased_at DESC",
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            LOGGER.info("Fetched purchases for user %s", user_id)
+            purchases = [dict(row) for row in rows]
+            filtered: list[Dict[str, Any]] = []
+            default_tz = settings.TIMEZONE.key if hasattr(settings.TIMEZONE, "key") else str(settings.TIMEZONE)
+            user_tz = get_user_timezone(self, user_id, default_tz)
+            current_time = now_for_user(self, user_id, default_tz)
+            settings_row = self.get_user_settings(user_id)
+            default_days = int(settings_row.get("purchased_keep_days", 30) or 30)
+            categories = self.list_active_wishlist_categories(user_id)
+            category_map = {
+                cat.get("title", ""): {
+                    "mode": (cat.get("purchased_mode") or "days"),
+                    "days": int(cat.get("purchased_days") or default_days),
+                }
+                for cat in categories
+            }
+            for purchase in purchases:
+                cat_settings = category_map.get(
+                    str(purchase.get("category", "")),
+                    {"mode": "days", "days": default_days},
+                )
+                if cat_settings.get("mode") == "always":
+                    filtered.append(purchase)
+                    continue
+                keep_delta = timedelta(days=int(cat_settings.get("days", default_days)))
+                timestamp = purchase.get("purchased_at")
+                if timestamp:
+                    try:
+                        purchase_dt = datetime.fromisoformat(str(timestamp))
+                        if purchase_dt.tzinfo is None:
+                            purchase_dt = purchase_dt.replace(tzinfo=ZoneInfo(user_tz))
+                    except ValueError:
+                        continue
+                    if purchase_dt + keep_delta <= current_time:
+                        continue
+                filtered.append(purchase)
+            return filtered
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to fetch purchases for user %s: %s", user_id, error)
+            return []
+
+    def list_active_byt_timer_times(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return active BYT timer times for user."""
+
+        self.ensure_byt_timer_defaults(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, hour, minute
+                FROM {TABLES.byt_timer_times}
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY hour, minute, id
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to fetch BYT timer times for user %s: %s", user_id, error
+            )
+            return []
+
+    def add_byt_timer_time(self, user_id: int, hour: int, minute: int) -> Optional[int]:
+        """Add a new BYT timer time if not duplicate."""
+
+        self.ensure_byt_timer_defaults(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id FROM {TABLES.byt_timer_times}
+                WHERE user_id = ? AND hour = ? AND minute = ? AND is_active = 1
+                LIMIT 1
+                """,
+                (user_id, hour, minute),
+            )
+            existing = cursor.fetchone()
+            if existing:
+                return int(existing["id"])
+
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
+                VALUES (?, ?, ?, 1)
+                """,
+                (user_id, hour, minute),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to add BYT timer time for user %s: %s", user_id, error)
+            return None
+
+    def deactivate_byt_timer_time(self, user_id: int, timer_id: int) -> None:
+        """Deactivate specific BYT timer time."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.byt_timer_times}
+                SET is_active = 0
+                WHERE user_id = ? AND id = ?
+                """,
+                (user_id, timer_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to deactivate BYT timer time %s for user %s: %s",
+                timer_id,
+                user_id,
+                error,
+            )
+
+    def reset_byt_timer_times(self, user_id: int) -> None:
+        """Reset BYT timer times to defaults."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"UPDATE {TABLES.byt_timer_times} SET is_active = 0 WHERE user_id = ?",
+                (user_id,),
+            )
+            for hour, minute in [(12, 0), (18, 0)]:
+                cursor.execute(
+                    f"""
+                    INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
+                    VALUES (?, ?, ?, 1)
+                    """,
+                    (user_id, hour, minute),
+                )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to reset BYT timer times for user %s: %s", user_id, error)
+
+    def get_users_with_byt_timer_times(self) -> List[int]:
+        """Return users that have BYT timer times configured."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT DISTINCT user_id
+                FROM {TABLES.byt_timer_times}
+                WHERE is_active = 1
+                """
+            )
+            rows = cursor.fetchall()
+            return [int(row["user_id"]) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get users with BYT timer times: %s", error)
+            return []
+
+    def get_users_with_active_byt_wishes(self) -> List[int]:
+        """Return user ids that have active BYT wishes."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT DISTINCT user_id
+                FROM {TABLES.wishes}
+                WHERE is_purchased = 0 OR is_purchased IS NULL
+                """
+            )
+            rows = cursor.fetchall()
+            return [int(row["user_id"]) for row in rows]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get users with active BYT wishes: %s", error)
+            return []
+
+    def cleanup_old_byt_purchases(
+        self, user_id: int, category_title: str, now: Optional[datetime] = None
+    ) -> None:
+        """Remove BYT purchases older than one month from purchases and wishes."""
+
+        if not category_title:
+            return
+        default_tz = settings.TIMEZONE.key if hasattr(settings.TIMEZONE, "key") else str(settings.TIMEZONE)
+        current_time = now or now_for_user(self, user_id, default_tz)
+        user_tz = get_user_timezone(self, user_id, default_tz)
+        try:
+            cursor = self.connection.cursor()
+            category_sql = "lower(trim(category)) = lower(trim(?))"
+            params: tuple[Any, ...] = (user_id, category_title)
+            if category_title.strip().casefold() == "быт":
+                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
+
+            cursor.execute(
+                f"""
+                SELECT id, purchased_at
+                FROM {TABLES.purchases}
+                WHERE user_id = ?
+                  AND {category_sql}
+                """,
+                params,
+            )
+            purchases = cursor.fetchall()
+            ids_to_delete: list[int] = []
+            for purchase in purchases:
+                timestamp = purchase["purchased_at"]
+                if not timestamp:
+                    continue
+                try:
+                    purchase_dt = datetime.fromisoformat(timestamp)
+                    if purchase_dt.tzinfo is None:
+                        purchase_dt = purchase_dt.replace(tzinfo=ZoneInfo(user_tz))
+                except ValueError:
+                    continue
+                if add_one_month(purchase_dt) <= current_time:
+                    ids_to_delete.append(int(purchase["id"]))
+
+            if ids_to_delete:
+                placeholders = ",".join("?" * len(ids_to_delete))
+                query = "DELETE FROM {} WHERE id IN ({})".format(
+                    TABLES.purchases,
+                    placeholders,
+                )
+                cursor.execute(
+                    query,
+                    ids_to_delete,
+                )
+
+            cursor.execute(
+                f"""
+                SELECT id, purchased_at
+                FROM {TABLES.wishes}
+                WHERE user_id = ?
+                  AND {category_sql}
+                  AND is_purchased = 1
+                """,
+                params,
+            )
+            wish_rows = cursor.fetchall()
+            wish_ids: list[int] = []
+            for wish in wish_rows:
+                purchased_at = wish["purchased_at"]
+                if not purchased_at:
+                    continue
+                try:
+                    wish_dt = datetime.fromisoformat(purchased_at)
+                    if wish_dt.tzinfo is None:
+                        wish_dt = wish_dt.replace(tzinfo=ZoneInfo(user_tz))
+                except ValueError:
+                    continue
+                if add_one_month(wish_dt) <= current_time:
+                    wish_ids.append(int(wish["id"]))
+
+            if wish_ids:
+                placeholders = ",".join("?" * len(wish_ids))
+                query = "DELETE FROM {} WHERE id IN ({})".format(
+                    TABLES.wishes,
+                    placeholders,
+                )
+                cursor.execute(
+                    query,
+                    wish_ids,
+                )
+            if ids_to_delete or wish_ids:
+                self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to cleanup old BYT purchases: %s", error)
+
+    def close(self) -> None:
+        """Close database connection."""
+
+        try:
+            self.connection.close()
+            LOGGER.info("Database connection closed")
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to close database connection: %s", error)

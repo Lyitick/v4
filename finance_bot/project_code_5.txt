@@ -173,41 +173,13 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
                 display_chat_key="percent_display_chat_id",
                 display_message_key="percent_display_message_id",
             )
-            await _remove_calculator_keyboard(message)
-            await _render_previous_screen_or_exit(message, state)
-            return
-
-        if error_message is None:
-            db = get_db()
-            db.update_income_category_percent(message.from_user.id, category_id, percent)
-            total = db.sum_income_category_percents(message.from_user.id)
-
-            if total == 100:
-                LOGGER.info(
-                    "Percent saved: user=%s scope=%s category_id=%s value=%s",
-                    message.from_user.id,
-                    "income",
-                    category_id,
-                    percent,
-                )
-            else:
-                error_message = f"Сумма процентов сейчас {total}%. Нужно 100%."
-
-        await _cleanup_input_ui(
-            message.bot,
-            data,
-            display_chat_key="percent_display_chat_id",
-            display_message_key="percent_display_message_id",
-        )
-        await _remove_calculator_keyboard(message)
-        if error_message:
-            await state.set_state(IncomeSettingsState.waiting_for_percent_category)
-            await _render_income_percent_menu(
-                state=state,
-                message=message,
-                db=get_db(),
-                user_id=message.from_user.id,
-                error_message=error_message,
+            await message.answer("Не выбран товар для отсрочки.")
+            await state.clear()
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
             )
             return
 
@@ -270,99 +242,117 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
         days_str = days_str.lstrip("0") if days_str != "0" else ""
         days_str = f"{days_str}{text}" or "0"
         try:
-            await _safe_edit(
+            if existing_deferred != deferred_until:
+                db.set_wishlist_item_deferred_until(
+                    message.from_user.id, defer_item_id, deferred_until.isoformat()
+                )
+        except Exception as exc:
+            LOGGER.error(
+                "Failed to set BYT defer days user_id=%s item_id=%s days=%s",
+                message.from_user.id if message.from_user else "unknown",
+                defer_item_id,
+                days,
+                exc_info=exc,
+            )
+            await message.answer("Ошибка БД")
+            await safe_delete_message(
                 message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=f": {days_str}",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=f": {days_str}",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            purchased_days_str=days_str,
-            purchased_display_chat_id=display_chat_id,
-            purchased_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "Очистить":
-        days_str = "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=": 0",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=": 0",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            purchased_days_str=days_str,
-            purchased_display_chat_id=display_chat_id,
-            purchased_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "✅ Газ":
-        try:
-            days = int(days_str or "0")
-        except ValueError:
-            chat_id, message_id = await _get_settings_message_ids(state, message)
-            await _edit_settings_page(
-                bot=message.bot,
-                state=state,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Нужно ввести число дней.",
-                reply_markup=None,
-            )
-            return
-        if days < 1 or days > 3650:
-            chat_id, message_id = await _get_settings_message_ids(state, message)
-            await _edit_settings_page(
-                bot=message.bot,
-                state=state,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Количество дней должно быть от 1 до 3650.",
-                reply_markup=None,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
             )
             return
 
-        db = get_db()
-        category_id = data.get("editing_wl_category_id")
-        if category_id is not None:
-            db.update_wishlist_category_purchased_days(
-                message.from_user.id, int(category_id), days
+        LOGGER.info(
+            "BYT defer days submit user_id=%s item_id=%s days=%s",
+            message.from_user.id if message.from_user else "unknown",
+            defer_item_id,
+            days,
+        )
+
+        await state.clear()
+        if wish:
+            category_id, category_title = _resolve_wish_category(db, message.from_user.id, wish)
+            due_items, deferred_items = get_byt_category_items(
+                db, message.from_user.id, category_title, now_for_user(db, message.from_user.id, DEFAULT_TZ)
+            )
+            checklist_text = format_byt_category_checklist_text(
+                category_title, due_items, deferred_items
+            )
+            message_text = format_byt_defer_confirmation_text(
+                wish, category_title, deferred_until, checklist_text
+            )
+            category_row = db.get_wishlist_category_by_title(message.from_user.id, category_title)
+            category_ref = int(category_row["id"]) if category_row else category_id
+            keyboard = (
+                _build_byt_items_keyboard(
+                    due_items,
+                    allow_defer=bool(settings_row.get("byt_defer_enabled", 1)),
+                    category_id=category_ref,
+                )
+                if due_items
+                else None
+            )
+            if reminder_message_id:
+                edited = await safe_edit_message_text(
+                    message.bot,
+                    chat_id=message.chat.id,
+                    message_id=int(reminder_message_id),
+                    text=message_text,
+                    reply_markup=keyboard,
+                    logger=LOGGER,
+                )
+                if not edited:
+                    sent = await message.answer(message_text, reply_markup=keyboard)
+                    if sent:
+                        await ui_register_message(state, sent.chat.id, sent.message_id)
+            else:
+                sent = await message.answer(message_text, reply_markup=keyboard)
+                if sent:
+                    await ui_register_message(state, sent.chat.id, sent.message_id)
+            await message.answer(" ", reply_markup=ReplyKeyboardRemove())
+        else:
+            await message.answer(
+                f"Отложено на {days} дн.", reply_markup=ReplyKeyboardRemove()
             )
 
-        await _cleanup_input_ui(
+        await safe_delete_message(
             message.bot,
-            data,
-            display_chat_key="purchased_display_chat_id",
-            display_message_key="purchased_display_message_id",
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
         )
-        await _remove_calculator_keyboard(message)
-        await state.set_state(None)
-        await _reset_navigation(state, "st:wishlist")
-        await render_settings_screen(
-            "st:wishlist", message=message, state=state
-        )
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
 
+    new_display_message_id = display_message_id
+    new_display_chat_id = display_chat_id
+    if display_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=display_chat_id,
+            message_id=int(display_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+        if not edited:
+            prompt = await message.answer(f": {new_sum}")
+            new_display_message_id = prompt.message_id
+            new_display_chat_id = message.chat.id
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        new_display_message_id = prompt.message_id
+        new_display_chat_id = message.chat.id
+
+    await state.update_data(
+        defer_days_str=new_sum,
+        defer_display_message_id=new_display_message_id,
+        defer_display_chat_id=new_display_chat_id,
+    )
 
 @router.message(BytSettingsState.waiting_for_max_defer_days)
 async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
@@ -373,9 +363,6 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
     if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
-    days_str = data.get("byt_max_days_str", "0")
-    display_chat_id = data.get("byt_max_display_chat_id", message.chat.id)
-    display_message_id = data.get("byt_max_display_message_id")
 
     if text not in PERCENT_INPUT_BUTTONS:
         parsed_value = parse_positive_int(text)
@@ -436,240 +423,538 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             byt_max_display_chat_id=display_chat_id,
             byt_max_display_message_id=display_message_id,
         )
-        return
+    buttons.append(
+        [InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home")]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-    if text == "Очистить":
-        days_str = "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=": 0",
+===== Bot/keyboards/main.py =====
+
+"""Keyboard definitions."""
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
+from Bot.constants.ui_labels import NAV_BACK, NAV_HOME
+
+
+def main_menu_keyboard(
+    show_household: bool = False,
+    show_test_button: bool = False,
+    show_settings: bool = True,
+) -> ReplyKeyboardMarkup:
+    """Create main menu keyboard."""
+
+    buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
+    if show_household:
+        buttons.append([KeyboardButton(text="Бытовые платежи")])
+    if show_settings:
+        buttons.append([KeyboardButton(text="⚙️")])
+    if show_test_button:
+        buttons.append([KeyboardButton(text="Проверить напоминания")])  # TODO: удалить после тестов
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def yes_no_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with Yes/No options."""
+
+    buttons = [[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+
+
+def yes_no_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with Yes/No options to avoid opening system keyboard."""
+
+    buttons = [
+        [
+            InlineKeyboardButton(text="Да", callback_data="confirm_yes"),
+            InlineKeyboardButton(text="Нет", callback_data="confirm_no"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def back_to_main_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with back to main option."""
+
+    buttons = [[KeyboardButton(text=NAV_HOME)]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def back_only_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with a single back button."""
+
+    buttons = [[KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard for wishlist actions."""
+
+    buttons = [
+        [KeyboardButton(text="➕"), KeyboardButton(text="Купленное")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
+    """Keyboard for wishlist actions without add button (+)."""
+
+    buttons = [
+        [KeyboardButton(text="Купленное")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for wishlist categories."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        row.append(
+            InlineKeyboardButton(
+                text=category.get("title", ""),
+                callback_data=f"wlcat:{category.get('id')}",
             )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=": 0",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-        await state.update_data(
-            byt_max_days_str=days_str,
-            byt_max_display_chat_id=display_chat_id,
-            byt_max_display_message_id=display_message_id,
         )
-        return
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
-    if text == "✅ Газ":
-        try:
-            days = int(days_str or "0")
-        except ValueError:
-            chat_id, message_id = await _get_settings_message_ids(state, message)
-            await _edit_settings_page(
-                bot=message.bot,
-                state=state,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Нужно ввести число дней.",
-                reply_markup=None,
-            )
-            return
-        if days < 1 or days > 3650:
-            chat_id, message_id = await _get_settings_message_ids(state, message)
-            await _edit_settings_page(
-                bot=message.bot,
-                state=state,
-                chat_id=chat_id,
-                message_id=message_id,
-                text="Количество дней должно быть от 1 до 3650.",
-                reply_markup=None,
-            )
-            return
 
-        db = get_db()
-        settings_row = db.get_user_settings(message.from_user.id)
-        previous_days = settings_row.get("byt_defer_max_days")
-        db.set_byt_defer_max_days(message.from_user.id, days)
-        LOGGER.info(
-            "Updated BYT defer max days for user %s: %s", message.from_user.id, days
-        )
-        previous_max = data.get("previous_byt_max_days")
-        if previous_max is not None and previous_max != days:
-            LOGGER.info(
-                "Max defer days changed: user=%s from=%s to=%s",
-                message.from_user.id,
-                previous_max,
-                days,
-            )
+def wishlist_url_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for skipping wishlist URL input."""
 
-        await _cleanup_input_ui(
-            message.bot,
-            data,
-            display_chat_key="byt_max_display_chat_id",
-            display_message_key="byt_max_display_message_id",
-        )
-        await _remove_calculator_keyboard(message)
-        await state.set_state(None)
-        previous_screen = await _pop_previous_screen(state) or "st:byt_rules"
-        await render_settings_screen(
-            previous_screen,
-            message=message,
-            state=state,
-        )
+    buttons = [[InlineKeyboardButton(text="скип", callback_data="wishlist_skip_url")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
-===== Bot/handlers/start.py =====
 
-"""Handlers for start and cancel commands."""
-import logging
+def purchase_confirmation_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard for confirming purchase suggestion."""
 
-from aiogram import F, Router
-from aiogram.filters import Command
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message
+    buttons = [[KeyboardButton(text="✅ Купил"), KeyboardButton(text="🔄 Продолжить копить")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
 
-from Bot.constants.ui import WELCOME_TEXT
-from Bot.handlers.common import build_main_menu_for_user
-from Bot.utils.ui_cleanup import (
-    ui_cleanup_messages,
-    ui_cleanup_to_context,
-    ui_render_screen,
-    ui_safe_delete_message,
-    ui_set_welcome_message,
+
+def income_confirm_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with confirm income button."""
+
+    buttons = [[InlineKeyboardButton(text="✅ Получено", callback_data="income_confirm")]]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+===== Bot/keyboards/settings.py =====
+
+"""Settings keyboards."""
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
+from Bot.constants.ui_labels import (
+    NAV_BACK,
+    NAV_HOME,
+    WISHLIST_DEBIT_CATEGORY_BACK,
+    WISHLIST_DEBIT_CATEGORY_BUTTON,
+    WISHLIST_DEBIT_CATEGORY_NONE,
+    WISHLIST_BYT_CATEGORY_BUTTON,
 )
-
-LOGGER = logging.getLogger(__name__)
-
-router = Router()
+from Bot.keyboards.navigation import nav_back_home
 
 
-async def _handle_start_common(message: Message, state: FSMContext) -> None:
-    """Shared start logic for /start and "Поехалиии" commands."""
+def settings_menu_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for settings menu."""
 
-    # ПРИВЕТСТВИЕ (PROTECTED)
-    # Это сообщение защищено и НЕ должно удаляться массовыми чистками.
-    # Автоматическое удаление запрещено. Удаление допускается только в отдельной задаче
-    # после явного подтверждения пользователя.
-    # DO_NOT_DELETE_WELCOME_WITHOUT_USER_CONFIRMATION
-    await ui_set_welcome_message(message.bot, state, message.chat.id, WELCOME_TEXT)
-    await ui_cleanup_to_context(
-        message.bot,
-        state,
-        message.chat.id,
-        "MAIN_MENU",
+    buttons = [
+        [KeyboardButton(text="⚙️ Бытовые платежи ⚙️")],
+        [KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def household_settings_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for household settings actions."""
+
+    buttons = [
+        [
+            InlineKeyboardButton(text="➕", callback_data="hh_set:add"),
+            InlineKeyboardButton(text="➖", callback_data="hh_set:del"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def household_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for removing household items."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        label = f"{title} — {amount}" if amount is not None else title
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"hh_set:remove:{item.get('code', '')}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for household payments settings actions."""
+
+    buttons = [
+        [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
+        [KeyboardButton(text="💰 Категория списания"), KeyboardButton(text="🧹 Обнулить")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def household_debit_category_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting household debit category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def household_payments_remove_reply_keyboard(
+    items: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for removing household payments in settings."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for item in items:
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        label = f"{title} — {amount}" if amount is not None else title
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def household_payments_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for household payments settings."""
+
+    inline_keyboard = [
+        [InlineKeyboardButton(text="➕ Добавить платеж", callback_data="hp:add_payment")],
+        [InlineKeyboardButton(text="➖ Удалить платеж", callback_data="hp:del_payment_menu")],
+        [InlineKeyboardButton(text="🔄 Обнулить", callback_data="hp:reset_questions")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def household_payments_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for removing household payments in settings."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        label = f"{title} — {amount}" if amount is not None else title
+        inline_keyboard.append(
+            [
+                InlineKeyboardButton(
+                    text=label,
+                    callback_data=f"hp:del_payment:{item.get('code', '')}",
+                )
+            ]
+        )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for settings home screen."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="📊 Доход", callback_data="st:income"),
+            InlineKeyboardButton(text="🧾 Вишлист", callback_data="st:wishlist"),
+        ],
+        [InlineKeyboardButton(text="Напоминания", callback_data="st:byt_rules")],
+        [InlineKeyboardButton(text="🧾 Бытовые платежи", callback_data="st:household_payments")],
+        [InlineKeyboardButton(text="Таймзона", callback_data="st:timezone")],
+        [InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def settings_home_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for settings home screen."""
+
+    buttons = [
+        [KeyboardButton(text="📊 Доход"), KeyboardButton(text="🧾 Вишлист")],
+        [KeyboardButton(text="Напоминания"), KeyboardButton(text="🧾 Бытовые платежи")],
+        [KeyboardButton(text="Таймзона")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_settings_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for wishlist settings."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="➕ Категорию", callback_data="wl:add_cat"),
+            InlineKeyboardButton(text="➖ Категорию", callback_data="wl:del_cat_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="⏳ Срок купленного", callback_data="wl:purchased_select_category"),
+        ],
+        [InlineKeyboardButton(text="💰 Категория списания", callback_data="wl:debit_category_menu")],
+    ]
+    inline_keyboard.extend(nav_back_home("st:wishlist", "nav:home").inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for wishlist settings actions."""
+
+    buttons = [
+        [
+            KeyboardButton(text="➕ Добавить категорию вишлиста"),
+            KeyboardButton(text="➖ Удалить категорию вишлиста"),
+        ],
+        [KeyboardButton(text="🕒 Настроить купленное")],
+        [KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BUTTON)],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_categories_select_reply_keyboard(categories: list[dict]) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def wishlist_purchased_mode_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist purchased mode."""
+
+    buttons = [
+        [KeyboardButton(text="Всегда")],
+        [KeyboardButton(text="Настроить дни")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_debit_category_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting wishlist debit category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_NONE)])
+    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def wishlist_byt_category_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting BYT wishlist category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        row.append(KeyboardButton(text=category.get("title", "")))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def byt_category_toggle_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
+    """Inline keyboard for toggling BYT categories."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        enabled = bool(category.get("enabled", 0))
+        label = f"{'✅' if enabled else '❌'} {category.get('title', '')}"
+        next_state = 0 if enabled else 1
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"byt:category_toggle:{category.get('id')}:{next_state}",
+            )
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    inline_keyboard.append(
+        [
+            InlineKeyboardButton(text=NAV_BACK, callback_data="st:byt_rules"),
+            InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home"),
+        ]
     )
-    await ui_render_screen(
-        message.bot,
-        state,
-        message.chat.id,
-        "Главное меню",
-        reply_markup=await build_main_menu_for_user(message.from_user.id),
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def wishlist_categories_select_keyboard(
+    categories: list[dict], action_prefix: str
+) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting wishlist category."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        button = InlineKeyboardButton(
+            text=category.get("title", ""),
+            callback_data=f"{action_prefix}:{category.get('id')}",
+        )
+        row.append(button)
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    inline_keyboard.extend(nav_back_home("st:byt_rules", "nav:home").inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def byt_timer_categories_inline_keyboard(
+    categories: list[dict], action_prefix: str
+) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting BYT timer category."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        enabled = bool(category.get("enabled", 0))
+        label = f"{'✅' if enabled else '❌'} {category.get('title', '')}"
+        row.append(
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"{action_prefix}:{category.get('id')}",
+            )
+        )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    inline_keyboard.append(
+        [
+            InlineKeyboardButton(text=NAV_BACK, callback_data="st:byt_rules"),
+            InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home"),
+        ]
     )
-    LOGGER.info(
-        "USER=%s ACTION=START STATE=%s META=-",
-        message.from_user.id if message.from_user else "unknown",
-        await state.get_state(),
-    )
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
-@router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext) -> None:
-    """Handle /start command."""
+def wishlist_purchased_mode_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting wishlist purchased mode."""
 
-    await ui_safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        log_context="cmd_start",
-        state=state,
-    )
-    await _handle_start_common(message, state)
+    inline_keyboard = [
+        [InlineKeyboardButton(text="Всегда", callback_data="wl:purchased_mode:always")],
+        [InlineKeyboardButton(text="Несколько дней", callback_data="wl:purchased_mode:days")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
-@router.message(F.text == "Поехалиии")
-async def handle_poehali(message: Message, state: FSMContext) -> None:
-    """Handle alternative start phrase."""
+def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for BYT rules settings."""
 
-    await _handle_start_common(message, state)
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(
+                text="Выбор категории для напоминаний", callback_data="wl:byt_category_menu"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="🔁 Вкл/Выкл напоминания", callback_data="byt:toggle_enabled"
+            ),
+            InlineKeyboardButton(
+                text="🔁 ОТЛОЖИТЬ Вкл/Выкл", callback_data="byt:toggle_defer"
+            ),
+        ],
+        [
+            InlineKeyboardButton(text="⏳ Макс. дни отложить", callback_data="byt:edit_max_defer_days"),
+            InlineKeyboardButton(text="⏰ Время напоминаний", callback_data="byt:timer_menu"),
+        ],
+    ]
+    inline_keyboard.extend(nav_back_home("st:home", "nav:home").inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
-@router.message(Command("cancel"))
-async def cmd_cancel(message: Message, state: FSMContext) -> None:
-    """Handle /cancel command."""
+def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for BYT rules settings."""
 
-    await ui_cleanup_messages(message.bot, state, chat_id=message.chat.id)
-    await state.clear()
-    await ui_render_screen(
-        message.bot,
-        state,
-        message.chat.id,
-        "Операция отменена. Вы в главном меню.",
-        reply_markup=await build_main_menu_for_user(message.from_user.id),
-    )
-    LOGGER.info(
-        "USER=%s ACTION=CANCEL STATE=%s META=-",
-        message.from_user.id if message.from_user else "unknown",
-        await state.get_state(),
-    )
+    buttons = [
+        [KeyboardButton(text=WISHLIST_BYT_CATEGORY_BUTTON)],
+        [
+            KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
+            KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
+        ],
+        [KeyboardButton(text="⏰ Время напоминаний")],
+        [KeyboardButton(text="⏳ Макс. дни отложить")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
-@router.message(F.text.in_({"⏪ На главную", "🏠 На главную"}))
-async def back_to_main(message: Message, state: FSMContext) -> None:
-    """Return user to main menu."""
+def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for BYT timer settings."""
 
-    deleted = await ui_safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        log_context="back_to_main_user_msg",
-        state=state,
-    )
-    LOGGER.info(
-        "USER=%s ACTION=BACK_TO_MAIN_DELETE STATE=%s META=user_msg_deleted=%s",
-        message.from_user.id if message.from_user else "unknown",
-        await state.get_state(),
-        str(deleted).lower(),
-    )
-    await ui_cleanup_to_context(
-        message.bot,
-        state,
-        message.chat.id,
-        "MAIN_MENU",
-    )
-    await ui_render_screen(
-        message.bot,
-        state,
-        message.chat.id,
-        "Главное меню",
-        reply_markup=await build_main_menu_for_user(message.from_user.id),
-    )
-    LOGGER.info(
-        "USER=%s ACTION=BACK_TO_MAIN STATE=%s META=-",
-        message.from_user.id if message.from_user else "unknown",
-        await state.get_state(),
-    )
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="➕ Добавить время", callback_data="bt:add_time"),
+            InlineKeyboardButton(text="🗑 Удалить время", callback_data="bt:del_time_menu"),
+        ],
+        [
+            InlineKeyboardButton(text=NAV_BACK, callback_data="byt:timer_menu"),
+            InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
-===== Bot/handlers/wishlist.py =====
-
-"""Handlers for wishlist flow."""
-
-import asyncio
-import logging
-from collections import defaultdict
-from datetime import datetime, time, timedelta
-from typing import Optional
-
-from aiogram import Bot, F, Router
-from aiogram.filters import StateFilter
-from aiogram.fsm.context import FSMContext
-from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    Message,
-    ReplyKeyboardRemove,
-)
 
 from Bot.database.crud import FinanceDatabase
 from Bot.database.get_db import get_db
@@ -700,231 +985,211 @@ from Bot.utils.telegram_safe import (
 )
 from Bot.utils.ui_cleanup import ui_register_message, ui_register_user_message
 
-LOGGER = logging.getLogger(__name__)
-
-router = Router()
-
-
-async def _push_wl_step(state: FSMContext, step: str) -> None:
-    data = await state.get_data()
-    stack = list(data.get("wl_add_step_stack") or [])
-    if not stack or stack[-1] != step:
-        stack.append(step)
-    await state.update_data(wl_add_step_stack=stack)
+    buttons = [
+        [
+            KeyboardButton(text="➕ Добавить время"),
+            KeyboardButton(text="🗑 Удалить время"),
+        ],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
-async def _set_wl_steps(state: FSMContext, steps: list[str]) -> None:
-    await state.update_data(wl_add_step_stack=steps)
+def byt_timer_times_select_reply_keyboard(times: list[dict]) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting BYT timer time."""
 
-
-async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
-    """Legacy no-op to keep compatibility when welcome cleanup is referenced."""
-
-    return None
-
-def humanize_wishlist_category(category: str) -> str:
-    """Return user-facing category name supporting legacy BYT values."""
-
-    if category == "byt":
-        return "БЫТ"
-    return category
-
-
-def _get_user_wishlist_categories(db: FinanceDatabase, user_id: int) -> list[dict]:
-    """Return active wishlist categories."""
-
-    return db.list_active_wishlist_categories(user_id)
-
-
-def _resolve_wish_category(
-    db: FinanceDatabase, user_id: int, wish: dict
-) -> tuple[int | None, str]:
-    category_title = str(wish.get("category", "")).strip()
-    if not category_title:
-        return None, "неизвестно"
-    category_row = db.get_wishlist_category_by_title(user_id, category_title)
-    if category_row:
-        return int(category_row.get("id")), str(category_row.get("title", category_title))
-    return None, category_title
-
-
-@router.message(F.text == "📋 Вишлист")
-async def open_wishlist(message: Message, state: FSMContext) -> None:
-    """Open wishlist menu."""
-
-    await delete_welcome_message_if_exists(message, state)
-    await ui_register_user_message(state, message.chat.id, message.message_id)
-    await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-    await state.clear()
-    db = get_db()
-    wishes = db.get_wishes_by_user(message.from_user.id)
-    categories = _get_user_wishlist_categories(db, message.from_user.id)
-    has_active_wishes = any(not wish.get("is_purchased") for wish in wishes)
-
-    if not categories:
-        await message.answer(
-            "Категорий вишлиста пока нет. Добавь их в настройках.",
-            reply_markup=wishlist_reply_keyboard(),
-        )
-        LOGGER.info(
-            "User %s opened wishlist without categories",
-            message.from_user.id if message.from_user else "unknown",
-        )
-        return
-
-    if not has_active_wishes:
-        await message.answer(
-            "В твоём вишлисте пока пусто.\nДавай добавим что-то новое в наши категории ✨",
-            reply_markup=wishlist_reply_keyboard(),
-        )
-        LOGGER.info("User %s opened empty wishlist", message.from_user.id if message.from_user else "unknown")
-        return
-
-    await message.answer("Раздел вишлиста.", reply_markup=wishlist_reply_keyboard())
-    await message.answer(
-        "Выбери категорию для просмотра или добавь новое желание.",
-        reply_markup=wishlist_categories_keyboard(categories),
-    )
-    LOGGER.info("User %s opened wishlist", message.from_user.id if message.from_user else "unknown")
-
-
-@router.message(F.text.in_({"➕", "+"}))
-async def add_wish_start(message: Message, state: FSMContext) -> None:
-    """Start adding wish."""
-
-    await state.set_state(WishlistState.waiting_for_name)
-    await _set_wl_steps(state, ["name"])
-    await message.answer(
-        "Введи название желания.",
-        reply_markup=back_only_keyboard(),
-    )
-
-@router.message(WishlistState.waiting_for_name, F.text != "⬅️ Назад")
-async def add_wish_name(message: Message, state: FSMContext) -> None:
-    """Save wish name and request price."""
-
-    await state.update_data(name=message.text)
-    await state.set_state(WishlistState.waiting_for_price)
-    await _push_wl_step(state, "amount")
-
-    question = await message.answer(
-        "Введи цену (используй кнопки ниже).",
-        reply_markup=income_calculator_keyboard(),
-    )
-    prompt = await message.answer(": 0")
-
-    await state.update_data(
-        price_sum="0",
-        price_question_message_id=question.message_id,
-        price_message_id=prompt.message_id,
-    )
-
-
-@router.message(
-    WishlistState.waiting_for_price,
-    F.text.in_(
-        {
-            "0",
-            "1",
-            "2",
-            "3",
-            "4",
-            "5",
-            "6",
-            "7",
-            "8",
-            "9",
-            "Очистить",
-            "✅ Газ",
-        }
-    ),
-)
-async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
-    """Handle price input via calculator buttons."""
-
-    data = await state.get_data()
-    current_sum = str(data.get("price_sum", "0"))
-    price_message_id = data.get("price_message_id")
-
-    if message.text == "Очистить":
-        new_sum = "0"
-    elif message.text == "✅ Газ":
-        amount_str = current_sum.strip()
-        if not amount_str:
-            await message.answer("Нужно ввести число. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-
-        normalized = amount_str.replace(",", ".")
-        try:
-            price = float(normalized)
-        except (TypeError, ValueError):
-            await message.answer("Нужно ввести число. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-
-        if price <= 0:
-            await message.answer("Цена должна быть больше нуля. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-
-        await state.update_data(price=price)
-        await state.set_state(WishlistState.waiting_for_url)
-        await _push_wl_step(state, "pre_url")
-        await message.answer("дай", reply_markup=back_only_keyboard())
-        await _push_wl_step(state, "url")
-        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
-
-        await safe_delete_message(
-            message.bot,
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            logger=LOGGER,
-        )
-        return
-    else:
-        if current_sum == "0":
-            new_sum = message.text
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for timer in times:
+        if timer.get("time_hhmm"):
+            label = str(timer.get("time_hhmm"))
         else:
-            new_sum = current_sum + message.text
+            label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+        row.append(KeyboardButton(text=label))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
-    if price_message_id:
-        await safe_edit_message_text(
-            message.bot,
-            chat_id=message.chat.id,
-            message_id=price_message_id,
-            text=f": {new_sum}",
-            logger=LOGGER,
+
+def byt_timer_times_select_keyboard(times: list[dict], action_prefix: str) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting BYT timer time."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for timer in times:
+        if timer.get("time_hhmm"):
+            label = str(timer.get("time_hhmm"))
+            callback_value = label
+        else:
+            label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+            callback_value = str(timer.get("id"))
+        row.append(
+            InlineKeyboardButton(text=label, callback_data=f"{action_prefix}:{callback_value}")
         )
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
-    await state.update_data(price_sum=new_sum, price_message_id=price_message_id)
 
-    await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
+def settings_back_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with a single back button for settings mode."""
+
+    buttons = [[KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def income_settings_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for income settings actions."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="➕ Категорию", callback_data="inc:add"),
+            InlineKeyboardButton(text="➖ Категорию", callback_data="inc:del_menu"),
+        ],
+        [
+            InlineKeyboardButton(text="✏️ Проценты", callback_data="inc:pct_menu"),
+        ],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def income_settings_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for income settings actions."""
+
+    buttons = [
+        [
+            KeyboardButton(text="➕ Добавить категорию дохода"),
+            KeyboardButton(text="➖ Удалить категорию дохода"),
+        ],
+        [KeyboardButton(text="⚙️ Проценты доходов")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def income_categories_select_reply_keyboard(
+    categories: list[dict],
+) -> ReplyKeyboardMarkup:
+    """Reply keyboard for selecting income category."""
+
+    rows: list[list[KeyboardButton]] = []
+    row: list[KeyboardButton] = []
+    for category in categories:
+        title = category.get("title", "")
+        percent = category.get("percent", 0)
+        row.append(KeyboardButton(text=f"{title} — {percent}%"))
+        if len(row) == 2:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
+
+
+def income_categories_select_keyboard(
+    categories: list[dict], action_prefix: str
+) -> InlineKeyboardMarkup:
+    """Inline keyboard for selecting an income category."""
+
+    inline_keyboard: list[list[InlineKeyboardButton]] = []
+    row: list[InlineKeyboardButton] = []
+    for category in categories:
+        button = InlineKeyboardButton(
+            text=f"{category['title']} ({category['percent']}%)",
+            callback_data=f"{action_prefix}:{category['id']}",
+        )
+        row.append(button)
+        if len(row) == 2:
+            inline_keyboard.append(row)
+            row = []
+    if row:
+        inline_keyboard.append(row)
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def timezone_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for timezone selection."""
+
+    inline_keyboard = [
+        [
+            InlineKeyboardButton(text="Europe/Amsterdam", callback_data="st:tz:Europe/Amsterdam"),
+            InlineKeyboardButton(text="Europe/Moscow", callback_data="st:tz:Europe/Moscow"),
+        ],
+        [
+            InlineKeyboardButton(text="Asia/Tashkent", callback_data="st:tz:Asia/Tashkent"),
+            InlineKeyboardButton(text="UTC", callback_data="st:tz:UTC"),
+        ],
+    ]
+    inline_keyboard.extend(nav_back_home("st:home", "nav:home").inline_keyboard)
+    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
+
+
+def settings_stub_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for stub sections with back button."""
+
+    return InlineKeyboardMarkup(inline_keyboard=[])
+
+===== Bot/main.py =====
+
+"""Entry point for finance bot."""
+import asyncio
+import contextlib
+import logging
+import sys
+from datetime import datetime
+from pathlib import Path
+
+project_root = Path(__file__).resolve().parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from aiogram import Bot, Dispatcher
+from aiogram.client.default import DefaultBotProperties
+from aiogram.exceptions import TelegramUnauthorizedError
+
+from Bot.config.settings import get_settings
+from Bot.database.get_db import get_db
+from Bot.handlers import (
+    callbacks,
+    common,
+    finances,
+    household_payments,
+    settings,
+    start,
+    wishlist,
+)
+from Bot.handlers.wishlist import run_byt_timer_check
+from Bot.utils.logging import init_logging
+from Bot.utils.time import now_for_user
+
+
+def register_routers(dispatcher: Dispatcher) -> None:
+    """Register all routers to dispatcher."""
+
+    dispatcher.include_router(start.router)
+    dispatcher.include_router(finances.router)
+    dispatcher.include_router(household_payments.router)
+    dispatcher.include_router(settings.router)
+    dispatcher.include_router(wishlist.router)
+    dispatcher.include_router(callbacks.router)
+    dispatcher.include_router(common.router)
+
+
+def _token_fingerprint(token: str) -> str:
+    if not token:
+        return "empty"
+    if len(token) <= 8:
+        return f"{token[:2]}…{token[-2:]}"
+    return f"{token[:4]}…{token[-4:]}"
 
 
 @router.message(
@@ -977,1006 +1242,442 @@ async def add_wish_price_manual(message: Message, state: FSMContext) -> None:
 async def add_wish_url(message: Message, state: FSMContext) -> None:
     """Save URL and request category selection."""
 
-    text = message.text.strip() if message.text else ""
-    url: Optional[str] = None if text in {"-", ""} else text
-    await state.update_data(url=url)
-    await state.set_state(WishlistState.waiting_for_category)
-    await _push_wl_step(state, "category")
-    db = get_db()
-    categories = _get_user_wishlist_categories(db, message.from_user.id)
-    if not categories:
-        await message.answer(
-            "Категорий вишлиста пока нет. Добавь их в настройках.",
-            reply_markup=wishlist_reply_keyboard(),
+    errors = []
+    if ":" not in token:
+        errors.append("BOT_TOKEN не похож на токен (нет ':')")
+    if len(token) < 20:
+        errors.append("BOT_TOKEN слишком короткий (ожидается > 20 символов)")
+    return errors
+
+
+def _format_token_context(token_source: str, fingerprint: str, env_path: Path) -> str:
+    if token_source == ".env":
+        return f"token_source={token_source}, fingerprint={fingerprint}, env_path={env_path}"
+    return f"token_source={token_source}, fingerprint={fingerprint}"
+
+
+async def _run_byt_scheduler(bot: Bot, db, default_tz: str) -> None:
+    """Background scheduler for BYT reminders."""
+
+    while True:
+        user_ids = set(db.get_users_with_byt_reminder_times()) | set(
+            db.get_users_with_active_byt_wishes()
         )
-        await state.clear()
+        now_values: dict[int, datetime] = {}
+        for uid in user_ids:
+            now_values[uid] = now_for_user(db, uid, default_tz)
+            await run_byt_timer_check(bot, db, user_id=uid, run_time=now_values[uid])
+        reference = now_values[min(now_values)] if now_values else now_for_user(db, 0, default_tz)
+        sleep_for = 60 - reference.second - reference.microsecond / 1_000_000
+        await asyncio.sleep(max(sleep_for, 1))
+
+
+async def main() -> None:
+    """Run bot polling."""
+
+    init_logging()
+    settings = get_settings()
+    logger = logging.getLogger(__name__)
+    token = (settings.bot_token or "").strip()
+    token_source = settings.bot_token_source
+    fingerprint = _token_fingerprint(token)
+    token_context = _format_token_context(token_source, fingerprint, project_root / ".env")
+
+    errors = _validate_token(token)
+    for error in errors:
+        logger.error("%s (%s)", error, token_context)
+    if errors:
         return
-    await message.answer(
-        "Выбери категорию желания.", reply_markup=wishlist_categories_keyboard(categories)
+
+    bot = Bot(
+        token=token,
+        default=DefaultBotProperties(parse_mode="HTML"),
     )
-    await message.answer("Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard())
-
-
-@router.message(F.text == "Купленное")
-async def show_purchases(message: Message, state: FSMContext | None = None) -> None:
-    """Show purchased items grouped by category with pretty headers."""
+    dp = Dispatcher()
 
     db = get_db()
-    purchases = db.get_purchases_by_user(message.from_user.id)
+    register_routers(dp)
 
-    # Если покупок нет — сразу выходим
-    if not purchases:
-        sent = await message.answer(
-            "Список покупок пуст.",
-            reply_markup=await build_main_menu_for_user(message.from_user.id),
+    try:
+        await bot.me()
+    except TelegramUnauthorizedError:
+        logger.error(
+            "Unauthorized: токен неверный/отозван/бот удалён. "
+            "Проверь BotFather и переменные окружения. "
+            "(%s)",
+            token_context,
         )
-        if state:
-            await ui_register_message(state, sent.chat.id, sent.message_id)
+        await bot.session.close()
         return
 
-    # Группируем покупки по "очеловеченным" категориям
-    groups: dict[str, list[dict]] = defaultdict(list)
-    for purchase in purchases:
-        category_key = humanize_wishlist_category(purchase.get("category", ""))
-        groups[category_key].append(purchase)
-
-    lines: list[str] = ["Купленные желания:"]
-    for category, items in groups.items():
-        lines.append(f"\n💡 {category}:")
-        for purchase in items:
-            lines.append(
-                f"• {purchase['wish_name']} — {purchase['price']:.2f} ₽ "
-                f"(куплено {purchase['purchased_at']})"
-            )
-
-    sent = await message.answer(
-        "\n".join(lines),
-        reply_markup=await build_main_menu_for_user(message.from_user.id),
+    reminder_task = asyncio.create_task(
+        _run_byt_scheduler(
+            bot,
+            db,
+            settings.timezone.key if hasattr(settings.timezone, "key") else str(settings.timezone),
+        )
     )
-    if state:
-        await ui_register_message(state, sent.chat.id, sent.message_id)
-
-
-@router.message(
-    F.text == "⬅️ Назад",
-    StateFilter(
-        WishlistState.waiting_for_name,
-        WishlistState.waiting_for_price,
-        WishlistState.waiting_for_url,
-        WishlistState.waiting_for_category,
-    ),
-)
-async def wishlist_add_back(message: Message, state: FSMContext) -> None:
-    """Handle back navigation in wishlist add flow."""
-
-    data = await state.get_data()
-    stack = list(data.get("wl_add_step_stack") or [])
-    current = stack[-1] if stack else None
-
-    if current == "name":
-        await state.clear()
-        await open_wishlist(message, state)
-        return
-
-    if current == "amount":
-        await state.update_data(
-            price=None,
-            price_sum=None,
-            price_question_message_id=None,
-            price_message_id=None,
+    try:
+        logger.info(
+            "Starting bot polling (%s)",
+            token_context,
         )
-        await state.set_state(WishlistState.waiting_for_name)
-        await _set_wl_steps(state, ["name"])
-        await message.answer(
-            "Введи название желания.",
-            reply_markup=back_only_keyboard(),
+        await dp.start_polling(bot)
+    except TelegramUnauthorizedError:
+        logger.error(
+            "Unauthorized: токен неверный/отозван/бот удалён. "
+            "Проверь BotFather и переменные окружения. "
+            "(%s)",
+            token_context,
         )
-        return
-
-    if current == "url":
-        stack.pop()
-        await state.update_data(url=None, wl_add_step_stack=stack)
-        await message.answer("дай", reply_markup=back_only_keyboard())
-        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
-        return
-
-    if current == "pre_url":
-        stack.pop()
-        await state.update_data(
-            price=None,
-            price_sum=None,
-            price_question_message_id=None,
-            price_message_id=None,
-            wl_add_step_stack=stack,
-        )
-        await state.set_state(WishlistState.waiting_for_price)
-        question = await message.answer(
-            "Введи цену (используй кнопки ниже).",
-            reply_markup=income_calculator_keyboard(),
-        )
-        prompt = await message.answer(": 0")
-        await state.update_data(
-            price_sum="0",
-            price_question_message_id=question.message_id,
-            price_message_id=prompt.message_id,
-        )
-        await _push_wl_step(state, "amount")
-        return
-
-    if current == "category":
-        stack.pop()
-        await state.update_data(wl_add_step_stack=stack)
-        await state.set_state(WishlistState.waiting_for_url)
-        await message.answer("дай", reply_markup=back_only_keyboard())
-        await message.answer("ссылочку", reply_markup=wishlist_url_keyboard())
-        return
+    except Exception as error:  # noqa: BLE001
+        logger.exception("Bot stopped due to error: %s", error)
+    finally:
+        reminder_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await reminder_task
+        await bot.session.close()
+        logger.info("Bot shutdown complete")
 
 
-@router.message(WishlistState.waiting_for_price)
-async def invalid_price(message: Message) -> None:
-    """Handle invalid price input."""
+if __name__ == "__main__":
+    asyncio.run(main())
+
+===== Bot/renderers/__init__.py =====
+
+"""Renderer layer package."""
+
+===== Bot/renderers/household.py =====
+
+"""Renderers for household payments UI."""
+from __future__ import annotations
+
+import html
+from typing import Dict, List
+
+from aiogram.types import InlineKeyboardMarkup
+
+from Bot.keyboards.household import household_payments_inline_keyboard
+
+
+def render_household_questions_text(
+    month: str,
+    questions: list[dict],
+    answers: dict[str, str],
+    current_index: int | None,
+) -> str:
+    header = f"<b>БЫТОВЫЕ ПЛАТЕЖИ — {html.escape(month)}</b>"
+    lines = [header]
+    for index, question in enumerate(questions, start=1):
+        code = str(question.get("code", ""))
+        text = html.escape(str(question.get("text", "")).strip())
+        text = text.rstrip("?").strip()
+        suffix = ""
+        answer = answers.get(code)
+        if answer == "yes":
+            suffix = " ✅"
+        elif answer == "no":
+            suffix = " ❌"
+        display = text
+        if current_index is not None and index - 1 == current_index:
+            display = f"<b>{display.upper()}</b>"
+        lines.append(f"{index}) {display}{suffix}")
+    return "\n".join(lines)
+
+
+def format_household_items(
+    items: List[Dict[str, int | str]],
+    unpaid_set: set[str],
+) -> str:
+    if not items:
+        return "Текущий список платежей: (пусто)"
+
+    lines = ["Текущий список платежей:"]
+    for index, item in enumerate(items, start=1):
+        title = str(item.get("text", "")).rstrip("?")
+        amount = item.get("amount")
+        code = str(item.get("code", ""))
+        status = "❌" if code in unpaid_set else "✅"
+        if amount is not None:
+            lines.append(f"{index}) {status} {title} — {amount}")
+        else:
+            lines.append(f"{index}) {status} {title}")
+    return "\n".join(lines)
+
+
+def build_household_question_keyboard(
+    question_code: str | None, show_back: bool
+) -> InlineKeyboardMarkup:
+    return household_payments_inline_keyboard(
+        show_back=show_back, question_code=question_code
+    )
+
+===== Bot/services/__init__.py =====
 
     await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
 
-
-@router.message(WishlistState.waiting_for_category, F.text == "⬅️ Назад")
-async def add_wish_back_from_category(message: Message, state: FSMContext) -> None:
-    """Return to name step from category selection."""
-
-    await state.update_data(name=None, price=None, price_sum=None, url=None)
-    await state.set_state(WishlistState.waiting_for_name)
-    await message.answer(
-        "Введи название желания.",
-        reply_markup=back_only_keyboard(),
-    )
-
-
-@router.message(WishlistState.waiting_for_category)
-async def waiting_category_text(message: Message) -> None:
-    """Prompt to use inline keyboard for category."""
-
-    db = get_db()
-    categories = _get_user_wishlist_categories(db, message.from_user.id)
-    await message.answer(
-        "Выбери категорию через кнопки ниже.",
-        reply_markup=wishlist_categories_keyboard(categories),
-    )
-    await message.answer("Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard())
-
-
-def _build_byt_items_keyboard(
-    items: list[dict],
-    allow_defer: bool = True,
-    category_id: int | None = None,
-) -> InlineKeyboardMarkup:
-    """Build inline keyboard for BYT items with optional two-column layout."""
-
-    rows: list[list[InlineKeyboardButton]] = []
-    per_row = 2 if len(items) > 3 else 1
-    for index in range(0, len(items), per_row):
-        row_items = items[index : index + per_row]
-        row: list[InlineKeyboardButton] = []
-        for item in row_items:
-            row.append(
-                InlineKeyboardButton(
-                    text=item.get("name", ""), callback_data=f"byt_buy:{item.get('id')}"
-                )
-            )
-        rows.append(row)
-    if allow_defer:
-        defer_callback = "byt_defer_menu"
-        defer_next_callback = "byt:defer_next_menu"
-        if len(items) == 1:
-            try:
-                defer_id = int(items[0].get("id"))
-            except (TypeError, ValueError):
-                defer_id = None
-            else:
-                defer_callback = f"byt_defer_menu:item:{defer_id}"
-                defer_next_callback = f"byt:defer_next:{defer_id}"
-        elif category_id is not None:
-            defer_callback = f"byt_defer_menu:cat:{category_id}"
-            defer_next_callback = f"byt:defer_next_menu:{category_id}"
-        rows.append(
-            [
-                InlineKeyboardButton(text="⏭ Отложить", callback_data=defer_next_callback),
-                InlineKeyboardButton(text="📅 Отложить на …", callback_data=defer_callback),
-            ]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _build_byt_defer_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
-    """Build inline keyboard for selecting BYT item to defer."""
-
-    rows: list[list[InlineKeyboardButton]] = []
-    per_row = 2 if len(items) > 3 else 1
-    for index in range(0, len(items), per_row):
-        row_items = items[index : index + per_row]
-        row: list[InlineKeyboardButton] = []
-        for item in row_items:
-            row.append(
-                InlineKeyboardButton(
-                    text=item.get("name", ""),
-                    callback_data=f"byt_defer_pick:{item.get('id')}",
-                )
-            )
-        rows.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _build_byt_defer_select_keyboard(
-    items: list[dict], callback_prefix: str
-) -> InlineKeyboardMarkup:
-    """Build inline keyboard for selecting BYT item for defer action."""
-
-    rows: list[list[InlineKeyboardButton]] = []
-    per_row = 2 if len(items) > 3 else 1
-    for index in range(0, len(items), per_row):
-        row_items = items[index : index + per_row]
-        row: list[InlineKeyboardButton] = []
-        for item in row_items:
-            row.append(
-                InlineKeyboardButton(
-                    text=item.get("name", ""),
-                    callback_data=f"{callback_prefix}:{item.get('id')}",
-                )
-            )
-        rows.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def _build_byt_defer_actions_keyboard(item_id: int) -> InlineKeyboardMarkup:
-    """Build inline keyboard for BYT defer actions for a single item."""
-
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="⏭ Отложить", callback_data=f"byt:defer_next:{item_id}"
-                ),
-                InlineKeyboardButton(
-                    text="📅 Отложить на …", callback_data=f"byt_defer_menu:item:{item_id}"
-                ),
-            ]
-        ]
-    )
-
-
-async def _refresh_byt_reminder_message(
-    bot: Bot,
-    chat_id: int,
-    message_id: int,
-    user_id: int,
-    category_title: str,
-    *,
-    state: FSMContext | None = None,
-) -> None:
-    """Refresh reminder message with current BYT items."""
-
-    db = get_db()
-    if not category_title:
-        await safe_edit_message_text(
-            bot,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Категория для напоминаний не выбрана. Открой настройки → Напоминания → "
-            "Выбор категории для напоминаний.",
-            logger=LOGGER,
-        )
-        return
-
-    now_dt = now_tz()
-    due_items, deferred_items = get_byt_category_items(db, user_id, category_title, now_dt)
-    settings_row = db.get_user_settings(user_id)
-    allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
-    category_row = db.get_wishlist_category_by_title(user_id, category_title)
-    category_id = int(category_row["id"]) if category_row else None
-    text = format_byt_category_checklist_text(
-        category_title, due_items, deferred_items
-    )
-    keyboard = (
-        _build_byt_items_keyboard(due_items, allow_defer=allow_defer, category_id=category_id)
-        if due_items
-        else None
-    )
-    edited = await safe_edit_message_text(
-        bot,
-        chat_id=chat_id,
-        message_id=message_id,
-        text=text,
-        reply_markup=keyboard,
-        logger=LOGGER,
-    )
-    if edited:
-        return
-    sent = await safe_send_message(
-        bot,
-        chat_id=chat_id,
-        text=text,
-        reply_markup=keyboard,
-        logger=LOGGER,
-    )
-    if sent and state:
-        await ui_register_message(state, sent.chat.id, sent.message_id)
-
-
-async def _start_byt_defer_flow(
-    callback: CallbackQuery, state: FSMContext, wish_id: int
-) -> bool:
-    """Validate and start BYT defer input flow for specific item."""
-
-    db = get_db()
-    wish = db.get_wish(wish_id)
-    if not wish:
-        await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
-        return False
-    category_id, category_title = _resolve_wish_category(db, callback.from_user.id, wish)
-    if category_id is not None and not db.get_byt_reminder_category_enabled(
-        callback.from_user.id, category_id
-    ):
-        await safe_callback_answer(
-            callback,
-            "Напоминания для этой категории выключены.",
-            show_alert=True,
-            logger=LOGGER,
-        )
-        return False
-
-    settings_row = db.get_user_settings(callback.from_user.id)
-    if not bool(settings_row.get("byt_defer_enabled", 1)):
-        await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
-        await state.clear()
-        return False
-
-    await state.set_state(BytDeferState.waiting_for_days)
-    await state.update_data(
-        defer_item_id=wish_id,
-        defer_days_str="0",
-        reminder_message_id=callback.message.message_id if callback.message else None,
-    )
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    target_chat_id = callback.message.chat.id if callback.message else callback.from_user.id
-    question_message = await safe_send_message(
-        callback.bot,
-        chat_id=target_chat_id,
-        text="На сколько дней отложить?",
-        logger=LOGGER,
-    )
-    prompt = await safe_send_message(
-        callback.bot,
-        chat_id=target_chat_id,
-        text=": 0",
-        reply_markup=income_calculator_keyboard(),
-        logger=LOGGER,
-    )
-    await state.update_data(
-        defer_display_chat_id=question_message.chat.id if question_message else target_chat_id,
-        defer_display_message_id=prompt.message_id if prompt else None,
-    )
-    return True
-
-    keyboard = _build_byt_items_keyboard(items, allow_defer=allow_defer)
-    await safe_edit_message_text(
-        bot,
-        chat_id=chat_id,
-        message_id=message_id,
-        text="Что ты купил?",
-        reply_markup=keyboard,
-        logger=LOGGER,
-    )
-
-
-async def run_byt_timer_check(
-    bot: Bot,
-    db: FinanceDatabase,
-    user_id: int | None = None,
-    simulated_time: time | None = None,
-    run_time: datetime | None = None,
-) -> None:
-    """Run BYT reminders using timer configuration for the user."""
-
-    await asyncio.sleep(0)
-    trigger_dt = run_time or now_tz()
-    if simulated_time:
-        trigger_dt = trigger_dt.replace(
-            hour=simulated_time.hour,
-            minute=simulated_time.minute,
-            second=0,
-            microsecond=0,
-        )
-
-    user_ids = (
-        [user_id]
-        if user_id is not None
-        else list(
-            set(db.get_users_with_active_byt_wishes())
-            | set(db.get_users_with_byt_timer_times())
-        )
-    )
-    if not user_ids:
-        return
-
-    for uid in user_ids:
-        db.ensure_byt_reminder_migration(uid)
-        settings_row = db.get_user_settings(uid)
-        if not bool(settings_row.get("byt_reminders_enabled", 1)):
-            continue
-
-        simulated = simulated_time is not None
-        trigger_label = trigger_dt.strftime("%H:%M")
-        LOGGER.info(
-            "BYT timer check triggered (user_id=%s, simulated=%s, time=%s)",
-            uid,
-            simulated,
-            trigger_label,
-        )
-        categories = db.list_enabled_byt_reminder_categories(uid)
-        if not categories:
-            LOGGER.info(
-                "BYT timer: no enabled categories configured, skip (user_id=%s)", uid
-            )
-            continue
-
-        for category in categories:
-            category_id = int(category.get("id"))
-            category_title = str(category.get("title", ""))
-            times = db.list_byt_reminder_times(uid, category_id)
-            times_hhmm = [str(item.get("time_hhmm", "")) for item in times if item.get("time_hhmm")]
-            if not times_hhmm:
-                times_hhmm = ["12:00"]
-            should_run = trigger_label in times_hhmm
-            if not should_run:
-                continue
-
-            db.cleanup_old_byt_purchases(uid, category_title, trigger_dt)
-            total_items = db.get_active_byt_wishes(uid, category_title)
-            due_items, deferred_items = get_byt_category_items(
-                db, uid, category_title, trigger_dt
-            )
-            if not total_items:
-                LOGGER.info(
-                    "BYT timer: category_id=%s items=%s due=%s deferred=%s user_id=%s",
-                    category_id,
-                    0,
-                    0,
-                    0,
-                    uid,
-                )
-                continue
-            if not due_items:
-                LOGGER.info(
-                    "BYT timer: category_id=%s items=%s due=%s deferred=%s user_id=%s",
-                    category_id,
-                    len(total_items),
-                    0,
-                    len(deferred_items),
-                    uid,
-                )
-                continue
-
-            allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
-            text = format_byt_category_checklist_text(
-                category_title, due_items, deferred_items
-            )
-            keyboard = _build_byt_items_keyboard(
-                due_items, allow_defer=allow_defer, category_id=category_id
-            )
-            await bot.send_message(uid, text, reply_markup=keyboard)
-            LOGGER.info(
-                "BYT timer: category_id=%s items=%s due=%s deferred=%s user_id=%s",
-                category_id,
-                len(total_items),
-                len(due_items),
-                len(deferred_items),
-                uid,
-            )
-
-
-async def run_byt_wishlist_reminders(
-    bot: Bot,
-    db: FinanceDatabase,
-    user_id: int | None = None,
-    forced: bool = False,
-    run_time=None,
-) -> None:
-    """Backward-compatible wrapper for BYT reminders."""
-
-    await run_byt_timer_check(
-        bot,
-        db,
-        user_id=user_id,
-        simulated_time=None,
-        run_time=run_time,
-    )
-
-
-@router.callback_query(F.data.startswith("byt_buy:"))
-async def handle_byt_buy(callback: CallbackQuery, state: FSMContext) -> None:
-    """Handle purchase confirmation from BYT reminder list."""
-
-    data = callback.data.split(":", maxsplit=1)
-    if len(data) != 2:
-        await safe_callback_answer(callback, "Некорректный формат.", show_alert=True, logger=LOGGER)
-        return
-
-    try:
-        item_id = int(data[1])
-    except ValueError:
-        await safe_callback_answer(callback, "Некорректный элемент.", show_alert=True, logger=LOGGER)
-        return
-
-    db = get_db()
-    wish = db.get_wish(item_id)
-    if not wish:
-        await safe_callback_answer(callback, "Элемент не найден.", show_alert=True, logger=LOGGER)
-        return
-    _, category_title = _resolve_wish_category(db, callback.from_user.id, wish)
-
-    price = float(wish.get("price", 0) or 0)
-    purchase_time = now_tz()
-    db.decrease_savings(callback.from_user.id, "быт", price)
-    db.mark_wish_purchased(item_id, purchased_at=purchase_time)
-    db.add_purchase(
-        callback.from_user.id,
-        wish.get("name", ""),
-        price,
-        humanize_wishlist_category(wish.get("category", "")),
-        purchased_at=purchase_time,
-    )
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    if callback.message:
-        await _refresh_byt_reminder_message(
-            callback.bot,
-            callback.message.chat.id,
-            callback.message.message_id,
-            callback.from_user.id,
-            category_title,
-            state=state,
-        )
-
-
-@router.callback_query(F.data.startswith("byt_defer_menu"))
-async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    """Show BYT items to choose which to defer."""
-
-    wish_id: int | None = None
-    category_id: int | None = None
-    if callback.data and ":" in callback.data:
-        parts = callback.data.split(":")
-        if len(parts) >= 3 and parts[1] == "item":
-            try:
-                wish_id = int(parts[2])
-            except ValueError:
-                wish_id = None
-        elif len(parts) >= 3 and parts[1] == "cat":
-            try:
-                category_id = int(parts[2])
-            except ValueError:
-                category_id = None
-        elif len(parts) == 2:
-            try:
-                wish_id = int(parts[1])
-            except ValueError:
-                wish_id = None
-    if wish_id is None:
-        data = await state.get_data()
-        stored_id = data.get("current_byt_item_id")
-        try:
-            wish_id = int(stored_id) if stored_id is not None else None
-        except (TypeError, ValueError):
-            wish_id = None
-
-    db = get_db()
-    settings_row = db.get_user_settings(callback.from_user.id)
-    if not bool(settings_row.get("byt_defer_enabled", 1)):
-        await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
-        return
-    now_dt = now_tz()
-    category_title = None
-    if category_id is not None:
-        category_row = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
-        category_title = category_row.get("title") if category_row else None
-    if wish_id is not None:
-        await state.update_data(current_byt_item_id=wish_id)
-        started = await _start_byt_defer_flow(callback, state, wish_id)
-        if not started:
-            await state.clear()
-        return
-    if category_title:
-        items = db.list_active_byt_items_for_reminder(
-            callback.from_user.id, now_dt, category_title
-        )
-    else:
-        items = []
-
-    if not items:
-        await state.clear()
-        if callback.message:
-            await safe_answer(
-                callback.message,
-                f"Нет напоминаний для отложки в категории {category_title or 'неизвестно'}.",
-                logger=LOGGER,
-            )
-        else:
-            await safe_send_message(
-                callback.bot,
-                chat_id=callback.from_user.id,
-                text=f"Нет напоминаний для отложки в категории {category_title or 'неизвестно'}.",
-                logger=LOGGER,
-            )
-        await safe_callback_answer(callback, logger=LOGGER)
-        return
-
-    keyboard = _build_byt_defer_keyboard(items)
-    await state.clear()
-    if callback.message:
-        edited = await safe_edit_message_text(
-            callback.message.bot,
-            chat_id=callback.message.chat.id,
-            message_id=callback.message.message_id,
-            text="ЧТО?",
-            reply_markup=keyboard,
-            logger=LOGGER,
-        )
-        if not edited:
-            await safe_answer(callback.message, "ЧТО?", reply_markup=keyboard, logger=LOGGER)
-    else:
-        await safe_send_message(
-            callback.bot,
-            chat_id=callback.from_user.id,
-            text="ЧТО?",
-            reply_markup=keyboard,
-            logger=LOGGER,
-        )
-    await safe_callback_answer(callback, logger=LOGGER)
-
-
-@router.callback_query(F.data.startswith("byt:defer_next_menu"))
-async def handle_byt_defer_next_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    """Show BYT items to choose which to defer to next reminder."""
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    db = get_db()
-    settings_row = db.get_user_settings(callback.from_user.id)
-    if not bool(settings_row.get("byt_defer_enabled", 1)):
-        if callback.message:
-            await safe_answer(
-                callback.message,
-                "Отключено в настройках",
-                logger=LOGGER,
-            )
-        else:
-            await safe_send_message(
-                callback.bot,
-                chat_id=callback.from_user.id,
-                text="Отключено в настройках",
-                logger=LOGGER,
-            )
-        return
-
-    category_id: int | None = None
-    if callback.data and ":" in callback.data:
-        parts = callback.data.split(":")
-        if len(parts) >= 3:
-            try:
-                category_id = int(parts[2])
-            except ValueError:
-                category_id = None
-    category_title = None
-    if category_id is not None:
-        category_row = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
-        category_title = category_row.get("title") if category_row else None
-    now_dt = now_tz()
-    items = (
-        db.list_active_byt_items_for_reminder(
-            callback.from_user.id, now_dt, category_title
-        )
-        if category_title
-        else []
-    )
-    if not items:
-        if callback.message:
-            await safe_answer(
-                callback.message,
-                f"Нет напоминаний для отложки в категории {category_title or 'неизвестно'}.",
-                logger=LOGGER,
-            )
-        else:
-            await safe_send_message(
-                callback.bot,
-                chat_id=callback.from_user.id,
-                text=f"Нет напоминаний для отложки в категории {category_title or 'неизвестно'}.",
-                logger=LOGGER,
-            )
-        return
-
-    keyboard = _build_byt_defer_select_keyboard(items, "byt:defer_next")
-    if callback.message:
-        edited = await safe_edit_message_text(
-            callback.message.bot,
-            chat_id=callback.message.chat.id,
-            message_id=callback.message.message_id,
-            text="ЧТО?",
-            reply_markup=keyboard,
-            logger=LOGGER,
-        )
-        if not edited:
-            await safe_answer(
-                callback.message,
-                "ЧТО?",
-                reply_markup=keyboard,
-                logger=LOGGER,
-            )
-    else:
-        await safe_send_message(
-            callback.bot,
-            chat_id=callback.from_user.id,
-            text="ЧТО?",
-            reply_markup=keyboard,
-            logger=LOGGER,
-        )
-
-
-@router.callback_query(F.data.startswith("byt:defer_next:"))
-async def handle_byt_defer_next(callback: CallbackQuery, state: FSMContext) -> None:
-    """Defer BYT item until the next scheduled reminder time."""
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    data = callback.data.split(":", maxsplit=2)
-    if len(data) != 3:
-        return
-
-    try:
-        item_id = int(data[2])
-    except ValueError:
-        return
-
-    db = get_db()
-    wish = db.get_wish(item_id)
-    if not wish:
-        return
-    category_id, category_title = _resolve_wish_category(db, callback.from_user.id, wish)
-
-    settings_row = db.get_user_settings(callback.from_user.id)
-    if not bool(settings_row.get("byt_defer_enabled", 1)):
-        return
-
-    times = (
-        db.list_byt_reminder_times(callback.from_user.id, category_id)
-        if category_id is not None
-        else []
-    )
-    times_hhmm = [str(item.get("time_hhmm", "")) for item in times if item.get("time_hhmm")]
-    next_run = get_next_reminder_dt(now_tz(), times_hhmm)
-
-    existing_deferred = parse_deferred_until(wish.get("deferred_until"))
-
-    deferred_until = resolve_deferred_until(existing_deferred, next_run)
-    if existing_deferred != deferred_until:
-        db.set_wishlist_item_deferred_until(
-            callback.from_user.id, item_id, deferred_until.isoformat()
-        )
-    LOGGER.info(
-        "USER=%s ACTION=BYT_DEFER_NEXT META=item_id=%s deferred_until=%s",
-        callback.from_user.id,
-        item_id,
-        deferred_until.isoformat(),
-    )
-
-    now_dt = now_tz()
-    due_items, deferred_items = get_byt_category_items(
-        db, callback.from_user.id, category_title, now_dt
-    )
-    checklist_text = format_byt_category_checklist_text(
-        category_title, due_items, deferred_items
-    )
-    message_text = format_byt_defer_confirmation_text(
-        wish, category_title, deferred_until, checklist_text
-    )
-    category_row = db.get_wishlist_category_by_title(callback.from_user.id, category_title)
-    category_ref = int(category_row["id"]) if category_row else None
-    keyboard = (
-        _build_byt_items_keyboard(
-            due_items,
-            allow_defer=bool(settings_row.get("byt_defer_enabled", 1)),
-            category_id=category_ref,
-        )
-        if due_items
-        else None
-    )
-    if callback.message:
-        edited = await safe_edit_message_text(
-            callback.message.bot,
-            chat_id=callback.message.chat.id,
-            message_id=callback.message.message_id,
-            text=message_text,
-            reply_markup=keyboard,
-            logger=LOGGER,
-        )
-        if not edited:
-            sent_id = await safe_answer(
-                callback.message,
-                message_text,
-                reply_markup=keyboard,
-                logger=LOGGER,
-            )
-            if sent_id:
-                await ui_register_message(state, callback.message.chat.id, sent_id)
-    else:
-        sent = await safe_send_message(
-            callback.bot,
-            chat_id=callback.from_user.id,
-            text=message_text,
-            reply_markup=keyboard,
-            logger=LOGGER,
-        )
-        if sent:
-            await ui_register_message(state, sent.chat.id, sent.message_id)
-
-
-@router.callback_query(F.data.startswith("byt_defer_pick:"))
-async def handle_byt_defer_pick(callback: CallbackQuery, state: FSMContext) -> None:
-    """Start deferring selected BYT item."""
-
-    data = callback.data.split(":", maxsplit=1)
-    wish_id: int | None = None
-    if len(data) == 2:
-        try:
-            wish_id = int(data[1])
-        except ValueError:
-            wish_id = None
-    if wish_id is None:
-        state_data = await state.get_data()
-        try:
-            wish_id = (
-                int(state_data.get("defer_item_id"))
-                if state_data.get("defer_item_id") is not None
-                else None
-            )
-        except (TypeError, ValueError):
-            wish_id = None
-    if wish_id is None:
-        await safe_callback_answer(callback, "Ошибка: не найден item_id", show_alert=True, logger=LOGGER)
-        return
-
-    started = await _start_byt_defer_flow(callback, state, wish_id)
-    if not started:
-        await state.clear()
-
-
-@router.message(
-    BytDeferState.waiting_for_days,
-    F.text.in_(
+from Bot.services.byt_service import build_manual_check_summary
+from Bot.services.household_service import ensure_household_month, list_active_byt_wishes
+from Bot.services.types import ManualCheckResult, ServiceError, WishlistPurchaseResult
+from Bot.services.wishlist_service import add_wish, list_wishlist_categories, purchase_wish
+
+__all__ = [
+    "ManualCheckResult",
+    "ServiceError",
+    "WishlistPurchaseResult",
+    "add_wish",
+    "list_wishlist_categories",
+    "purchase_wish",
+    "build_manual_check_summary",
+    "ensure_household_month",
+    "list_active_byt_wishes",
+]
+
+===== Bot/services/household.py =====
+
+"""Business logic for household payments flow."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Iterable
+
+
+@dataclass
+class HouseholdFlowState:
+    """Container for household flow state."""
+
+    month: str
+    questions: list[dict]
+    current_step_index: int
+    current_question_code: str | None
+    answers: dict[str, str]
+    processed_steps: set[str]
+
+
+def build_household_questions(items: Iterable[dict]) -> list[dict]:
+    return [
         {
-            "0",
-            "1",
-            "2",
-            "3",
-            "4",
-            "5",
-            "6",
-            "7",
-            "8",
-            "9",
-            "Очистить",
-            "✅ Газ",
+            "code": str(item.get("code", "")),
+            "text": str(item.get("text", "")),
+            "amount": item.get("amount"),
         }
-    ),
-)
-async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
-    """Handle calculator input for BYT defer days."""
+        for item in items
+        if item.get("code") is not None
+    ]
 
-    data = await state.get_data()
-    current_sum = str(data.get("defer_days_str", "0"))
-    display_chat_id = data.get("defer_display_chat_id", message.chat.id)
-    display_message_id = data.get("defer_display_message_id")
-    db = get_db()
 
-    if message.text == "Очистить":
-        new_sum = "0"
-    elif message.text == "✅ Газ":
-        amount_str = current_sum.strip()
-        if not amount_str:
-            LOGGER.warning(
-                "BYT defer submit missing entered_days user_id=%s",
-                message.from_user.id if message.from_user else "unknown",
-            )
-            await message.answer("Нужно ввести число дней. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-        try:
-            days = int(amount_str)
-        except (TypeError, ValueError):
-            LOGGER.warning(
-                "BYT defer submit invalid days user_id=%s value=%s",
-                message.from_user.id if message.from_user else "unknown",
-                amount_str,
-            )
-            await message.answer("Нужно ввести число. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
+def build_answers_from_status(status_map: dict[str, int]) -> dict[str, str]:
+    return {
+        str(code): "yes"
+        for code, value in status_map.items()
+        if int(value) == 1
+    }
 
-        if days <= 0:
-            LOGGER.warning(
-                "BYT defer submit non-positive days user_id=%s value=%s",
-                message.from_user.id if message.from_user else "unknown",
-                days,
-            )
-            await message.answer("Нужно ввести число дней. Попробуй снова.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
 
-        try:
-            settings_row = db.get_user_settings(message.from_user.id)
-        except Exception as exc:
-            LOGGER.error(
-                "Failed to load user settings for BYT defer user_id=%s",
-                message.from_user.id if message.from_user else "unknown",
-                exc_info=exc,
-            )
-            await message.answer("Ошибка БД")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-        max_days = int(settings_row.get("byt_defer_max_days", 365) or 365)
-        if days < 1 or days > max_days:
-            await message.answer(f"Количество дней должно быть от 1 до {max_days}.")
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
+def filter_unpaid_questions(
+    questions: Iterable[dict], unpaid_codes: Iterable[str]
+) -> list[dict]:
+    unpaid_set = {str(code) for code in unpaid_codes}
+    return [question for question in questions if question.get("code") in unpaid_set]
 
-        raw_defer_item_id = data.get("defer_item_id")
-        try:
-            defer_item_id = int(raw_defer_item_id) if raw_defer_item_id is not None else None
-        except (TypeError, ValueError):
-            defer_item_id = None
-        if defer_item_id is None:
-            LOGGER.warning(
-                "BYT defer submit missing item_id user_id=%s",
-                message.from_user.id if message.from_user else "unknown",
-            )
-            await message.answer("Не выбран товар для отсрочки.")
-            await state.clear()
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-            return
-        reminder_message_id = data.get("reminder_message_id")
-        desired_deferred_until = now_tz() + timedelta(days=days)
-        wish = db.get_wish(defer_item_id)
-        existing_deferred = parse_deferred_until(
-            wish.get("deferred_until") if wish else None
-        )
-        deferred_until = resolve_deferred_until(existing_deferred, desired_deferred_until)
+
+def get_current_question(questions: list[dict], index: int) -> dict | None:
+    if index < 0 or index >= len(questions):
+        return None
+    return questions[index]
+
+
+def get_next_index(index: int, questions: list[dict]) -> int:
+    return min(index + 1, len(questions))
+
+
+def get_previous_index(index: int) -> int:
+    return max(index - 1, 0)
+
+
+def should_ignore_answer(
+    answers: dict[str, str],
+    processed_steps: set[str],
+    question_code: str,
+    action: str,
+) -> bool:
+    return question_code in processed_steps and answers.get(question_code) == action
+
+
+def normalize_processed_steps(value: Iterable[str] | None) -> set[str]:
+    if not value:
+        return set()
+    return {str(item) for item in value}
+
+
+def update_flow_state(
+    month: str,
+    questions: list[dict],
+    current_step_index: int,
+    answers: dict[str, str] | None,
+    processed_steps: Iterable[str] | None,
+) -> HouseholdFlowState:
+    current_question = get_current_question(questions, current_step_index)
+    return HouseholdFlowState(
+        month=month,
+        questions=questions,
+        current_step_index=current_step_index,
+        current_question_code=str(current_question.get("code"))
+        if current_question
+        else None,
+        answers=dict(answers or {}),
+        processed_steps=normalize_processed_steps(processed_steps),
+    )
+
+===== Bot/states/__init__.py =====
+
+
+===== Bot/states/money_states.py =====
+
+"""FSM states for money flow."""
+from aiogram.fsm.state import State, StatesGroup
+
+
+class MoneyState(StatesGroup):
+    """State machine for income distribution."""
+
+    waiting_for_amount = State()
+    confirm_category = State()
+    waiting_for_purchase_confirmation = State()
+
+
+class HouseholdPaymentsState(StatesGroup):
+    """State machine for household payments flow."""
+
+    waiting_for_answer = State()
+
+
+class HouseholdSettingsState(StatesGroup):
+    """State machine for household payments settings."""
+
+    waiting_for_title = State()
+    waiting_for_amount = State()
+    waiting_for_removal = State()
+    waiting_for_debit_category = State()
+
+
+class IncomeSettingsState(StatesGroup):
+    """State machine for income settings."""
+
+    waiting_for_category_title = State()
+    waiting_for_new_category_percent = State()
+    waiting_for_removal = State()
+    waiting_for_percent_category = State()
+    waiting_for_percent = State()
+
+===== Bot/states/wishlist_states.py =====
+
+"""FSM states for wishlist."""
+from aiogram.fsm.state import State, StatesGroup
+
+
+class WishlistState(StatesGroup):
+    """State machine for wishlist management."""
+
+    waiting_for_name = State()
+    waiting_for_price = State()
+    waiting_for_url = State()
+    waiting_for_category = State()
+
+
+class WishlistBytReminderState(StatesGroup):
+    """State machine for BYT reminder flow."""
+
+    waiting_answer = State()
+
+
+class BytDeferState(StatesGroup):
+    """State machine for deferring BYT wishlist items."""
+
+    waiting_for_days = State()
+
+
+class WishlistSettingsState(StatesGroup):
+    """States for wishlist settings inputs."""
+
+    waiting_for_category_title = State()
+    waiting_for_removal = State()
+    waiting_for_purchased_category = State()
+    waiting_for_purchased_mode = State()
+    waiting_for_purchased_days = State()
+    waiting_for_debit_category = State()
+
+
+class BytSettingsState(StatesGroup):
+    """States for BYT settings inputs."""
+
+    waiting_for_max_defer_days = State()
+
+
+class BytTimerState(StatesGroup):
+    """States for BYT timer settings inputs."""
+
+    waiting_for_time_add = State()
+
+===== Bot/utils/__init__.py =====
+
+
+===== Bot/utils/byt_manual_check.py =====
+
+"""Helpers for manual BYT reminder checks."""
+
+from typing import Any
+
+
+def parse_byt_manual_cursor_index(raw: Any) -> int:
+    """Parse FSM stored cursor index for BYT manual check.
+
+    FSM may store index as int or str. Returns -1 when missing/invalid.
+    """
+    if raw is None:
+        return -1
+    try:
+        if isinstance(raw, str) and raw.strip() == "":
+            return -1
+        return int(raw)
+    except (TypeError, ValueError):
+        return -1
+
+
+def build_byt_times_sorted(times_by_category: dict[int, list[str]]) -> list[str]:
+    """Build a unique sorted list of HH:MM times from category mapping."""
+
+    times: set[str] = set()
+    for values in times_by_category.values():
+        for value in values:
+            cleaned = str(value).strip()
+            if cleaned:
+                times.add(cleaned)
+    return sorted(times)
+
+
+def select_next_byt_manual_time(
+    times_sorted: list[str],
+    current_date: str,
+    saved_date: str | None,
+    index: int,
+) -> tuple[str, int, str]:
+    """Select next time slot and return selected time, updated index, restart notice."""
+
+    if saved_date != current_date:
+        index = -1
+    next_index = index + 1
+    restart_notice = ""
+    if next_index >= len(times_sorted):
+        next_index = 0
+        restart_notice = "Сегодня все времена уже проверены — начинаю заново."
+    return times_sorted[next_index], next_index, restart_notice
+
+===== Bot/utils/byt_render.py =====
+
+"""Rendering helpers for BYT reminders."""
+
+from __future__ import annotations
 
         try:
             if existing_deferred != deferred_until:

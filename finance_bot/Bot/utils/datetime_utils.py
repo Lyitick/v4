@@ -14,7 +14,7 @@ def now_tz() -> datetime:
 def current_month_str(now: datetime | None = None) -> str:
     """Return current month label as YYYY-MM using configured timezone."""
 
-    current = now or now_tz()
+    current = now or datetime.now(tz=settings.TIMEZONE)
     return f"{current.year:04d}-{current.month:02d}"
 
 

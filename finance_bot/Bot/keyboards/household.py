@@ -6,6 +6,8 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from Bot.constants.ui_labels import NAV_BACK, NAV_HOME
+
 
 def household_payments_answer_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard with Yes/No and Back options for household payments."""
@@ -14,7 +16,8 @@ def household_payments_answer_keyboard() -> ReplyKeyboardMarkup:
         [
             KeyboardButton(text="✅ Да"),
             KeyboardButton(text="❌ Нет"),
-            KeyboardButton(text="⬅️ Назад"),
+            KeyboardButton(text=NAV_BACK),
+            KeyboardButton(text=NAV_HOME),
         ]
     ]
     return ReplyKeyboardMarkup(
@@ -38,6 +41,9 @@ def household_payments_inline_keyboard(
     ]
     if show_back:
         buttons[0].append(
-            InlineKeyboardButton(text="Назад", callback_data=f"hh_pay:back{suffix}")
+            InlineKeyboardButton(text=NAV_BACK, callback_data=f"hh_pay:back{suffix}")
         )
+    buttons.append(
+        [InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home")]
+    )
     return InlineKeyboardMarkup(inline_keyboard=buttons)

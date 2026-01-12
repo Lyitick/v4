@@ -1,3 +1,149 @@
+
+
+@router.callback_query(F.data == "wl:purchased_mode:days")
+async def wishlist_set_purchased_days(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    data = await state.get_data()
+    category_id = data.get("editing_wl_category_id")
+    if category_id is None:
+        await render_settings_screen("st:wishlist", message=callback.message, state=state)
+        return
+    db = get_db()
+    category = db.get_wishlist_category_by_id(callback.from_user.id, int(category_id))
+    if not category:
+        await _reset_navigation(state, "st:wishlist")
+        await render_settings_screen("st:wishlist", message=callback.message, state=state)
+        return
+    await _push_current_screen(state, "wl:purchased_days")
+    await state.set_state(WishlistSettingsState.waiting_for_purchased_days)
+    await state.update_data(
+        purchased_days_str="0",
+        purchased_display_chat_id=None,
+        purchased_display_message_id=None,
+        editing_wl_category_id=int(category_id),
+    )
+    db.update_wishlist_category_purchased_mode(callback.from_user.id, int(category_id), "days")
+    chat_id, message_id = await _get_settings_message_ids(state, callback.message)
+    await _edit_settings_page(
+        bot=callback.message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=(
+            f'На сколько дней показывать купленное для "{category.get("title", "")}"?'
+        ),
+        reply_markup=None,
+    )
+    prompt = await _send_and_register(
+        message=callback.message,
+        state=state,
+        text=": 0",
+        reply_markup=income_calculator_keyboard(),
+    )
+    await state.update_data(
+        purchased_display_chat_id=prompt.chat.id,
+        purchased_display_message_id=prompt.message_id,
+    )
+
+
+@router.message(IncomeSettingsState.waiting_for_percent)
+async def income_percent_value(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    text = (message.text or "").strip()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
+        return
+
+    percent_str = data.get("percent_str", "0")
+    display_chat_id = data.get("percent_display_chat_id", message.chat.id)
+    display_message_id = data.get("percent_display_message_id")
+
+    if text not in PERCENT_INPUT_BUTTONS:
+        parsed_value = parse_int_choice(text)
+        if parsed_value is None:
+            chat_id, message_id = await _get_settings_message_ids(state, message)
+            await _edit_settings_page(
+                bot=message.bot,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{ERR_INVALID_INPUT} Введи число.",
+                reply_markup=None,
+            )
+            return
+        percent_str = str(parsed_value)
+        LOGGER.info(
+            "Percent input: user=%s scope=%s value=%s",
+            message.from_user.id,
+            data.get("edit_scope", "income"),
+            percent_str,
+        )
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {percent_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {percent_str}",
+            )
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            percent_str=percent_str,
+            percent_display_chat_id=display_chat_id,
+            percent_display_message_id=display_message_id,
+        )
+        return
+
+    if text in PERCENT_DIGITS:
+        percent_str = percent_str.lstrip("0") if percent_str != "0" else ""
+        percent_str = f"{percent_str}{text}" or "0"
+        LOGGER.info(
+            "Percent input: user=%s scope=%s value=%s",
+            message.from_user.id,
+            data.get("edit_scope", "income"),
+            percent_str,
+        )
+        try:
+            await _safe_edit(message.bot, 
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {percent_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(message.bot, 
+                chat_id=display_chat_id, text=f": {percent_str}"
+            )
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            percent_str=percent_str,
+            percent_display_chat_id=display_chat_id,
+            percent_display_message_id=display_message_id,
+        )
+        return
+
+    if text == "Очистить":
+        percent_str = "0"
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=": 0",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=": 0",
+            )
             if fallback:
                 display_message_id = fallback.message_id
                 await ui_register_message(state, display_chat_id, display_message_id)
@@ -76,21 +222,49 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text not in PERCENT_INPUT_BUTTONS:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Используй кнопки калькулятора.",
-            reply_markup=None,
-        )
+    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     days_str = data.get("purchased_days_str", "0")
     display_chat_id = data.get("purchased_display_chat_id", message.chat.id)
     display_message_id = data.get("purchased_display_message_id")
+
+    if text not in PERCENT_INPUT_BUTTONS:
+        parsed_value = parse_positive_int(text)
+        if parsed_value is None:
+            chat_id, message_id = await _get_settings_message_ids(state, message)
+            await _edit_settings_page(
+                bot=message.bot,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{ERR_INVALID_INPUT} Введи число.",
+                reply_markup=None,
+            )
+            return
+        days_str = str(parsed_value)
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {days_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {days_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            purchased_days_str=days_str,
+            purchased_display_chat_id=display_chat_id,
+            purchased_display_message_id=display_message_id,
+        )
+        return
 
     if text in PERCENT_DIGITS:
         days_str = days_str.lstrip("0") if days_str != "0" else ""
@@ -196,21 +370,48 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text not in PERCENT_INPUT_BUTTONS:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Используй кнопки калькулятора.",
-            reply_markup=None,
-        )
+    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     days_str = data.get("byt_max_days_str", "0")
     display_chat_id = data.get("byt_max_display_chat_id", message.chat.id)
     display_message_id = data.get("byt_max_display_message_id")
+
+    if text not in PERCENT_INPUT_BUTTONS:
+        parsed_value = parse_positive_int(text)
+        if parsed_value is None:
+            chat_id, message_id = await _get_settings_message_ids(state, message)
+            await _edit_settings_page(
+                bot=message.bot,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{ERR_INVALID_INPUT} Введи число.",
+                reply_markup=None,
+            )
+            return
+        days_str = str(parsed_value)
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {days_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {days_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+        await state.update_data(
+            byt_max_days_str=days_str,
+            byt_max_display_chat_id=display_chat_id,
+            byt_max_display_message_id=display_message_id,
+        )
+        return
 
     if text in PERCENT_DIGITS:
         days_str = days_str.lstrip("0") if days_str != "0" else ""
@@ -488,6 +689,8 @@ from Bot.utils.byt_render import (
     get_byt_category_items,
     parse_deferred_until,
 )
+from Bot.utils.messages import ERR_INVALID_INPUT
+from Bot.utils.number_input import parse_positive_int
 from Bot.utils.telegram_safe import (
     safe_answer,
     safe_callback_answer,
@@ -724,6 +927,52 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.message(
+    WishlistState.waiting_for_price,
+    F.text.regexp(r"^\\s*\\+?\\d+\\s*$"),
+)
+async def add_wish_price_manual(message: Message, state: FSMContext) -> None:
+    """Handle manual numeric price input."""
+
+    value = parse_positive_int(message.text or "")
+    if value is None:
+        await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+
+    data = await state.get_data()
+    price_message_id = data.get("price_message_id")
+    new_sum = str(value)
+
+    if price_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=int(price_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+        if not edited:
+            prompt = await message.answer(f": {new_sum}")
+            price_message_id = prompt.message_id
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        price_message_id = prompt.message_id
+
+    await state.update_data(price_sum=new_sum, price_message_id=price_message_id)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
 @router.message(WishlistState.waiting_for_url, F.text != "⬅️ Назад")
 async def add_wish_url(message: Message, state: FSMContext) -> None:
     """Save URL and request category selection."""
@@ -867,7 +1116,7 @@ async def wishlist_add_back(message: Message, state: FSMContext) -> None:
 async def invalid_price(message: Message) -> None:
     """Handle invalid price input."""
 
-    await message.answer("Используй кнопки калькулятора ниже для ввода цены.")
+    await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
 
 
 @router.message(WishlistState.waiting_for_category, F.text == "⬅️ Назад")
@@ -1749,252 +1998,3 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
                 message_id=message.message_id,
                 logger=LOGGER,
             )
-            return
-
-        LOGGER.info(
-            "BYT defer days submit user_id=%s item_id=%s days=%s",
-            message.from_user.id if message.from_user else "unknown",
-            defer_item_id,
-            days,
-        )
-
-        await state.clear()
-        if wish:
-            category_id, category_title = _resolve_wish_category(db, message.from_user.id, wish)
-            due_items, deferred_items = get_byt_category_items(
-                db, message.from_user.id, category_title, now_tz()
-            )
-            checklist_text = format_byt_category_checklist_text(
-                category_title, due_items, deferred_items
-            )
-            message_text = format_byt_defer_confirmation_text(
-                wish, category_title, deferred_until, checklist_text
-            )
-            category_row = db.get_wishlist_category_by_title(message.from_user.id, category_title)
-            category_ref = int(category_row["id"]) if category_row else category_id
-            keyboard = (
-                _build_byt_items_keyboard(
-                    due_items,
-                    allow_defer=bool(settings_row.get("byt_defer_enabled", 1)),
-                    category_id=category_ref,
-                )
-                if due_items
-                else None
-            )
-            if reminder_message_id:
-                edited = await safe_edit_message_text(
-                    message.bot,
-                    chat_id=message.chat.id,
-                    message_id=int(reminder_message_id),
-                    text=message_text,
-                    reply_markup=keyboard,
-                    logger=LOGGER,
-                )
-                if not edited:
-                    sent = await message.answer(message_text, reply_markup=keyboard)
-                    if sent:
-                        await ui_register_message(state, sent.chat.id, sent.message_id)
-            else:
-                sent = await message.answer(message_text, reply_markup=keyboard)
-                if sent:
-                    await ui_register_message(state, sent.chat.id, sent.message_id)
-            await message.answer(" ", reply_markup=ReplyKeyboardRemove())
-        else:
-            await message.answer(
-                f"Отложено на {days} дн.", reply_markup=ReplyKeyboardRemove()
-            )
-
-        await safe_delete_message(
-            message.bot,
-            chat_id=message.chat.id,
-            message_id=message.message_id,
-            logger=LOGGER,
-        )
-        return
-    else:
-        if current_sum == "0":
-            new_sum = message.text
-        else:
-            new_sum = current_sum + message.text
-
-    new_display_message_id = display_message_id
-    new_display_chat_id = display_chat_id
-    if display_message_id:
-        edited = await safe_edit_message_text(
-            message.bot,
-            chat_id=display_chat_id,
-            message_id=int(display_message_id),
-            text=f": {new_sum}",
-            logger=LOGGER,
-        )
-        if not edited:
-            prompt = await message.answer(f": {new_sum}")
-            new_display_message_id = prompt.message_id
-            new_display_chat_id = message.chat.id
-    else:
-        prompt = await message.answer(f": {new_sum}")
-        new_display_message_id = prompt.message_id
-        new_display_chat_id = message.chat.id
-
-    await state.update_data(
-        defer_days_str=new_sum,
-        defer_display_message_id=new_display_message_id,
-        defer_display_chat_id=new_display_chat_id,
-    )
-
-    await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-
-
-@router.message(BytDeferState.waiting_for_days)
-async def handle_byt_defer_days_invalid(message: Message) -> None:
-    """Prompt to use calculator buttons for defer days."""
-
-    await message.answer("Используй кнопки калькулятора ниже.")
-
-===== Bot/keyboards/__init__.py =====
-
-
-===== Bot/keyboards/calculator.py =====
-
-"""Calculator keyboard definitions."""
-
-from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
-
-
-def income_calculator_keyboard() -> ReplyKeyboardMarkup:
-    """Общая цифровая клавиатура для ввода сумм."""
-
-    keyboard = [
-        [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
-        [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
-        [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
-        [
-            KeyboardButton(text="Очистить"),
-            KeyboardButton(text="0"),
-            KeyboardButton(text="✅ Газ"),
-        ],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard=keyboard,
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
-
-===== Bot/keyboards/household.py =====
-
-"""Keyboards for household payments."""
-from aiogram.types import (
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    ReplyKeyboardMarkup,
-)
-
-
-def household_payments_answer_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard with Yes/No and Back options for household payments."""
-
-    buttons = [
-        [
-            KeyboardButton(text="✅ Да"),
-            KeyboardButton(text="❌ Нет"),
-            KeyboardButton(text="⬅️ Назад"),
-        ]
-    ]
-    return ReplyKeyboardMarkup(
-        keyboard=buttons,
-        resize_keyboard=True,
-        one_time_keyboard=False,
-    )
-
-
-def household_payments_inline_keyboard(
-    show_back: bool, question_code: str | None = None
-) -> InlineKeyboardMarkup:
-    """Inline keyboard with Yes/No/Back options for household payments."""
-
-    suffix = f":{question_code}" if question_code else ""
-    buttons = [
-        [
-            InlineKeyboardButton(text="Да", callback_data=f"hh_pay:yes{suffix}"),
-            InlineKeyboardButton(text="Нет", callback_data=f"hh_pay:no{suffix}"),
-        ]
-    ]
-    if show_back:
-        buttons[0].append(
-            InlineKeyboardButton(text="Назад", callback_data=f"hh_pay:back{suffix}")
-        )
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-===== Bot/keyboards/main.py =====
-
-"""Keyboard definitions."""
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
-
-
-def main_menu_keyboard(
-    show_household: bool = False,
-    show_test_button: bool = False,
-    show_settings: bool = True,
-) -> ReplyKeyboardMarkup:
-    """Create main menu keyboard."""
-
-    buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
-    if show_household:
-        buttons.append([KeyboardButton(text="Бытовые платежи")])
-    if show_settings:
-        buttons.append([KeyboardButton(text="⚙️")])
-    if show_test_button:
-        buttons.append([KeyboardButton(text="Проверить напоминания")])  # TODO: удалить после тестов
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def yes_no_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard with Yes/No options."""
-
-    buttons = [[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
-
-
-def yes_no_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard with Yes/No options to avoid opening system keyboard."""
-
-    buttons = [
-        [
-            InlineKeyboardButton(text="Да", callback_data="confirm_yes"),
-            InlineKeyboardButton(text="Нет", callback_data="confirm_no"),
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def back_to_main_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard with back to main option."""
-
-    buttons = [[KeyboardButton(text="⏪ На главную")]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def back_only_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard with a single back button."""
-
-    buttons = [[KeyboardButton(text="⬅️ Назад")]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def wishlist_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard for wishlist actions."""
-
-    buttons = [[KeyboardButton(text="➕"), KeyboardButton(text="Купленное")], [KeyboardButton(text="⏪ На главную")]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
-    """Keyboard for wishlist actions without add button (+)."""
-

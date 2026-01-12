@@ -1,3 +1,48 @@
+    if message is None:
+        return
+
+    if user_id is None:
+        user_id = message.from_user.id if message.from_user else None
+
+    if user_id is None:
+        return
+
+    db = db or get_db()
+    savings_map = db.get_user_savings_map(user_id)
+    wishes = db.get_wishes_by_user(user_id)
+    debit_category = db.get_wishlist_debit_category(user_id)
+    if not debit_category:
+        return
+    if not db.get_income_category_by_code(user_id, debit_category):
+        return
+
+    affordable: List[Dict[str, Any]] = []
+    for wish in wishes:
+        if wish.get("is_purchased"):
+            continue
+
+        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
+        price = _to_float(wish.get("price"))
+        available = _to_float(savings_map.get(debit_category))
+        if price <= 0 or available < price:
+            continue
+
+        wish_copy: Dict[str, Any] = dict(wish)
+        wish_copy["price"] = price
+        wish_copy["wishlist_category"] = wishlist_category
+        affordable.append(wish_copy)
+
+    if not affordable:
+        return
+
+    lines = ["Ты уже можешь купить:"]
+    for wish in affordable:
+        lines.append(
+            f"• {wish['name']} — {wish['price']:.2f} ₽ (категория: {wish['wishlist_category']})"
+        )
+    lines.append("Нажми на кнопку под нужным товаром, если купил.")
+
+    keyboard = _build_affordable_wishes_keyboard(affordable)
     await message.answer("\n".join(lines), reply_markup=keyboard)
 
 
@@ -1101,6 +1146,9 @@ from Bot.states.wishlist_states import (
     WishlistSettingsState,
 )
 from Bot.utils.datetime_utils import current_month_str
+from Bot.utils.messages import ERR_INVALID_INPUT, HINT_TIME_FORMAT
+from Bot.utils.number_input import parse_int_choice, parse_positive_int
+from Bot.utils.time_input import normalize_time_partial
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.telegram_safe import (
     safe_delete_message,
@@ -1190,23 +1238,6 @@ async def _apply_reply_keyboard(message: Message, reply_markup: ReplyKeyboardMar
             message_id=temp.message_id,
             logger=LOGGER,
         )
-
-
-def _parse_time_text(raw: str) -> tuple[int, int] | None:
-    value = raw.strip()
-    if ":" not in value:
-        return None
-    parts = value.split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        return None
-    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
-        return None
-    return hour, minute
 
 
 async def _cleanup_input_ui(
@@ -1967,35 +1998,3 @@ async def _render_byt_timer_delete_menu(
         reply_markup=byt_timer_times_select_keyboard(times, "bt:del_time")
         if times
         else byt_timer_inline_keyboard(),
-    )
-
-
-async def render_settings_screen(
-    screen_id: str,
-    *,
-    message: Message,
-    state: FSMContext,
-    error_message: str | None = None,
-    force_new: bool = False,
-) -> None:
-    db = get_db()
-    data = await state.get_data()
-    user_id = message.from_user.id
-    if message.from_user.id == message.bot.id:
-        user_id = data.get("settings_user_id") or message.from_user.id
-    if screen_id == "st:home":
-        await _render_settings_home(message, state)
-    elif screen_id == "st:income":
-        await _render_income_settings(
-            state=state,
-            message=message,
-            db=db,
-            user_id=user_id,
-            error_message=error_message,
-        )
-    elif screen_id == "inc:del_menu":
-        await _render_income_delete_menu(
-            state=state, message=message, db=db, user_id=user_id
-        )
-    elif screen_id == "inc:pct_menu":
-        await _render_income_percent_menu(

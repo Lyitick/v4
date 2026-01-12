@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from Bot.constants.ui import WELCOME_TEXT
+from Bot.constants.ui_labels import NAV_HOME
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.utils.ui_cleanup import (
     ui_cleanup_messages,
@@ -91,7 +92,7 @@ async def cmd_cancel(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(F.text.in_({"⏪ На главную", "🏠 На главную"}))
+@router.message(F.text.in_({NAV_HOME, "⏪ На главную", "🏠 На главную"}))
 async def back_to_main(message: Message, state: FSMContext) -> None:
     """Return user to main menu."""
 

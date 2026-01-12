@@ -1,6 +1,8 @@
 """Keyboard definitions."""
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from Bot.constants.ui_labels import NAV_BACK, NAV_HOME
+
 
 def main_menu_keyboard(
     show_household: bool = False,
@@ -41,21 +43,24 @@ def yes_no_inline_keyboard() -> InlineKeyboardMarkup:
 def back_to_main_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard with back to main option."""
 
-    buttons = [[KeyboardButton(text="⏪ На главную")]]
+    buttons = [[KeyboardButton(text=NAV_HOME)]]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
 def back_only_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard with a single back button."""
 
-    buttons = [[KeyboardButton(text="⬅️ Назад")]]
+    buttons = [[KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)]]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
 def wishlist_reply_keyboard() -> ReplyKeyboardMarkup:
     """Keyboard for wishlist actions."""
 
-    buttons = [[KeyboardButton(text="➕"), KeyboardButton(text="Купленное")], [KeyboardButton(text="⏪ На главную")]]
+    buttons = [
+        [KeyboardButton(text="➕"), KeyboardButton(text="Купленное")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+    ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -64,7 +69,7 @@ def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
 
     buttons = [
         [KeyboardButton(text="Купленное")],
-        [KeyboardButton(text="⏪ На главную")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 

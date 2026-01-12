@@ -1,1834 +1,3 @@
-                    f"UPDATE {TABLES.savings} SET goal = ?, purpose = ? WHERE id = ?",
-                    (goal, purpose, row["id"]),
-                )
-            else:
-                cursor.execute(
-                    f"INSERT INTO {TABLES.savings} (user_id, category, current, goal, purpose) VALUES (?, ?, 0, ?, ?)",
-                    (user_id, category, goal, goal, purpose),
-                )
-            self.connection.commit()
-            LOGGER.info("Set goal for user %s category %s", user_id, category)
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to set goal for user %s category %s: %s", user_id, category, error)
-
-    def reset_goals(self, user_id: int) -> None:
-        """Reset goals for user."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"UPDATE {TABLES.savings} SET goal = 0, purpose = '' WHERE user_id = ?",
-                (user_id,),
-            )
-            self.connection.commit()
-            LOGGER.info("Reset goals for user %s", user_id)
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to reset goals for user %s: %s", user_id, error)
-
-    def add_wish(self, user_id: int, name: str, price: float, url: Optional[str], category: str) -> int:
-        """Add a wish to the wishlist."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"INSERT INTO {TABLES.wishes} (user_id, name, price, url, category, is_purchased, saved_amount, purchased_at) VALUES (?, ?, ?, ?, ?, 0, 0, NULL)",
-                (user_id, name, price, url, category),
-            )
-            self.connection.commit()
-            wish_id = cursor.lastrowid
-            LOGGER.info("Added wish %s for user %s", wish_id, user_id)
-            return wish_id
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to add wish for user %s: %s", user_id, error)
-            return 0
-
-    def get_wishes_by_user(self, user_id: int) -> List[Dict[str, Any]]:
-        """Get all wishes for a user."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until
-                FROM {TABLES.wishes}
-                WHERE user_id = ?
-                """,
-                (user_id,),
-            )
-            rows = cursor.fetchall()
-            LOGGER.info("Fetched wishes for user %s", user_id)
-            return [dict(row) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to fetch wishes for user %s: %s", user_id, error)
-            return []
-
-    def get_wish(self, wish_id: int) -> Optional[Dict[str, Any]]:
-        """Get wish by id."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until
-                FROM {TABLES.wishes}
-                WHERE id = ?
-                """,
-                (wish_id,),
-            )
-            row = cursor.fetchone()
-            LOGGER.info("Fetched wish %s", wish_id)
-            return dict(row) if row else None
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to fetch wish %s: %s", wish_id, error)
-            return None
-
-    def get_active_byt_wishes(self, user_id: int, category_title: str) -> List[Dict[str, Any]]:
-        """Return active BYT wishes for user and category."""
-
-        if not category_title:
-            return []
-        try:
-            cursor = self.connection.cursor()
-            category_sql = "lower(trim(category)) = lower(trim(?))"
-            params: tuple[Any, ...] = (user_id, category_title)
-            if category_title.strip().casefold() == "быт":
-                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
-            cursor.execute(
-                f"""
-                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
-                FROM {TABLES.wishes}
-                WHERE user_id = ?
-                  AND {category_sql}
-                  AND (is_purchased = 0 OR is_purchased IS NULL)
-                ORDER BY id
-                """,
-                params,
-            )
-            rows = cursor.fetchall()
-            LOGGER.info("Fetched active BYT wishes for user %s", user_id)
-            return [dict(row) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to fetch BYT wishes for user %s: %s", user_id, error)
-            return []
-
-    def list_active_byt_items_for_reminder(
-        self, user_id: int, now_dt: datetime, category_title: str
-    ) -> List[Dict[str, Any]]:
-        """Return BYT wishlist items available for reminders at given time."""
-
-        if not category_title:
-            return []
-        try:
-            cursor = self.connection.cursor()
-            category_sql = "lower(trim(category)) = lower(trim(?))"
-            params: tuple[Any, ...] = (user_id, category_title, now_dt.isoformat())
-            if category_title.strip().casefold() == "быт":
-                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
-            cursor.execute(
-                f"""
-                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, deferred_until
-                FROM {TABLES.wishes}
-                WHERE user_id = ?
-                  AND {category_sql}
-                  AND (is_purchased = 0 OR is_purchased IS NULL)
-                  AND (deferred_until IS NULL OR deferred_until <= ?)
-                ORDER BY id
-                """,
-                params,
-            )
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to fetch BYT reminder wishes for user %s: %s", user_id, error
-            )
-            return []
-
-    def set_wishlist_item_deferred_until(
-        self, user_id: int, item_id: int, deferred_until_iso: Optional[str]
-    ) -> None:
-        """Set deferred_until for wishlist item."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.wishes}
-                SET deferred_until = ?
-                WHERE id = ? AND user_id = ?
-                """,
-                (deferred_until_iso, item_id, user_id),
-            )
-            self.connection.commit()
-            LOGGER.info(
-                "Set deferred_until for wish %s user %s to %s",
-                item_id,
-                user_id,
-                deferred_until_iso,
-            )
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to set deferred_until for wish %s user %s: %s",
-                item_id,
-                user_id,
-                error,
-            )
-
-    def mark_wish_purchased(self, wish_id: int, purchased_at: Optional[datetime] = None) -> None:
-        """Mark wish as purchased with timestamp."""
-
-        try:
-            cursor = self.connection.cursor()
-            purchased_value = (purchased_at or now_tz()).isoformat()
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.wishes}
-                SET is_purchased = 1, purchased_at = ?, deferred_until = NULL
-                WHERE id = ?
-                """,
-                (purchased_value, wish_id),
-            )
-            self.connection.commit()
-            LOGGER.info("Marked wish %s as purchased", wish_id)
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to mark wish %s as purchased: %s", wish_id, error)
-
-    def purchase_wish(
-        self, user_id: int, wish_id: int, debit_category: str | None
-    ) -> Dict[str, Any]:
-        """Purchase wish with debit in a single transaction."""
-
-        cursor = self.connection.cursor()
-        try:
-            cursor.execute("BEGIN IMMEDIATE")
-            cursor.execute(
-                f"""
-                SELECT id, user_id, name, price, category, is_purchased, debited_at
-                FROM {TABLES.wishes}
-                WHERE id = ? AND user_id = ?
-                LIMIT 1
-                """,
-                (wish_id, user_id),
-            )
-            row = cursor.fetchone()
-            if not row:
-                cursor.execute("ROLLBACK")
-                return {"status": "not_found"}
-
-            if row["is_purchased"] or row["debited_at"]:
-                cursor.execute("ROLLBACK")
-                return {"status": "already"}
-
-            price = self._to_float(row["price"])
-            if price <= 0 or debit_category is None:
-                purchased_value = now_tz().isoformat()
-                cursor.execute(
-                    f"""
-                    UPDATE {TABLES.wishes}
-                    SET is_purchased = 1, purchased_at = ?, deferred_until = NULL
-                    WHERE id = ?
-                    """,
-                    (purchased_value, wish_id),
-                )
-                cursor.execute(
-                    f"""
-                    INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
-                    (user_id, row["name"], price, row["category"], purchased_value),
-                )
-                cursor.execute("COMMIT")
-                return {
-                    "status": "no_debit",
-                    "price": price,
-                    "wish_name": row["name"],
-                    "category": row["category"],
-                }
-
-            cursor.execute(
-                f"SELECT id, current FROM {TABLES.savings} WHERE user_id = ? AND category = ?",
-                (user_id, debit_category),
-            )
-            savings_row = cursor.fetchone()
-            savings_before = self._to_float(savings_row["current"]) if savings_row else 0.0
-            if savings_before < price:
-                cursor.execute("ROLLBACK")
-                return {
-                    "status": "insufficient",
-                    "price": price,
-                    "available": savings_before,
-                }
-
-            self._update_saving_in_transaction(cursor, user_id, debit_category, -price)
-            purchased_value = now_tz().isoformat()
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.wishes}
-                SET is_purchased = 1, purchased_at = ?, debited_at = ?, deferred_until = NULL
-                WHERE id = ?
-                """,
-                (purchased_value, purchased_value, wish_id),
-            )
-            cursor.execute(
-                f"""
-                INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (user_id, row["name"], price, row["category"], purchased_value),
-            )
-            cursor.execute("COMMIT")
-            return {
-                "status": "debited",
-                "price": price,
-                "wish_name": row["name"],
-                "category": row["category"],
-                "savings_before": savings_before,
-            }
-        except sqlite3.Error as error:
-            cursor.execute("ROLLBACK")
-            LOGGER.error("Failed to purchase wish %s for user %s: %s", wish_id, user_id, error)
-            return {"status": "error"}
-
-    def add_purchase(
-        self,
-        user_id: int,
-        wish_name: str,
-        price: float,
-        category: str,
-        purchased_at: Optional[datetime] = None,
-    ) -> None:
-        """Add purchase record."""
-
-        try:
-            cursor = self.connection.cursor()
-            purchased_value = (purchased_at or now_tz()).isoformat()
-            cursor.execute(
-                f"INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at) VALUES (?, ?, ?, ?, ?)",
-                (user_id, wish_name, price, category, purchased_value),
-            )
-            self.connection.commit()
-            LOGGER.info("Added purchase for user %s", user_id)
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to add purchase for user %s: %s", user_id, error)
-
-    async def household_status_exists(self, user_id: int, month: str) -> bool:
-        """Check if household payment statuses exist for month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"SELECT 1 FROM {TABLES.household_payments} WHERE user_id = ? AND month = ? LIMIT 1",
-                (user_id, month),
-            )
-            return cursor.fetchone() is not None
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to check household status for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return False
-
-    async def init_household_questions_for_month(self, user_id: int, month: str) -> None:
-        """Initialize household payment questions for month."""
-
-        try:
-            if BOT_USER_ID is not None and user_id == BOT_USER_ID:
-                LOGGER.warning(
-                    "Skipping household questions init for bot user %s", user_id
-                )
-                return
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                INSERT OR IGNORE INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
-                SELECT ?, ?, code, 0
-                FROM {TABLES.household_payment_items}
-                WHERE user_id = ? AND is_active = 1
-                """,
-                (user_id, month, user_id),
-            )
-            self.connection.commit()
-            LOGGER.info(
-                "Initialized household questions for user %s month %s", user_id, month
-            )
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to init household questions for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-
-    async def mark_household_question_paid(
-        self, user_id: int, month: str, question_code: str
-    ) -> None:
-        """Mark household question as paid."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
-                VALUES (?, ?, ?, 1)
-                ON CONFLICT(user_id, month, question_code)
-                DO UPDATE SET is_paid = excluded.is_paid
-                """,
-                (user_id, month, question_code),
-            )
-            self.connection.commit()
-            LOGGER.info(
-                "Marked household question %s as paid for user %s month %s",
-                question_code,
-                user_id,
-                month,
-            )
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to mark household question %s paid for user %s month %s: %s",
-                question_code,
-                user_id,
-                month,
-                error,
-            )
-
-    async def mark_household_question_unpaid(
-        self, user_id: int, month: str, question_code: str
-    ) -> None:
-        """Mark household question as unpaid."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
-                VALUES (?, ?, ?, 0)
-                ON CONFLICT(user_id, month, question_code)
-                DO UPDATE SET is_paid = excluded.is_paid
-                """,
-                (user_id, month, question_code),
-            )
-            self.connection.commit()
-            LOGGER.info(
-                "Marked household question %s as unpaid for user %s month %s",
-                question_code,
-                user_id,
-                month,
-            )
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to mark household question %s unpaid for user %s month %s: %s",
-                question_code,
-                user_id,
-                month,
-                error,
-            )
-
-    def apply_household_payment_answer(
-        self,
-        user_id: int,
-        month: str,
-        question_code: str,
-        amount: float | None,
-        answer: str,
-        debit_category: str | None = None,
-    ) -> bool:
-        """Apply household answer and savings update atomically.
-
-        Returns True if state changed, False if it was already applied.
-        """
-
-        try:
-            cursor = self.connection.cursor()
-            self.connection.execute("BEGIN")
-            cursor.execute(
-                f"""
-                SELECT is_paid
-                FROM {TABLES.household_payments}
-                WHERE user_id = ? AND month = ? AND question_code = ?
-                """,
-                (user_id, month, question_code),
-            )
-            row = cursor.fetchone()
-            if row is None:
-                cursor.execute(
-                    f"""
-                    INSERT INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
-                    VALUES (?, ?, ?, 0)
-                    """,
-                    (user_id, month, question_code),
-                )
-                current_paid = 0
-            else:
-                current_paid = int(row["is_paid"])
-
-            target_paid = 1 if answer == "yes" else 0
-            if current_paid == target_paid:
-                self.connection.commit()
-                return False
-
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.household_payments}
-                SET is_paid = ?
-                WHERE user_id = ? AND month = ? AND question_code = ?
-                """,
-                (target_paid, user_id, month, question_code),
-            )
-            if amount is not None:
-                delta = -abs(amount) if answer == "yes" else abs(amount)
-                target_category = debit_category or "быт"
-                self._update_saving_in_transaction(cursor, user_id, target_category, delta)
-            self.connection.commit()
-            return True
-        except sqlite3.Error as error:
-            self.connection.rollback()
-            LOGGER.error(
-                "Failed to apply household answer for user %s month %s code %s: %s",
-                user_id,
-                month,
-                question_code,
-                error,
-            )
-            return False
-
-    async def get_unpaid_household_questions(self, user_id: int, month: str) -> List[str]:
-        """Get unpaid household question codes for user and month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT items.code
-                FROM {TABLES.household_payment_items} AS items
-                LEFT JOIN {TABLES.household_payments} AS payments
-                  ON payments.user_id = items.user_id
-                 AND payments.month = ?
-                 AND payments.question_code = items.code
-                WHERE items.user_id = ?
-                  AND items.is_active = 1
-                  AND COALESCE(payments.is_paid, 0) = 0
-                ORDER BY items.position, items.id
-                """,
-                (month, user_id),
-            )
-            rows = cursor.fetchall()
-            return [row["code"] for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to get unpaid household questions for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return []
-
-    async def get_household_payment_status_map(
-        self, user_id: int, month: str
-    ) -> Dict[str, int]:
-        """Return mapping: question_code -> is_paid (0/1) for the given month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT items.code, COALESCE(payments.is_paid, 0) AS is_paid
-                FROM {TABLES.household_payment_items} AS items
-                LEFT JOIN {TABLES.household_payments} AS payments
-                  ON payments.user_id = items.user_id
-                 AND payments.month = ?
-                 AND payments.question_code = items.code
-                WHERE items.user_id = ? AND items.is_active = 1
-                """,
-                (month, user_id),
-            )
-            rows = cursor.fetchall()
-            return {row["code"]: int(row["is_paid"]) for row in rows}
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to get household payment status for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return {}
-
-    async def has_unpaid_household_questions(self, user_id: int, month: str) -> bool:
-        """Return True if unpaid household questions exist for month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT 1
-                FROM {TABLES.household_payment_items} AS items
-                LEFT JOIN {TABLES.household_payments} AS payments
-                  ON payments.user_id = items.user_id
-                 AND payments.month = ?
-                 AND payments.question_code = items.code
-                WHERE items.user_id = ?
-                  AND items.is_active = 1
-                  AND COALESCE(payments.is_paid, 0) = 0
-                LIMIT 1
-                """,
-                (month, user_id),
-            )
-            return cursor.fetchone() is not None
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to check unpaid household questions for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return False
-
-    async def should_show_household_payments_button(
-        self, user_id: int, month: str
-    ) -> bool:
-        """Return True if any active household payment is unpaid for the month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT 1
-                FROM {TABLES.household_payment_items} AS items
-                LEFT JOIN {TABLES.household_payments} AS payments
-                  ON payments.user_id = items.user_id
-                 AND payments.month = ?
-                 AND payments.question_code = items.code
-                WHERE items.user_id = ?
-                  AND items.is_active = 1
-                  AND COALESCE(payments.is_paid, 0) = 0
-                LIMIT 1
-                """,
-                (month, user_id),
-            )
-            return cursor.fetchone() is not None
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to decide household payments button for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-            return False
-
-    async def reset_household_questions_for_month(self, user_id: int, month: str) -> None:
-        """Reset household payment progress for a specific month."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.household_payments}
-                SET is_paid = 0
-                WHERE user_id = ? AND month = ?
-                """,
-                (user_id, month),
-            )
-            cursor.execute(
-                f"""
-                INSERT OR IGNORE INTO {TABLES.household_payments} (user_id, month, question_code, is_paid)
-                SELECT ?, ?, code, 0
-                FROM {TABLES.household_payment_items}
-                WHERE user_id = ? AND is_active = 1
-                """,
-                (user_id, month, user_id),
-            )
-            self.connection.commit()
-            LOGGER.info(
-                "Reset household questions for user %s month %s", user_id, month
-            )
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to reset household questions for user %s month %s: %s",
-                user_id,
-                month,
-                error,
-            )
-
-    def get_purchases_by_user(self, user_id: int) -> List[Dict[str, Any]]:
-        """Get purchases for user honoring retention settings."""
-
-        self.ensure_user_settings(user_id)
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"SELECT id, wish_name, price, category, purchased_at FROM {TABLES.purchases} WHERE user_id = ? ORDER BY purchased_at DESC",
-                (user_id,),
-            )
-            rows = cursor.fetchall()
-            LOGGER.info("Fetched purchases for user %s", user_id)
-            purchases = [dict(row) for row in rows]
-            filtered: list[Dict[str, Any]] = []
-            current_time = now_tz()
-            settings_row = self.get_user_settings(user_id)
-            default_days = int(settings_row.get("purchased_keep_days", 30) or 30)
-            categories = self.list_active_wishlist_categories(user_id)
-            category_map = {
-                cat.get("title", ""): {
-                    "mode": (cat.get("purchased_mode") or "days"),
-                    "days": int(cat.get("purchased_days") or default_days),
-                }
-                for cat in categories
-            }
-            for purchase in purchases:
-                cat_settings = category_map.get(
-                    str(purchase.get("category", "")),
-                    {"mode": "days", "days": default_days},
-                )
-                if cat_settings.get("mode") == "always":
-                    filtered.append(purchase)
-                    continue
-                keep_delta = timedelta(days=int(cat_settings.get("days", default_days)))
-                timestamp = purchase.get("purchased_at")
-                if timestamp:
-                    try:
-                        purchase_dt = datetime.fromisoformat(str(timestamp))
-                        if purchase_dt.tzinfo is None:
-                            purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
-                    except ValueError:
-                        continue
-                    if purchase_dt + keep_delta <= current_time:
-                        continue
-                filtered.append(purchase)
-            return filtered
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to fetch purchases for user %s: %s", user_id, error)
-            return []
-
-    def list_active_byt_timer_times(self, user_id: int) -> List[Dict[str, Any]]:
-        """Return active BYT timer times for user."""
-
-        self.ensure_byt_timer_defaults(user_id)
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, hour, minute
-                FROM {TABLES.byt_timer_times}
-                WHERE user_id = ? AND is_active = 1
-                ORDER BY hour, minute, id
-                """,
-                (user_id,),
-            )
-            rows = cursor.fetchall()
-            return [dict(row) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to fetch BYT timer times for user %s: %s", user_id, error
-            )
-            return []
-
-    def add_byt_timer_time(self, user_id: int, hour: int, minute: int) -> Optional[int]:
-        """Add a new BYT timer time if not duplicate."""
-
-        self.ensure_byt_timer_defaults(user_id)
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT id FROM {TABLES.byt_timer_times}
-                WHERE user_id = ? AND hour = ? AND minute = ? AND is_active = 1
-                LIMIT 1
-                """,
-                (user_id, hour, minute),
-            )
-            existing = cursor.fetchone()
-            if existing:
-                return int(existing["id"])
-
-            cursor.execute(
-                f"""
-                INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
-                VALUES (?, ?, ?, 1)
-                """,
-                (user_id, hour, minute),
-            )
-            self.connection.commit()
-            return cursor.lastrowid
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to add BYT timer time for user %s: %s", user_id, error)
-            return None
-
-    def deactivate_byt_timer_time(self, user_id: int, timer_id: int) -> None:
-        """Deactivate specific BYT timer time."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                UPDATE {TABLES.byt_timer_times}
-                SET is_active = 0
-                WHERE user_id = ? AND id = ?
-                """,
-                (user_id, timer_id),
-            )
-            self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error(
-                "Failed to deactivate BYT timer time %s for user %s: %s",
-                timer_id,
-                user_id,
-                error,
-            )
-
-    def reset_byt_timer_times(self, user_id: int) -> None:
-        """Reset BYT timer times to defaults."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"UPDATE {TABLES.byt_timer_times} SET is_active = 0 WHERE user_id = ?",
-                (user_id,),
-            )
-            for hour, minute in [(12, 0), (18, 0)]:
-                cursor.execute(
-                    f"""
-                    INSERT INTO {TABLES.byt_timer_times} (user_id, hour, minute, is_active)
-                    VALUES (?, ?, ?, 1)
-                    """,
-                    (user_id, hour, minute),
-                )
-            self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to reset BYT timer times for user %s: %s", user_id, error)
-
-    def get_users_with_byt_timer_times(self) -> List[int]:
-        """Return users that have BYT timer times configured."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT DISTINCT user_id
-                FROM {TABLES.byt_timer_times}
-                WHERE is_active = 1
-                """
-            )
-            rows = cursor.fetchall()
-            return [int(row["user_id"]) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to get users with BYT timer times: %s", error)
-            return []
-
-    def get_users_with_active_byt_wishes(self) -> List[int]:
-        """Return user ids that have active BYT wishes."""
-
-        try:
-            cursor = self.connection.cursor()
-            cursor.execute(
-                f"""
-                SELECT DISTINCT user_id
-                FROM {TABLES.wishes}
-                WHERE is_purchased = 0 OR is_purchased IS NULL
-                """
-            )
-            rows = cursor.fetchall()
-            return [int(row["user_id"]) for row in rows]
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to get users with active BYT wishes: %s", error)
-            return []
-
-    def cleanup_old_byt_purchases(
-        self, user_id: int, category_title: str, now: Optional[datetime] = None
-    ) -> None:
-        """Remove BYT purchases older than one month from purchases and wishes."""
-
-        if not category_title:
-            return
-        current_time = now or now_tz()
-        try:
-            cursor = self.connection.cursor()
-            category_sql = "lower(trim(category)) = lower(trim(?))"
-            params: tuple[Any, ...] = (user_id, category_title)
-            if category_title.strip().casefold() == "быт":
-                category_sql = "lower(trim(category)) IN (lower(trim(?)), 'byt')"
-
-            cursor.execute(
-                f"""
-                SELECT id, purchased_at
-                FROM {TABLES.purchases}
-                WHERE user_id = ?
-                  AND {category_sql}
-                """,
-                params,
-            )
-            purchases = cursor.fetchall()
-            ids_to_delete: list[int] = []
-            for purchase in purchases:
-                timestamp = purchase["purchased_at"]
-                if not timestamp:
-                    continue
-                try:
-                    purchase_dt = datetime.fromisoformat(timestamp)
-                    if purchase_dt.tzinfo is None:
-                        purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
-                except ValueError:
-                    continue
-                if add_one_month(purchase_dt) <= current_time:
-                    ids_to_delete.append(int(purchase["id"]))
-
-            if ids_to_delete:
-                placeholders = ",".join("?" * len(ids_to_delete))
-                query = "DELETE FROM {} WHERE id IN ({})".format(
-                    TABLES.purchases,
-                    placeholders,
-                )
-                cursor.execute(
-                    query,
-                    ids_to_delete,
-                )
-
-            cursor.execute(
-                f"""
-                SELECT id, purchased_at
-                FROM {TABLES.wishes}
-                WHERE user_id = ?
-                  AND {category_sql}
-                  AND is_purchased = 1
-                """,
-                params,
-            )
-            wish_rows = cursor.fetchall()
-            wish_ids: list[int] = []
-            for wish in wish_rows:
-                purchased_at = wish["purchased_at"]
-                if not purchased_at:
-                    continue
-                try:
-                    wish_dt = datetime.fromisoformat(purchased_at)
-                    if wish_dt.tzinfo is None:
-                        wish_dt = wish_dt.replace(tzinfo=settings.TIMEZONE)
-                except ValueError:
-                    continue
-                if add_one_month(wish_dt) <= current_time:
-                    wish_ids.append(int(wish["id"]))
-
-            if wish_ids:
-                placeholders = ",".join("?" * len(wish_ids))
-                query = "DELETE FROM {} WHERE id IN ({})".format(
-                    TABLES.wishes,
-                    placeholders,
-                )
-                cursor.execute(
-                    query,
-                    wish_ids,
-                )
-            if ids_to_delete or wish_ids:
-                self.connection.commit()
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to cleanup old BYT purchases: %s", error)
-
-    def close(self) -> None:
-        """Close database connection."""
-
-        try:
-            self.connection.close()
-            LOGGER.info("Database connection closed")
-        except sqlite3.Error as error:
-            LOGGER.error("Failed to close database connection: %s", error)
-
-===== Bot/database/get_db.py =====
-
-"""Database accessor for a shared FinanceDatabase instance."""
-from __future__ import annotations
-
-from Bot.database.crud import FinanceDatabase
-
-_DB_INSTANCE: FinanceDatabase | None = None
-
-
-def get_db() -> FinanceDatabase:
-    global _DB_INSTANCE
-    if _DB_INSTANCE is None:
-        _DB_INSTANCE = FinanceDatabase()
-    return _DB_INSTANCE
-
-===== Bot/database/models.py =====
-
-"""Database model helpers."""
-from dataclasses import dataclass
-from typing import Optional
-
-
-@dataclass
-class Saving:
-    """Saving record representation."""
-
-    id: int
-    user_id: int
-    category: str
-    current: float
-    goal: float
-    purpose: str
-
-
-@dataclass
-class Wish:
-    """Wish record representation."""
-
-    id: int
-    user_id: int
-    name: str
-    price: float
-    url: Optional[str]
-    category: str
-    is_purchased: bool
-    saved_amount: float
-    purchased_at: Optional[str]
-    deferred_until: Optional[str]
-
-
-@dataclass
-class Purchase:
-    """Purchase record representation."""
-
-    id: int
-    user_id: int
-    wish_name: str
-    price: float
-    category: str
-    purchased_at: str
-
-===== Bot/handlers/__init__.py =====
-
-
-===== Bot/handlers/callbacks.py =====
-
-"""Callback query handlers."""
-import logging
-from typing import Dict
-from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup
-
-from Bot.database.get_db import get_db
-from Bot.handlers.common import build_main_menu_for_user
-from Bot.handlers.finances import (
-    _format_savings_summary,
-    show_affordable_wishes,
-)
-from Bot.keyboards.main import back_only_keyboard, wishlist_categories_keyboard
-from Bot.states.wishlist_states import WishlistState
-from Bot.handlers.wishlist import (
-    _get_user_wishlist_categories,
-    humanize_wishlist_category,
-)
-from Bot.utils.telegram_safe import (
-    safe_answer,
-    safe_callback_answer,
-    safe_delete_message,
-    safe_edit_message_text,
-)
-from Bot.utils.ui_cleanup import ui_register_message
-
-LOGGER = logging.getLogger(__name__)
-
-router = Router()
-
-@router.callback_query(F.data.startswith("wlcat:"))
-async def handle_category_selection(callback: CallbackQuery, state: FSMContext) -> None:
-    """Handle category selection for viewing or adding wishes."""
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    try:
-        category_id = int(callback.data.split(":")[1])
-    except (IndexError, ValueError):
-        await safe_callback_answer(callback, "Некорректная категория", show_alert=True, logger=LOGGER)
-        return
-
-    db = get_db()
-    category_row = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
-    if not category_row:
-        await safe_callback_answer(callback, "Категория не найдена", show_alert=True, logger=LOGGER)
-        return
-
-    category_code = category_row.get("title", "")
-    category = humanize_wishlist_category(category_code)
-    data = await state.get_data()
-    current_state = await state.get_state()
-
-    if current_state == WishlistState.waiting_for_category.state:
-        await _finalize_wish(callback, state, category_code, category)
-        return
-
-    await _send_wishes_list(callback, category)
-
-
-@router.callback_query(F.data == "wishlist_skip_url")
-async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
-    """Skip wishlist URL step via inline button."""
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    current_state = await state.get_state()
-    if current_state != WishlistState.waiting_for_url.state:
-        return
-
-    await state.update_data(url=None)
-    await state.set_state(WishlistState.waiting_for_category)
-    data = await state.get_data()
-    stack = list(data.get("wl_add_step_stack") or [])
-    if not stack or stack[-1] != "category":
-        stack.append("category")
-    await state.update_data(wl_add_step_stack=stack)
-    if callback.message:
-        await safe_delete_message(
-            callback.message.bot,
-            chat_id=callback.message.chat.id,
-            message_id=callback.message.message_id,
-            logger=LOGGER,
-        )
-        categories = _get_user_wishlist_categories(get_db(), callback.from_user.id)
-        if not categories:
-            await safe_answer(
-                callback.message,
-                "Категорий вишлиста пока нет. Добавь их в настройках.",
-                reply_markup=back_only_keyboard(),
-                logger=LOGGER,
-            )
-            await state.clear()
-            return
-        await safe_answer(
-            callback.message,
-            "Выбери категорию желания.",
-            reply_markup=wishlist_categories_keyboard(
-                categories
-            ),
-            logger=LOGGER,
-        )
-        await safe_answer(
-            callback.message,
-            "Если нужно, нажми ⬅️ Назад.",
-            reply_markup=back_only_keyboard(),
-            logger=LOGGER,
-        )
-
-
-async def _finalize_wish(
-    callback: CallbackQuery,
-    state: FSMContext,
-    category_code: str,
-    humanized_category: str,
-) -> None:
-    """Finalize wish creation after category selection."""
-
-    db = get_db()
-    data = await state.get_data()
-    wish_id = db.add_wish(
-        user_id=callback.from_user.id,
-        name=data.get("name", ""),
-        price=float(data.get("price", 0)),
-        url=data.get("url"),
-        category=category_code,
-    )
-    lines = [
-        f"Категория: {humanized_category}",
-        f"Название: {data.get('name')}",
-        f"Цена: {data.get('price')}",
-        f"ID: {wish_id}",
-    ]
-    url = data.get("url")
-    if url:
-        lines.insert(3, f"Ссылка: {url}")
-    if callback.message:
-        info_id = await safe_answer(callback.message, "\n".join(lines), logger=LOGGER)
-        if info_id:
-            await ui_register_message(state, callback.message.chat.id, info_id)
-        sent_id = await safe_answer(
-            callback.message,
-            "✅ Желание добавлено",
-            reply_markup=await build_main_menu_for_user(callback.from_user.id),
-            logger=LOGGER,
-        )
-        if sent_id:
-            await ui_register_message(state, callback.message.chat.id, sent_id)
-    await state.clear()
-    LOGGER.info("User %s added wish %s", callback.from_user.id, wish_id)
-
-
-async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
-    """Send wishlist items for selected category."""
-
-    db = get_db()
-    wishes = db.get_wishes_by_user(callback.from_user.id)
-    savings_map = db.get_user_savings_map(callback.from_user.id)
-    debit_category = db.get_wishlist_debit_category(callback.from_user.id)
-    saved_amount = (
-        float(savings_map.get(debit_category, 0.0) or 0.0) if debit_category else 0.0
-    )
-    filtered = [
-        wish
-        for wish in wishes
-        if (
-            humanize_wishlist_category(wish.get("category", ""))
-            == humanize_wishlist_category(category)
-        )
-        and not wish.get("is_purchased")
-    ]
-
-    if not filtered:
-        if callback.message:
-            edited = await safe_edit_message_text(
-                callback.message.bot,
-                chat_id=callback.message.chat.id,
-                message_id=callback.message.message_id,
-                text="Желаний в этой категории пока нет.",
-                reply_markup=wishlist_categories_keyboard(
-                    _get_user_wishlist_categories(db, callback.from_user.id)
-                ),
-                logger=LOGGER,
-            )
-            if not edited:
-                await safe_answer(
-                    callback.message,
-                    "Желаний в этой категории пока нет.",
-                    reply_markup=wishlist_categories_keyboard(
-                        _get_user_wishlist_categories(db, callback.from_user.id)
-                    ),
-                    logger=LOGGER,
-                )
-        return
-
-    for wish in filtered:
-        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
-        price = float(wish.get("price", 0) or 0.0)
-
-        if price > 0:
-            progress = min(saved_amount / price, 1.0)
-        else:
-            progress = 0.0
-        total_blocks = 10
-        filled_blocks = int(progress * total_blocks)
-        bar = "■" * filled_blocks + "□" * (total_blocks - filled_blocks)
-        remaining = max(price - saved_amount, 0.0)
-        progress_percent = round(progress * 100)
-
-        lines = [
-            f"{wish['name']} — {price:.2f} ({wishlist_category})",
-            f"Прогресс: {bar} {progress_percent}%",
-            f"Накоплено: {saved_amount:.2f}, осталось: {remaining:.2f}",
-        ]
-        if wish.get("url"):
-            lines.append(f"Ссылка: {wish['url']}")
-        text = "\n".join(lines)
-        inline_kb = InlineKeyboardMarkup(
-            inline_keyboard=[[InlineKeyboardButton(text="Купил", callback_data=f"wish_buy_{wish['id']}")]]
-        )
-        if callback.message:
-            await safe_answer(callback.message, text, reply_markup=inline_kb, logger=LOGGER)
-
-
-@router.callback_query(F.data.startswith("wish_buy_"))
-async def handle_wish_purchase(callback: CallbackQuery) -> None:
-    """Handle purchase of a wish."""
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    wish_id = int(callback.data.split("wish_buy_")[-1])
-    db = get_db()
-    wish = db.get_wish(wish_id)
-
-    if not wish:
-        await safe_callback_answer(callback, "Желание не найдено.", show_alert=True, logger=LOGGER)
-        return
-    if wish.get("is_purchased") or wish.get("debited_at"):
-        await safe_callback_answer(callback, "Уже отмечено как купленное.", logger=LOGGER)
-        return
-
-    wishlist_category = humanize_wishlist_category(wish.get("category"))
-    price = float(wish.get("price", 0) or 0.0)
-    LOGGER.info(
-        "USER=%s ACTION=WISHLIST_PURCHASE META=item_id=%s price=%.2f",
-        callback.from_user.id,
-        wish_id,
-        price,
-    )
-    debit_category = db.get_wishlist_debit_category(callback.from_user.id)
-
-    if debit_category is not None:
-        income_category = db.get_income_category_by_code(callback.from_user.id, debit_category)
-        if not income_category:
-            await safe_callback_answer(
-                "Не удалось списать: категория не найдена/удалена. Выберите категорию списания в настройках Wishlist.",
-                show_alert=True,
-                logger=LOGGER,
-            )
-            return
-
-    result = db.purchase_wish(callback.from_user.id, wish_id, debit_category)
-    status = result.get("status")
-    if status == "not_found":
-        await safe_callback_answer(callback, "Желание не найдено.", show_alert=True, logger=LOGGER)
-        return
-    if status == "already":
-        await safe_callback_answer(callback, "Уже отмечено как купленное.", logger=LOGGER)
-        return
-    if status == "insufficient":
-        await safe_callback_answer(
-            (
-                "Недостаточно средств в накоплениях для этой категории.\n"
-                f"Нужно: {price:.2f}, доступно: {float(result.get('available', 0.0)):.2f}."
-            ),
-            show_alert=True,
-            logger=LOGGER,
-        )
-        return
-    if status == "error":
-        await safe_callback_answer(
-            "Не удалось списать: ошибка базы данных.",
-            show_alert=True,
-            logger=LOGGER,
-        )
-        return
-
-    if callback.message:
-        await safe_edit_message_text(
-            callback.message.bot,
-            chat_id=callback.message.chat.id,
-            message_id=callback.message.message_id,
-            text=f"🎉 Поздравляю, ты купил {wish['name']} за {price:.2f}!",
-            logger=LOGGER,
-        )
-    if status == "debited":
-        LOGGER.info(
-            "USER=%s ACTION=WISHLIST_DEBIT META=category=%s amount=%.2f item_id=%s",
-            callback.from_user.id,
-            debit_category,
-            price,
-            wish_id,
-        )
-        savings = db.get_user_savings(callback.from_user.id)
-        categories_map = db.get_income_categories_map(callback.from_user.id)
-        summary = _format_savings_summary(savings, categories_map)
-        if callback.message:
-            await safe_answer(
-                callback.message, f"Обновлённые накопления:\n{summary}", logger=LOGGER
-            )
-            await show_affordable_wishes(
-                message=callback.message, user_id=callback.from_user.id, db=db
-            )
-
-
-@router.callback_query(F.data == "affordable_wishes_later")
-async def handle_affordable_wishes_later(callback: CallbackQuery, state: FSMContext) -> None:
-    """Close affordable wish suggestions and return to main menu."""
-
-    await safe_callback_answer(callback, logger=LOGGER)
-    await state.clear()
-    if callback.message:
-        try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            LOGGER.debug("Failed to clear inline keyboard for affordable wishes", exc_info=True)
-        sent_id = await safe_answer(
-            callback.message,
-            "Хорошо, вернёмся к покупкам позже. Главное меню.",
-            reply_markup=await build_main_menu_for_user(callback.from_user.id),
-            logger=LOGGER,
-        )
-        if sent_id:
-            await ui_register_message(state, callback.message.chat.id, sent_id)
-
-===== Bot/handlers/common.py =====
-
-"""Common handlers and fallbacks."""
-import logging
-
-from aiogram import Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import Message, ReplyKeyboardMarkup
-
-from Bot.config import settings
-from Bot.database.get_db import get_db
-from Bot.keyboards.main import main_menu_keyboard
-from Bot.utils.datetime_utils import current_month_str
-from Bot.utils.ui_cleanup import ui_register_message
-
-LOGGER = logging.getLogger(__name__)
-
-router = Router()
-
-
-async def build_main_menu_for_user(user_id: int) -> ReplyKeyboardMarkup:
-    """Construct main menu keyboard with optional household button."""
-
-    db = get_db()
-    from Bot.handlers.household_payments import reset_household_cycle_if_needed
-
-    await reset_household_cycle_if_needed(user_id, db)
-    month = current_month_str()
-    show_household = await db.should_show_household_payments_button(user_id, month)
-    show_test_button = user_id == settings.ADMIN_ID
-    return main_menu_keyboard(
-        show_household=show_household,
-        show_test_button=show_test_button,
-        show_settings=True,
-    )
-
-
-async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
-    """Compatibility no-op; welcome messages are kept."""
-
-    return None
-
-
-@router.message()
-async def fallback_handler(message: Message, state: FSMContext) -> None:
-    """Handle unmatched messages."""
-
-    await delete_welcome_message_if_exists(message, state)
-    current_state = await state.get_state()
-    LOGGER.debug("Fallback triggered. User: %s State: %s Text: %s", message.from_user.id, current_state, message.text)
-    sent = await message.answer(
-        "Не понял сообщение. Пожалуйста, пользуйся кнопками или командами.",
-        reply_markup=await build_main_menu_for_user(message.from_user.id),
-    )
-    await ui_register_message(state, sent.chat.id, sent.message_id)
-
-===== Bot/handlers/finances.py =====
-
-"""Handlers for income calculation and savings."""
-import logging
-from typing import Any, Dict, List, Optional
-
-from aiogram import F, Router
-from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
-
-from Bot.database.crud import FinanceDatabase
-from Bot.database.get_db import get_db
-from Bot.keyboards.main import (
-    back_to_main_keyboard,
-    purchase_confirmation_keyboard,
-    yes_no_inline_keyboard,
-)
-from Bot.keyboards.calculator import income_calculator_keyboard
-from Bot.handlers.common import build_main_menu_for_user
-from Bot.states.money_states import MoneyState
-from Bot.handlers.wishlist import humanize_wishlist_category
-from Bot.utils.savings import find_reached_goal, format_savings_summary
-from Bot.utils.telegram_safe import safe_delete_message, safe_edit_message_text
-from Bot.utils.ui_cleanup import ui_register_message
-
-LOGGER = logging.getLogger(__name__)
-
-router = Router()
-
-
-def _message_user_id(message: Message) -> int:
-    """Extract user id from message."""
-
-    return message.from_user.id if message.from_user else message.chat.id
-
-
-def _callback_user_id(callback: CallbackQuery) -> int:
-    """Extract user id from callback."""
-
-    if callback.from_user:
-        return callback.from_user.id
-    return callback.message.chat.id
-
-
-async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
-    """Legacy no-op to keep compatibility when welcome cleanup is referenced."""
-
-    return None
-
-INCOME_DIGITS = {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
-INCOME_INPUT_BUTTONS = INCOME_DIGITS | {"Очистить"}
-
-
-def _build_allocations(categories: List[Dict[str, Any]], amount: float) -> List[Dict[str, Any]]:
-    """Build allocation list from income categories."""
-
-    allocations: List[Dict[str, Any]] = []
-    for category in categories:
-        percent = float(category.get("percent", 0))
-        allocated = amount * percent / 100
-        allocations.append(
-            {
-                "label": category.get("title", ""),
-                "category": category.get("code", ""),
-                "amount": allocated,
-            }
-        )
-    return allocations
-
-
-def _build_income_prompt(income_sum: str) -> str:
-    """Build income input prompt."""
-
-    # Отображаем сумму в формате ": <число>"
-    return f": {income_sum}"
-
-
-async def _refresh_income_message(
-    message: Message, income_message_id: Optional[int], income_sum: str
-) -> int:
-    """Update or create income prompt message with current sum.
-
-    Редактируем уже существующее сообщение с подсказкой по сумме.
-    Если id нет (например, первый запуск) — создаём новое.
-    При ошибке редактирования пытаемся удалить старое сообщение и создаём новое,
-    чтобы пользователь видел актуальную сумму.
-    """
-
-    text = _build_income_prompt(income_sum)
-
-    # Если сообщения ещё не было — создаём его
-    if income_message_id is None:
-        new_message = await message.answer(text)
-        return new_message.message_id
-
-    edited = await safe_edit_message_text(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=income_message_id,
-        text=text,
-        logger=LOGGER,
-    )
-    if edited:
-        return income_message_id
-
-    await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=income_message_id,
-        logger=LOGGER,
-    )
-
-    new_message = await message.answer(text)
-    return new_message.message_id
-
-
-def _to_float(value: Any) -> float:
-    """Safely convert value to float."""
-
-    try:
-        return float(value) if value is not None else 0.0
-    except (TypeError, ValueError):
-        return 0.0
-
-
-def _format_savings_summary(
-    savings: Dict[str, Dict[str, Any]],
-    categories_map: Dict[str, str] | None = None,
-) -> str:
-    """Format savings summary for user message."""
-
-    return format_savings_summary(savings, categories_map)
-
-
-def _find_reached_goal(
-    savings: Dict[str, Dict[str, Any]]
-) -> tuple[str, Dict[str, Any]] | tuple[None, None]:
-    """Find category where goal is reached."""
-
-    return find_reached_goal(savings)
-
-
-async def _ask_allocation_confirmation(
-    message: Message, state: FSMContext, allocation: Dict[str, Any]
-) -> None:
-    """Ask user to confirm allocation for a specific category.
-
-    Args:
-        message: Aiogram message object used for sending prompts.
-        allocation: Allocation details with label and amount.
-    """
-
-    text = (
-        f"На категорию {allocation['label']} можно направить "
-        f"{allocation['amount']:.2f}. Перевести?"
-    )
-    data = await state.get_data()
-    existing_id: Optional[int] = data.get("allocation_question_message_id")
-    if existing_id:
-        edited = await safe_edit_message_text(
-            message.bot,
-            chat_id=message.chat.id,
-            message_id=existing_id,
-            text=text,
-            reply_markup=yes_no_inline_keyboard(),
-            logger=LOGGER,
-        )
-        if edited:
-            return
-
-    sent = await message.answer(text, reply_markup=yes_no_inline_keyboard())
-    await state.update_data(allocation_question_message_id=sent.message_id)
-
-
-@router.message(F.text == "Рассчитать доход")
-async def start_income_flow(message: Message, state: FSMContext) -> None:
-    """Start income calculation workflow with calculator keyboard."""
-
-    await delete_welcome_message_if_exists(message, state)
-    await state.clear()
-    user_id = message.from_user.id
-    categories = get_db().list_active_income_categories(user_id)
-    if not categories:
-        sent = await message.answer(
-            'Категории дохода не настроены. Открой "Настройки → Доход" и добавь хотя бы одну категорию.',
-            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
-        )
-        await ui_register_message(state, sent.chat.id, sent.message_id)
-        try:
-            await safe_delete_message(
-                message.bot,
-                chat_id=message.chat.id,
-                message_id=message.message_id,
-                logger=LOGGER,
-            )
-        except Exception:  # noqa: BLE001
-            LOGGER.warning("Failed to delete user command message", exc_info=True)
-        LOGGER.info("USER=%s ACTION=INCOME_START_NO_CATEGORIES", user_id)
-        return
-    await state.set_state(MoneyState.waiting_for_amount)
-
-    income_sum = "0"
-    question = await message.answer(
-        "Введи сумму дохода (используй кнопки ниже).",
-        reply_markup=income_calculator_keyboard(),
-    )
-    prompt = _build_income_prompt(income_sum)
-    income_message = await message.answer(prompt)
-
-    # Сохраняем служебные message_id и текущую сумму
-    await state.update_data(
-        income_sum=income_sum,
-        income_question_message_id=question.message_id,
-        income_message_id=income_message.message_id,
-    )
-
-    # Удаляем сообщение пользователя "Рассчитать доход"
-    try:
-        await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-    except Exception:  # noqa: BLE001
-        LOGGER.warning("Failed to delete user command message", exc_info=True)
-
-    LOGGER.info(
-        "User %s started income calculation",
-        message.from_user.id if message.from_user else "unknown",
-    )
-
-
-async def _process_income_amount_value(
-    message: Message,
-    state: FSMContext,
-    amount: float,
-) -> None:
-    """Validate amount and start category confirmation workflow."""
-
-    # Базовая валидация суммы
-    if amount <= 0 or amount > 10_000_000:
-        await message.answer(
-            "Сумма должна быть положительной и не больше 10 000 000. Попробуй снова."
-        )
-        return
-
-    # Удаляем служебное сообщение с суммой и вопрос с клавиатурой
-    data = await state.get_data()
-    income_question_message_id: Optional[int] = data.get("income_question_message_id")
-    income_message_id: Optional[int] = data.get("income_message_id")
-
-    if income_question_message_id:
-        await safe_delete_message(
-            message.bot,
-            chat_id=message.chat.id,
-            message_id=income_question_message_id,
-            logger=LOGGER,
-        )
-
-    if income_message_id:
-        await safe_delete_message(
-            message.bot,
-            chat_id=message.chat.id,
-            message_id=income_message_id,
-            logger=LOGGER,
-        )
-
-    db = get_db()
-    categories = db.list_active_income_categories(message.from_user.id)
-    total_percent = db.sum_income_category_percents(message.from_user.id)
-    if total_percent != 100:
-        sent = await message.answer(
-            f"Сумма процентов должна быть 100%. Сейчас: {total_percent}%. Исправь настройки через ⚙️ → 📊 Доход.",
-            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
-        )
-        await ui_register_message(state, sent.chat.id, sent.message_id)
-        await state.clear()
-        return
-
-    allocations: List[Dict[str, Any]] = _build_allocations(categories, amount)
-
-    if not allocations:
-        sent = await message.answer(
-            "Нет категорий для распределения.",
-            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
-        )
-        await ui_register_message(state, sent.chat.id, sent.message_id)
-        await state.clear()
-        return
-
-    # Сохраняем данные в FSM
-    await state.update_data(
-        income_amount=amount,
-        allocations=allocations,
-        index=0,
-        life_message_id=None,
-    )
-
-    # Переходим в состояние подтверждения категорий
-    await state.set_state(MoneyState.confirm_category)
-
-    # Задаём вопрос ТОЛЬКО по первой категории
-    current = allocations[0]
-    await _ask_allocation_confirmation(
-        message=message,
-        state=state,
-        allocation=current,
-    )
-
-    try:
-        await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-    except Exception:
-        pass
-
-
-@router.message(
-    MoneyState.waiting_for_amount,
-    F.text.in_(INCOME_INPUT_BUTTONS),
-)
-async def handle_income_digit(message: Message, state: FSMContext) -> None:
-    """Handle digit and clear input for income calculator."""
-
-    data = await state.get_data()
-    current_sum = str(data.get("income_sum", "0"))
-    sum_message_id = data.get("income_message_id")
-
-    if message.text == "Очистить":
-        new_sum = "0"
-    else:
-        if current_sum == "0":
-            new_sum = message.text
-        else:
-            new_sum = current_sum + message.text
-
-    income_message_id = await _refresh_income_message(
-        message=message,
-        income_message_id=sum_message_id,
-        income_sum=new_sum,
-    )
-
-    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
-
-    try:
-        await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-    except Exception:
-        pass
-
-
-@router.message(MoneyState.waiting_for_amount, F.text == "✅ Газ")
-async def handle_income_confirm(message: Message, state: FSMContext) -> None:
-    """Handle confirmation of income input via calculator button."""
-
-    data = await state.get_data()
-    amount_str = str(data.get("income_sum", "0")).strip()
-
-    if not amount_str:
-        await message.answer("Сначала набери сумму с помощью кнопок.")
-        try:
-            await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-        except Exception:
-            pass
-        return
-
-    normalized = amount_str.replace(",", ".")
-    try:
-        amount = float(normalized)
-    except ValueError:
-        await message.answer("Некорректная сумма. Попробуй ещё раз.")
-        try:
-            await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-        except Exception:
-            pass
-        return
-
-    if amount <= 0 or amount > 10_000_000:
-        await message.answer(
-            "Сумма должна быть положительной и не больше 10 000 000. Попробуй снова."
-        )
-        try:
-            await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-        except Exception:
-            pass
-        return
-
-    await _process_income_amount_value(
-        message=message,
-        state=state,
-        amount=amount,
-    )
-
-    try:
-        await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
-    except Exception:
-        pass
-
-
-@router.callback_query(MoneyState.confirm_category, F.data.in_({"confirm_yes", "confirm_no"}))
-async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) -> None:
-    """Handle user confirmation for category allocation via inline buttons."""
-
-    await query.answer()
-
-    data = await state.get_data()
-    allocations: List[Dict[str, Any]] = data.get("allocations", [])
-    index: int = int(data.get("index", 0))
-    # Если категорий нет или индекс вышел за пределы — выходим в главное меню
-    if not allocations or index >= len(allocations):
-        sent = await query.message.answer(
-            "Нет категорий для обработки.",
-            reply_markup=await build_main_menu_for_user(_callback_user_id(query)),
         )
         await ui_register_message(state, sent.chat.id, sent.message_id)
         await state.clear()
@@ -1998,3 +167,1834 @@ async def show_affordable_wishes(
     lines.append("Нажми на кнопку под нужным товаром, если купил.")
 
     keyboard = _build_affordable_wishes_keyboard(affordable)
+    await message.answer("\n".join(lines), reply_markup=keyboard)
+
+
+async def suggest_available_wish(message: Message) -> None:
+    """Backward-compatible wrapper to show affordable wishes."""
+
+    await show_affordable_wishes(message=message, user_id=message.from_user.id if message.from_user else None)
+
+
+@router.message(MoneyState.waiting_for_purchase_confirmation, F.text.in_({"✅ Купил", "🔄 Продолжить копить"}))
+async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
+    """Handle decision after reaching savings goal."""
+
+    data = await state.get_data()
+    category = data.get("category")
+    goal_amount = data.get("goal", 0)
+    db = get_db()
+
+    if message.text == "✅ Купил" and category:
+        db.update_saving(message.from_user.id, category, -goal_amount)
+        db.set_goal(message.from_user.id, category, 0, "")
+        sent = await message.answer(
+            f"Поздравляю с покупкой по категории {category}! Сумма {goal_amount:.2f} списана.",
+            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+        )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+        savings = db.get_user_savings(message.from_user.id)
+        categories_map = db.get_income_categories_map(message.from_user.id)
+        summary = _format_savings_summary(savings, categories_map)
+        await message.answer(f"Обновлённые накопления:\n{summary}")
+    else:
+        sent = await message.answer(
+            "Продолжаем копить!",
+            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+        )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+
+    await state.clear()
+    LOGGER.info("User %s handled goal decision for category %s", message.from_user.id, category)
+
+
+@router.message(MoneyState.confirm_category)
+async def unexpected_confirmation_input(message: Message) -> None:
+    """Handle unexpected text in confirmation state."""
+
+    await message.answer("Используй кнопки Да/Нет для выбора.")
+
+
+@router.message(MoneyState.waiting_for_purchase_confirmation)
+async def unexpected_purchase_input(message: Message) -> None:
+    """Handle unexpected text in purchase confirmation state."""
+
+    await message.answer("Выбери вариант на клавиатуре: Купил или Продолжить копить.")
+
+===== Bot/handlers/household_payments.py =====
+
+"""Handlers for household payments scenario."""
+from datetime import datetime
+import logging
+import time
+from typing import Dict, List
+
+from aiogram import F, Router
+from aiogram.fsm.context import FSMContext
+from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
+
+from Bot.config import settings
+from Bot.config.settings import get_settings
+from Bot.database.get_db import get_db
+from Bot.handlers.common import build_main_menu_for_user
+from Bot.handlers.wishlist import _build_byt_items_keyboard
+from Bot.utils.byt_render import (
+    format_byt_category_checklist_text,
+    get_byt_category_items,
+)
+from Bot.keyboards.calculator import income_calculator_keyboard
+from Bot.keyboards.settings import (
+    household_remove_keyboard,
+    household_settings_inline_keyboard,
+    settings_menu_keyboard,
+)
+from Bot.renderers.household import (
+    build_household_question_keyboard,
+    format_household_items,
+    render_household_questions_text,
+)
+from Bot.services.byt_service import build_manual_check_summary
+from Bot.services.household import (
+    build_answers_from_status,
+    build_household_questions,
+    filter_unpaid_questions,
+    get_current_question,
+    get_next_index,
+    get_previous_index,
+    normalize_processed_steps,
+    should_ignore_answer,
+    update_flow_state,
+)
+from Bot.services.household_service import ensure_household_month
+from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
+from Bot.utils.byt_manual_check import (
+    build_byt_times_sorted,
+    parse_byt_manual_cursor_index,
+    select_next_byt_manual_time,
+)
+from Bot.utils.datetime_utils import current_month_str
+from Bot.utils.messages import ERR_GENERIC
+from Bot.utils.time import now_for_user
+from Bot.utils.savings import format_savings_summary
+from Bot.utils.telegram_safe import (
+    safe_answer,
+    safe_callback_answer,
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_edit_message_text_with_status,
+    safe_send_message,
+)
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_messages,
+    ui_register_message,
+    ui_register_user_message,
+    ui_render_screen,
+)
+
+LOGGER = logging.getLogger(__name__)
+
+router = Router(name="household_payments")
+DEFAULT_TZ = (
+    get_settings().timezone.key
+    if hasattr(get_settings().timezone, "key")
+    else str(get_settings().timezone)
+)
+
+
+def _format_meta(meta: dict) -> str:
+    if not meta:
+        return "-"
+    return " ".join(f"{key}={value}" for key, value in meta.items())
+
+
+async def _log_state_transition(
+    state: FSMContext, user_id: int, to_state: str | None
+) -> None:
+    from_state = await state.get_state()
+    LOGGER.info(
+        "USER=%s ACTION=STATE_TRANSITION STATE=%s->%s META=-",
+        user_id,
+        from_state,
+        to_state,
+    )
+
+
+def _log_event(user_id: int, action: str, state: str | None, **meta: str) -> None:
+    LOGGER.info(
+        "USER=%s ACTION=%s STATE=%s META=%s",
+        user_id,
+        action,
+        state,
+        _format_meta(meta),
+    )
+
+
+async def _send_main_menu_summary(
+    bot, state: FSMContext, chat_id: int, user_id: int
+) -> None:
+    db = get_db()
+    savings = db.get_user_savings(user_id)
+    categories_map = db.get_income_categories_map(user_id)
+    summary = format_savings_summary(savings, categories_map)
+    menu = await build_main_menu_for_user(user_id)
+    await ui_render_screen(
+        bot,
+        state,
+        chat_id,
+        f"Текущие накопления:\n{summary}",
+        reply_markup=menu,
+    )
+
+
+async def _update_household_question_message(
+    bot,
+    state: FSMContext,
+    chat_id: int,
+    ui_message_id: int | None,
+    message_context: Message | None,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+) -> tuple[int | None, bool]:
+    if ui_message_id:
+        edited, network_failed = await safe_edit_message_text_with_status(
+            bot,
+            chat_id=chat_id,
+            message_id=int(ui_message_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            retries=2,
+            base_delay=0.4,
+            logger=LOGGER,
+        )
+        if edited:
+            return int(ui_message_id), False
+        if network_failed:
+            return None, True
+
+    if message_context is None:
+        return None, False
+
+    sent_id = await safe_answer(
+        message_context,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
+    )
+    if sent_id:
+        await ui_register_message(state, chat_id, sent_id)
+        await state.update_data(hh_ui_message_id=sent_id)
+    return sent_id, False
+
+
+async def _update_household_question_message_for_callback(
+    *,
+    callback: CallbackQuery,
+    state: FSMContext,
+    ui_message_id: int | None,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> bool:
+    message_context = callback.message
+    if message_context is None:
+        return False
+    _, network_failed = await _update_household_question_message(
+        callback.bot,
+        state,
+        chat_id=message_context.chat.id,
+        ui_message_id=ui_message_id,
+        message_context=message_context,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
+    if network_failed:
+        await safe_callback_answer(
+            callback,
+            "Проблема с сетью, попробуй ещё раз",
+            show_alert=False,
+            logger=LOGGER,
+        )
+        return False
+    return True
+
+
+async def reset_household_cycle_if_needed(
+    user_id: int, db, now: datetime | None = None
+) -> None:
+    """Lazily reset household payments cycle after 6th of month at noon."""
+
+    current = now or now_for_user(db, user_id, DEFAULT_TZ)
+    month = current_month_str(current)
+
+    threshold = datetime(current.year, current.month, 6, 12, 0, tzinfo=settings.TIMEZONE)
+    if current >= threshold:
+        clock = lambda uid: now_for_user(db, uid, DEFAULT_TZ)
+        await ensure_household_month(
+            db=db, clock=clock, logger=LOGGER, user_id=user_id, month=month
+        )
+
+
+def _format_household_items(
+    items: List[Dict[str, int | str]],
+    unpaid_set: set[str],
+) -> str:
+    return format_household_items(items, unpaid_set)
+
+
+async def _send_household_settings_overview(
+    message: Message, db, user_id: int
+) -> None:
+    items = db.list_active_household_items(user_id)
+    month = current_month_str(now_for_user(db, user_id, DEFAULT_TZ))
+    unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
+    unpaid_set: set[str] = set(unpaid_codes)
+    _log_event(
+        user_id,
+        "HOUSEHOLD_SETTINGS_OVERVIEW",
+        None,
+        month=month,
+        items_count=str(len(items)),
+        unpaid_count=str(len(unpaid_set)),
+    )
+    if not items:
+        _log_event(
+            user_id,
+            "HOUSEHOLD_SETTINGS_EMPTY",
+            None,
+            source="list_active_household_items",
+        )
+    await safe_answer(
+        message,
+        _format_household_items(items, unpaid_set),
+        reply_markup=household_settings_inline_keyboard(),
+        logger=LOGGER,
+    )
+
+
+@router.message(F.text == "⚙️ Бытовые платежи ⚙️")
+async def open_household_settings(message: Message, state: FSMContext) -> None:
+    """Open household payments settings menu."""
+
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+    if message.from_user.id != settings.ADMIN_ID:
+        sent_id = await safe_answer(
+            message,
+            "Что-то пошло не так. Вернёмся в главное меню.",
+            reply_markup=await build_main_menu_for_user(message.from_user.id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+
+    await state.clear()
+    db = get_db()
+    sent_id = await safe_answer(
+        message,
+        "⚙️ Бытовые платежи ⚙️",
+        reply_markup=settings_menu_keyboard(),
+        logger=LOGGER,
+    )
+    if sent_id:
+        await ui_register_message(state, message.chat.id, sent_id)
+    await _send_household_settings_overview(message, db, message.from_user.id)
+
+
+@router.callback_query(F.data == "hh_set:add")
+async def household_add_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    """Prompt for new household payment title."""
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    if callback.from_user.id != settings.ADMIN_ID:
+        return
+
+    await state.clear()
+    await state.set_state(HouseholdSettingsState.waiting_for_title)
+    if callback.message:
+        await safe_answer(callback.message, "Введи название платежа", logger=LOGGER)
+
+
+@router.message(HouseholdSettingsState.waiting_for_title)
+async def household_add_set_title(message: Message, state: FSMContext) -> None:
+    """Handle title input for new household payment."""
+
+    title = (message.text or "").strip()
+    if not title:
+        await safe_answer(message, "Нужно ввести название платежа.", logger=LOGGER)
+        return
+
+    await state.update_data(title=title)
+    await state.set_state(HouseholdSettingsState.waiting_for_amount)
+
+    question_id = await safe_answer(
+        message,
+        "Введи сумму (используй кнопки ниже).",
+        reply_markup=income_calculator_keyboard(),
+        logger=LOGGER,
+    )
+    prompt_id = await safe_answer(message, ": 0", logger=LOGGER)
+
+    await state.update_data(
+        amount_sum="0",
+        amount_message_id=prompt_id,
+        amount_question_message_id=question_id,
+    )
+
+
+@router.message(
+    HouseholdSettingsState.waiting_for_amount,
+    F.text.in_({"0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "Очистить", "✅ Газ"}),
+)
+async def household_add_amount_calc(message: Message, state: FSMContext) -> None:
+    """Handle calculator input for new household payment amount."""
+
+    data = await state.get_data()
+    current_sum = str(data.get("amount_sum", "0"))
+    amount_message_id = data.get("amount_message_id")
+
+    if message.text == "Очистить":
+        new_sum = "0"
+    elif message.text == "✅ Газ":
+        amount_str = current_sum.strip()
+        if not amount_str:
+            await safe_answer(message, "Нужно ввести число. Попробуй снова.", logger=LOGGER)
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        try:
+            amount = int(amount_str)
+        except (TypeError, ValueError):
+            await safe_answer(message, "Нужно ввести число. Попробуй снова.", logger=LOGGER)
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        if amount <= 0:
+            await safe_answer(
+                message, "Сумма должна быть больше нуля. Попробуй снова.", logger=LOGGER
+            )
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+            return
+
+        user_id = message.from_user.id
+        db = get_db()
+        position = db.get_next_household_position(user_id)
+        title = str(data.get("title", "")).strip() or "Платёж"
+        code = f"custom_{time.time_ns()}"
+        text = f"{title} {amount}р?"
+        db.add_household_payment_item(user_id, code, text, amount, position)
+        await reset_household_cycle_if_needed(user_id, db)
+        await state.clear()
+        await safe_answer(
+            message,
+            "Платёж добавлен.",
+            reply_markup=ReplyKeyboardRemove(),
+            logger=LOGGER,
+        )
+        await safe_answer(
+            message,
+            "⚙️ Бытовые платежи ⚙️",
+            reply_markup=settings_menu_keyboard(),
+            logger=LOGGER,
+        )
+        await _send_household_settings_overview(message, db, user_id)
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
+
+    if amount_message_id:
+        await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=amount_message_id,
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+
+    await state.update_data(amount_sum=new_sum, amount_message_id=amount_message_id)
+
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+@router.callback_query(F.data == "hh_set:del")
+async def household_remove_prompt(callback: CallbackQuery, state: FSMContext) -> None:
+    """Show list of household payments for removal."""
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    if callback.from_user.id != settings.ADMIN_ID:
+        return
+
+    await state.clear()
+    db = get_db()
+    db.ensure_household_items_seeded(callback.from_user.id)
+    items = db.list_active_household_items(callback.from_user.id)
+    if not items:
+        if callback.message:
+            await safe_answer(callback.message, "Список платежей пуст.", logger=LOGGER)
+        return
+
+    if callback.message:
+        await safe_answer(
+            callback.message,
+            "Выбери платеж для удаления:",
+            reply_markup=household_remove_keyboard(items),
+            logger=LOGGER,
+        )
+
+
+@router.callback_query(F.data.startswith("hh_set:remove:"))
+async def household_remove_item(callback: CallbackQuery, state: FSMContext) -> None:
+    """Deactivate selected household payment item."""
+
+    await safe_callback_answer(callback, logger=LOGGER)
+    if callback.from_user.id != settings.ADMIN_ID:
+        return
+
+    parts = callback.data.split(":") if callback.data else []
+    if len(parts) != 3:
+        return
+    code = parts[2]
+    db = get_db()
+    db.deactivate_household_payment_item(callback.from_user.id, code)
+    await reset_household_cycle_if_needed(callback.from_user.id, db)
+    await _send_household_settings_overview(callback.message, db, callback.from_user.id)
+
+
+@router.message(F.text == "Бытовые платежи")
+async def start_household_payments(message: Message, state: FSMContext) -> None:
+    """Start household payments flow."""
+
+    await ui_register_user_message(state, message.chat.id, message.message_id)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+    user_id = message.from_user.id
+    db = get_db()
+
+    await reset_household_cycle_if_needed(user_id, db)
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+    if not items:
+        await ui_cleanup_messages(message.bot, state)
+        await _log_state_transition(state, user_id, None)
+        await state.clear()
+        await ui_render_screen(
+            message.bot,
+            state,
+            message.chat.id,
+            "Список бытовых платежей не настроен.",
+            reply_markup=await build_main_menu_for_user(user_id),
+        )
+        return
+
+    month = current_month_str(now_for_user(db, user_id, DEFAULT_TZ))
+    clock = lambda uid: now_for_user(db, uid, DEFAULT_TZ)
+    await ensure_household_month(
+        db=db, clock=clock, logger=LOGGER, user_id=user_id, month=month
+    )
+    status_map = await db.get_household_payment_status_map(user_id, month)
+    questions = build_household_questions(items)
+    answers = build_answers_from_status(status_map)
+    all_paid = all(status_map.get(str(question.get("code", "")), 0) == 1 for question in questions)
+    unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
+    hh_questions = filter_unpaid_questions(questions, unpaid_codes)
+
+    if all_paid or not hh_questions:
+        text = render_household_questions_text(
+            month, questions, answers, current_index=None
+        )
+        lines = text.splitlines()
+        if lines:
+            lines[0] = f"✅ Все бытовые платежи оплачены за {month}"
+        text = "\n".join(lines)
+        await ui_cleanup_messages(message.bot, state)
+        await _log_state_transition(state, user_id, None)
+        await state.clear()
+        await ui_render_screen(
+            message.bot,
+            state,
+            message.chat.id,
+            text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            parse_mode="HTML",
+        )
+        _log_event(
+            user_id,
+            "HOUSEHOLD_ALL_PAID",
+            None,
+            month=month,
+        )
+        return
+
+    await _log_state_transition(state, user_id, HouseholdPaymentsState.waiting_for_answer.state)
+    await state.set_state(HouseholdPaymentsState.waiting_for_answer)
+    flow_state = update_flow_state(
+        month=month,
+        questions=hh_questions,
+        current_step_index=0,
+        answers=answers,
+        processed_steps=[],
+    )
+    await state.update_data(
+        hh_month=month,
+        hh_questions=hh_questions,
+        hh_index=0,
+        hh_answers=answers,
+        hh_ui_message_id=0,
+        current_step_index=flow_state.current_step_index,
+        current_question_code=flow_state.current_question_code,
+        processed_steps=[],
+    )
+    text = render_household_questions_text(
+        month, hh_questions, answers, current_index=0
+    )
+    sent_id = await safe_answer(
+        message,
+        text,
+        reply_markup=build_household_question_keyboard(
+            flow_state.current_question_code, show_back=False
+        ),
+        parse_mode="HTML",
+        logger=LOGGER,
+    )
+    if sent_id:
+        await state.update_data(hh_ui_message_id=sent_id)
+        await ui_register_message(state, message.chat.id, sent_id)
+    _log_event(
+        user_id,
+        "HOUSEHOLD_START",
+        await state.get_state(),
+        month=month,
+    )
+
+
+@router.message(F.text == "Проверить напоминания")
+async def trigger_household_notifications(message: Message, state: FSMContext) -> None:
+    """Trigger BYT purchases check (household wishlist) as if timer fired."""
+
+    user_id = message.from_user.id
+    db = get_db()
+
+    data = await state.get_data()
+    last_ts = data.get("byt_manual_check_ts")
+    current_ts = time.time()
+    if last_ts is not None and current_ts - float(last_ts) < 2:
+        sent_id = await safe_answer(
+            message,
+            "Уже проверил. Попробуй ещё раз через пару секунд.",
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+    await state.update_data(byt_manual_check_ts=current_ts)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+    categories = db.list_enabled_byt_reminder_categories(user_id)
+    LOGGER.info("USER=%s ACTION=BYT_MANUAL_CHECK_PRESS META=-", user_id)
+    if not categories:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=- total=0 due=0 deferred=0",
+            user_id,
+        )
+        sent_id = await safe_answer(
+            message,
+            "Категории для напоминаний не выбраны. Открой настройки → Напоминания → "
+            "Выбор категории для напоминаний.",
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+
+    now_dt = now_for_user(db, user_id, DEFAULT_TZ)
+    category_times: dict[int, list[str]] = {}
+    enabled_category_ids: list[int] = []
+    for category in categories:
+        category_id = int(category.get("id") or 0)
+        enabled_category_ids.append(category_id)
+        times = db.list_byt_reminder_times(user_id, category_id)
+        times_hhmm = [
+            str(item.get("time_hhmm", "")).strip()
+            for item in times
+            if item.get("time_hhmm")
+        ]
+        if times_hhmm:
+            category_times[category_id] = times_hhmm
+
+    times_sorted = build_byt_times_sorted(category_times)
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_TIMES_BUILD META=enabled_categories=%s times_by_category=%s times_sorted=%s",
+        user_id,
+        enabled_category_ids,
+        category_times,
+        times_sorted,
+    )
+    if not times_sorted:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=- total=0 due=0 deferred=0",
+            user_id,
+        )
+        sent_id = await safe_answer(
+            message,
+            "Время напоминаний не задано. Открой настройки → Напоминания → Время напоминаний.",
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent_id:
+            await ui_register_message(state, message.chat.id, sent_id)
+        return
+
+    data = await state.get_data()
+    current_date = now_dt.date().isoformat()
+    saved_date = data.get("byt_manual_cursor_date")
+    index = parse_byt_manual_cursor_index(data.get("byt_manual_cursor_index"))
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CURSOR META=before date=%s index=%s",
+        user_id,
+        saved_date,
+        index,
+    )
+    selected_time, next_index, restart_notice = select_next_byt_manual_time(
+        times_sorted, current_date, saved_date, index
+    )
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CURSOR META=after date=%s index=%s selected_time=%s len=%s",
+        user_id,
+        current_date,
+        next_index,
+        selected_time,
+        len(times_sorted),
+    )
+    trigger_dt = now_dt.replace(
+        hour=int(selected_time.split(":")[0]),
+        minute=int(selected_time.split(":")[1]),
+        second=0,
+        microsecond=0,
+    )
+    target_categories = [
+        category
+        for category in categories
+        if selected_time in category_times.get(int(category.get("id") or 0), [])
+    ]
+    categories_meta = [
+        str(category.get("title", ""))
+        for category in target_categories
+        if category.get("title")
+    ]
+    LOGGER.info(
+        "USER=%s ACTION=BYT_MANUAL_CHECK_STEP META=time=%s index=%s/%s",
+        user_id,
+        selected_time,
+        next_index + 1,
+        len(times_sorted),
+    )
+    category_label = ", ".join(categories_meta) if categories_meta else "нет"
+    header_lines = [
+        "⏰ Проверка напоминаний",
+        f"🕒 Время: {selected_time}",
+        f"Категории: {category_label}",
+    ]
+    if restart_notice:
+        header_lines.append(restart_notice)
+    header_text = "\n".join(header_lines)
+    header_message_id = data.get("byt_manual_check_message_id")
+    edited = False
+    if header_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=int(header_message_id),
+            text=header_text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+    if not edited:
+        sent = await safe_send_message(
+            message.bot,
+            chat_id=message.chat.id,
+            text=header_text,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        if sent:
+            await ui_register_message(state, sent.chat.id, sent.message_id)
+            await state.update_data(byt_manual_check_message_id=sent.message_id)
+
+    settings_row = db.get_user_settings(user_id)
+    allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
+    clock = lambda uid: now_for_user(db, uid, DEFAULT_TZ)
+    summary_result = build_manual_check_summary(
+        db=db,
+        clock=clock,
+        logger=LOGGER,
+        user_id=user_id,
+        time_str=selected_time,
+        category_ids=[int(category.get("id") or 0) for category in target_categories],
+    )
+    if isinstance(summary_result, dict):
+        summary = summary_result.get("summary")
+        category_data = summary_result.get("categories", [])
+    else:
+        await safe_answer(
+            message,
+            ERR_GENERIC,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
+        )
+        return
+
+    for category_info in category_data:
+        category_id = int(category_info.get("category_id") or 0)
+        category_title = str(category_info.get("category_title", ""))
+        due_items = category_info.get("due_items") or []
+        deferred_items = category_info.get("deferred_items") or []
+        text = format_byt_category_checklist_text(
+            category_title, due_items, deferred_items
+        )
+        keyboard = (
+            _build_byt_items_keyboard(
+                due_items, allow_defer=allow_defer, category_id=category_id
+            )
+            if due_items
+            else None
+        )
+        sent = await safe_send_message(
+            message.bot,
+            chat_id=message.chat.id,
+            text=text,
+            reply_markup=keyboard,
+            logger=LOGGER,
+        )
+        if sent:
+            await ui_register_message(state, sent.chat.id, sent.message_id)
+    if summary:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=%s categories=%s total=%s due=%s deferred=%s",
+            user_id,
+            selected_time,
+            categories_meta,
+            summary.total,
+            summary.due,
+            summary.deferred,
+        )
+    await state.update_data(
+        byt_manual_cursor_date=current_date,
+        byt_manual_cursor_index=next_index,
+    )
+
+
+@router.callback_query(
+    HouseholdPaymentsState.waiting_for_answer,
+    F.data.startswith("hh_pay:"),
+)
+async def handle_household_answer(callback: CallbackQuery, state: FSMContext) -> None:
+    """Handle Yes/No/Back answers for household questions."""
+
+    data = await state.get_data()
+    month = data.get("hh_month")
+    questions = list(data.get("hh_questions") or [])
+    index = int(data.get("current_step_index") or data.get("hh_index") or 0)
+    answers = dict(data.get("hh_answers") or {})
+    ui_message_id = data.get("hh_ui_message_id")
+    processed_steps = normalize_processed_steps(data.get("processed_steps"))
+    user_id = callback.from_user.id
+
+    if callback.message is None or callback.message.message_id != ui_message_id:
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    callback_parts = callback.data.split(":") if callback.data else []
+    if len(callback_parts) < 2:
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+    action = callback_parts[1]
+    callback_code = callback_parts[2] if len(callback_parts) > 2 else None
+
+    if action == "back" and index == 0:
+        await safe_callback_answer(
+            callback, "Назад нельзя — это первый вопрос", show_alert=True, logger=LOGGER
+        )
+        return
+
+    await safe_callback_answer(callback, logger=LOGGER)
+
+    if not month or not questions:
+        await ui_cleanup_messages(callback.bot, state)
+        await _log_state_transition(state, user_id, None)
+        await state.clear()
+        await _send_main_menu_summary(
+            callback.bot, state, callback.message.chat.id, user_id
+        )
+        return
+
+    current_question = get_current_question(questions, index)
+    current_code = str(current_question.get("code")) if current_question else None
+    target_code = callback_code or current_code
+
+    if action == "back":
+        index = get_previous_index(index)
+        current_question = get_current_question(questions, index)
+        current_code = str(current_question.get("code")) if current_question else None
+        await state.update_data(
+            hh_index=index,
+            current_step_index=index,
+            current_question_code=current_code,
+        )
+        text = render_household_questions_text(
+            month, questions, answers, current_index=index
+        )
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
+            ui_message_id=ui_message_id,
+            text=text,
+            reply_markup=build_household_question_keyboard(
+                current_code, show_back=index > 0
+            ),
+            parse_mode="HTML",
+        )
+        if not updated:
+            return
+        _log_event(
+            user_id,
+            "HOUSEHOLD_BACK",
+            await state.get_state(),
+            month=str(month),
+            index=str(index),
+            question_code=str(current_code),
+        )
+        return
+
+    if index >= len(questions):
+        final_text = render_household_questions_text(
+            month, questions, answers, current_index=None
+        )
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
+            ui_message_id=ui_message_id,
+            text=final_text,
+            reply_markup=None,
+            parse_mode="HTML",
+        )
+        if not updated:
+            return
+        await ui_cleanup_messages(callback.bot, state)
+        await _log_state_transition(state, user_id, None)
+        await state.clear()
+        await _send_main_menu_summary(
+            callback.bot, state, callback.message.chat.id, user_id
+        )
+        return
+
+    if target_code and target_code != current_code:
+        if target_code in processed_steps:
+            await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+            return
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    question = current_question
+    if not question:
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    code = str(question.get("code", ""))
+    amount = question.get("amount")
+    amount_value = float(amount) if amount is not None else 0.0
+    db = get_db()
+
+    if action not in {"yes", "no"}:
+        await safe_callback_answer(callback, "Сообщение устарело", logger=LOGGER)
+        return
+
+    if code in processed_steps:
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+        return
+
+    if should_ignore_answer(answers, processed_steps, code, action):
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+        return
+
+    debit_category, _ = db.resolve_household_debit_category(user_id)
+    changed = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=str(month),
+        question_code=code,
+        amount=amount_value if amount is not None else None,
+        answer=action,
+        debit_category=debit_category,
+    )
+    if not changed and action == "yes":
+        await safe_callback_answer(callback, "Уже учтено", logger=LOGGER)
+        return
+    answers[code] = "yes" if action == "yes" else "no"
+    processed_steps.add(code)
+
+    _log_event(
+        user_id,
+        "HOUSEHOLD_ANSWER",
+        await state.get_state(),
+        month=str(month),
+        question_code=code,
+        answer=action,
+    )
+    if action == "yes" and amount is not None:
+        _log_event(
+            user_id,
+            "HOUSEHOLD_DEBIT",
+            await state.get_state(),
+            debit_category=debit_category,
+        )
+
+    index = get_next_index(index, questions)
+    next_question = get_current_question(questions, index)
+    next_code = str(next_question.get("code")) if next_question else None
+    await state.update_data(
+        hh_answers=answers,
+        hh_index=index,
+        current_step_index=index,
+        current_question_code=next_code,
+        processed_steps=list(processed_steps),
+    )
+    if index < len(questions):
+        text = render_household_questions_text(
+            month, questions, answers, current_index=index
+        )
+        updated = await _update_household_question_message_for_callback(
+            callback=callback,
+            state=state,
+            ui_message_id=ui_message_id,
+            text=text,
+            reply_markup=build_household_question_keyboard(
+                next_code, show_back=index > 0
+            ),
+            parse_mode="HTML",
+        )
+        if not updated:
+            return
+        return
+
+    final_text = render_household_questions_text(
+        month, questions, answers, current_index=None
+    )
+    updated = await _update_household_question_message_for_callback(
+        callback=callback,
+        state=state,
+        ui_message_id=ui_message_id,
+        text=final_text,
+        reply_markup=None,
+        parse_mode="HTML",
+    )
+    if not updated:
+        return
+    await ui_cleanup_messages(callback.bot, state)
+    await _log_state_transition(state, user_id, None)
+    await state.clear()
+    await _send_main_menu_summary(callback.bot, state, callback.message.chat.id, user_id)
+
+===== Bot/handlers/settings.py =====
+
+"""Inline settings handlers for a single-page experience."""
+import logging
+import time
+
+from aiogram import F, Router
+from aiogram.filters import BaseFilter
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
+
+from Bot.constants.ui_labels import (
+    NAV_BACK,
+    NAV_HOME,
+    WISHLIST_DEBIT_CATEGORY_BACK,
+    WISHLIST_DEBIT_CATEGORY_BUTTON,
+    WISHLIST_DEBIT_CATEGORY_NONE,
+    WISHLIST_BYT_CATEGORY_BUTTON,
+)
+from Bot.database.get_db import get_db
+from Bot.handlers.common import build_main_menu_for_user
+from Bot.keyboards.main import back_only_keyboard
+from Bot.keyboards.settings import (
+    byt_category_toggle_keyboard,
+    byt_rules_reply_keyboard,
+    byt_timer_categories_inline_keyboard,
+    byt_timer_inline_keyboard,
+    byt_timer_times_select_keyboard,
+    household_debit_category_select_reply_keyboard,
+    household_payments_remove_reply_keyboard,
+    household_settings_reply_keyboard,
+    income_categories_select_reply_keyboard,
+    income_settings_reply_keyboard,
+    settings_back_reply_keyboard,
+    settings_home_reply_keyboard,
+    timezone_inline_keyboard,
+    wishlist_categories_select_reply_keyboard,
+    wishlist_debit_category_select_reply_keyboard,
+    wishlist_purchased_mode_reply_keyboard,
+    wishlist_settings_reply_keyboard,
+)
+from Bot.utils.byt_render import format_byt_categories_status_text
+from Bot.keyboards.calculator import income_calculator_keyboard
+from Bot.states.money_states import HouseholdSettingsState, IncomeSettingsState
+from Bot.states.wishlist_states import (
+    BytSettingsState,
+    BytTimerState,
+    WishlistSettingsState,
+)
+from Bot.utils.datetime_utils import current_month_str
+from Bot.config.settings import get_settings
+from Bot.utils.messages import ERR_INVALID_INPUT
+from Bot.utils.time import get_user_timezone, now_for_user, set_user_timezone
+from Bot.utils.savings import format_savings_summary
+from Bot.utils.telegram_safe import (
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_messages,
+    ui_cleanup_to_context,
+    ui_register_message,
+    ui_render_screen,
+    ui_set_screen_message,
+    ui_track_message,
+)
+
+router = Router()
+LOGGER = logging.getLogger(__name__)
+DEFAULT_TZ = (
+    get_settings().timezone.key
+    if hasattr(get_settings().timezone, "key")
+    else str(get_settings().timezone)
+)
+PERCENT_DIGITS = {str(i) for i in range(10)}
+PERCENT_INPUT_BUTTONS = PERCENT_DIGITS | {"Очистить", "✅ Газ"}
+
+
+class InSettingsFilter(BaseFilter):
+    async def __call__(self, message: Message, state: FSMContext) -> bool:
+        data = await state.get_data()
+        return bool(data.get("in_settings"))
+
+
+async def _register_user_message(state: FSMContext, message: Message) -> None:
+    await ui_track_message(state, message.chat.id, message.message_id)
+
+
+async def _safe_edit(bot, **kwargs) -> None:
+    edited = await safe_edit_message_text(bot, logger=LOGGER, **kwargs)
+    if not edited:
+        raise TelegramBadRequest(method="editMessageText", message="edit-failed")
+
+
+async def _delete_message_safely(bot, chat_id: int | None, message_id: int | None) -> None:
+    if chat_id is None or message_id is None:
+        return
+    await safe_delete_message(
+        bot,
+        chat_id=chat_id,
+        message_id=int(message_id),
+        logger=LOGGER,
+    )
+
+
+async def _delete_user_message(message: Message) -> None:
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+async def _remove_calculator_keyboard(message: Message) -> None:
+    temp = await safe_send_message(
+        message.bot,
+        chat_id=message.chat.id,
+        text=" ",
+        reply_markup=ReplyKeyboardRemove(),
+        logger=LOGGER,
+    )
+    if temp:
+        await safe_delete_message(
+            message.bot,
+            chat_id=temp.chat.id,
+            message_id=temp.message_id,
+            logger=LOGGER,
+        )
+
+
+async def _apply_reply_keyboard(message: Message, reply_markup: ReplyKeyboardMarkup) -> None:
+    temp = await safe_send_message(
+        message.bot,
+        chat_id=message.chat.id,
+        text=" ",
+        reply_markup=reply_markup,
+        logger=LOGGER,
+    )
+    if temp:
+        await safe_delete_message(
+            message.bot,
+            chat_id=temp.chat.id,
+            message_id=temp.message_id,
+            logger=LOGGER,
+        )
+
+
+def _parse_time_text(raw: str) -> tuple[int, int] | None:
+    value = raw.strip()
+    if ":" not in value:
+        return None
+    parts = value.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1])
+    except ValueError:
+        return None
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        return None
+    return hour, minute
+
+
+async def _cleanup_input_ui(
+    bot,
+    data: dict,
+    *,
+    display_chat_key: str | None = None,
+    display_message_key: str | None = None,
+    prompt_chat_key: str | None = None,
+    prompt_message_key: str | None = None,
+) -> None:
+    if display_chat_key and display_message_key:
+        await _delete_message_safely(
+            bot, data.get(display_chat_key), data.get(display_message_key)
+        )
+    if prompt_chat_key and prompt_message_key:
+        await _delete_message_safely(
+            bot, data.get(prompt_chat_key), data.get(prompt_message_key)
+        )
+
+
+async def _store_settings_message(state: FSMContext, chat_id: int, message_id: int) -> None:
+    await state.update_data(
+        settings_chat_id=chat_id, settings_message_id=message_id, in_settings=True
+    )
+
+
+async def _set_current_screen(state: FSMContext, screen_id: str) -> None:
+    await state.update_data(settings_current_screen=screen_id, in_settings=True)
+
+
+async def _reset_navigation(state: FSMContext, current_screen: str = "st:home") -> None:
+    await state.update_data(settings_nav_stack=[], settings_current_screen=current_screen)
+
+
+async def _push_current_screen(state: FSMContext, next_screen: str) -> None:
+    data = await state.get_data()
+    current_screen = data.get("settings_current_screen")
+    stack = list(data.get("settings_nav_stack") or [])
+    if current_screen and current_screen != next_screen:
+        if not stack or stack[-1] != current_screen:
+            stack.append(current_screen)
+    await state.update_data(settings_nav_stack=stack, settings_current_screen=next_screen)
+
+
+async def _pop_previous_screen(state: FSMContext) -> str | None:
+    data = await state.get_data()
+    stack = list(data.get("settings_nav_stack") or [])
+    if not stack:
+        return None
+    previous = stack.pop()
+    await state.update_data(settings_nav_stack=stack, settings_current_screen=previous)
+    return previous
+
+
+async def _send_and_register(
+    *, message: Message, state: FSMContext, text: str, reply_markup=None
+) -> Message:
+    sent = await message.answer(text, reply_markup=reply_markup)
+    await ui_register_message(state, sent.chat.id, sent.message_id)
+    return sent
+
+
+async def _send_main_menu_summary(
+    *, bot, state: FSMContext, chat_id: int, user_id: int
+) -> None:
+    db = get_db()
+    savings = db.get_user_savings(user_id)
+    categories_map = db.get_income_categories_map(user_id)
+    summary = format_savings_summary(savings, categories_map)
+    text = f"Текущие накопления:\n{summary}"
+    menu = await build_main_menu_for_user(user_id)
+    sent = await safe_send_message(bot, chat_id=chat_id, text=text, reply_markup=menu)
+    if sent:
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+
+
+async def _exit_settings_to_main(
+    *, bot, state: FSMContext, chat_id: int, user_id: int
+) -> None:
+    await ui_cleanup_messages(bot, state, chat_id=chat_id)
+    await state.clear()
+    await ui_render_screen(
+        bot,
+        state,
+        chat_id,
+        "Главное меню",
+        reply_markup=await build_main_menu_for_user(user_id),
+    )
+
+
+async def _get_settings_message_ids(
+    state: FSMContext, fallback_message: Message
+) -> tuple[int, int]:
+    data = await state.get_data()
+    chat_id = data.get("settings_chat_id") or fallback_message.chat.id
+    message_id = data.get("settings_message_id") or fallback_message.message_id
+    return int(chat_id), int(message_id)
+
+
+async def _edit_settings_page(
+    *,
+    bot,
+    state: FSMContext,
+    chat_id: int,
+    message_id: int,
+    text: str,
+    reply_markup,
+) -> int:
+    try:
+        data = await state.get_data()
+        if data.get("settings_current_screen") in {"st:income", "st:wishlist", "st:byt_rules"}:
+            raise TelegramBadRequest(method="editMessageText", message="reply-only")
+        await _safe_edit(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
+        new_message_id = message_id
+    except TelegramBadRequest:
+        new_message = await safe_send_message(
+            bot,
+            chat_id=chat_id,
+            text=text,
+            reply_markup=reply_markup,
+            logger=LOGGER,
+        )
+        new_message_id = new_message.message_id if new_message else message_id
+        await ui_register_message(state, chat_id, new_message_id)
+    await ui_set_screen_message(state, chat_id, new_message_id)
+    await _store_settings_message(state, chat_id, new_message_id)
+    return new_message_id
+
+
+async def _render_reply_settings_page(
+    *,
+    message: Message,
+    state: FSMContext,
+    text: str,
+    reply_markup: ReplyKeyboardMarkup,
+    screen_id: str,
+    force_new: bool = False,
+) -> None:
+    data = await state.get_data()
+    chat_id = data.get("settings_chat_id")
+    message_id = data.get("settings_message_id")
+    current_screen = data.get("settings_current_screen")
+
+    deleted_count = 0
+    if force_new or not chat_id or not message_id or current_screen != screen_id:
+        await _delete_message_safely(message.bot, chat_id, message_id)
+        if message_id:
+            deleted_count = 1
+    sent = await safe_send_message(
+        message.bot,
+        chat_id=message.chat.id,
+        text=text,
+        reply_markup=reply_markup,
+    )
+    new_message_id = sent.message_id if sent else 0
+    if sent:
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+        await ui_set_screen_message(state, sent.chat.id, sent.message_id)
+        await _store_settings_message(state, sent.chat.id, sent.message_id)
+    await _set_current_screen(state, screen_id)
+    if deleted_count:
+        LOGGER.info(
+            "Settings reply screen cleanup: deleted %s messages (screen_id=%s)",
+            deleted_count,
+            screen_id,
+        )
+
+
+async def _render_settings_home(message: Message, state: FSMContext) -> None:
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text="⚙️ НАСТРОЙКИ",
+        reply_markup=settings_home_reply_keyboard(),
+        screen_id="st:home",
+        force_new=True,
+    )
+
+
+async def _render_timezone_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> None:
+    tz_value = get_user_timezone(db, user_id, DEFAULT_TZ)
+    lines = [
+        "Настройки таймзоны",
+        f"Текущая таймзона: {tz_value}",
+        "Выбери новую таймзону:",
+    ]
+    if error_message:
+        lines.append("")
+        lines.append(error_message)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="\n".join(lines),
+        reply_markup=timezone_inline_keyboard(),
+    )
+
+
+def _format_household_payments_text(
+    items: list[dict],
+    *,
+    unpaid_set: set[str],
+    debit_category: str,
+    error_message: str | None = None,
+) -> str:
+    lines: list[str] = [
+        "РЕЖИМ НАСТРОЕК",
+        "",
+        "Бытовые платежи",
+        f"Категория списания: {debit_category}",
+        "",
+    ]
+    if not items:
+        lines.append("Платежей пока нет. Нажми ➕ Добавить")
+    else:
+        for item in items:
+            title = str(item.get("text", "")).rstrip("?")
+            amount = item.get("amount")
+            prefix = "❌" if item.get("code") in unpaid_set else "✅"
+            if amount not in (None, 0):
+                lines.append(f"{prefix} {title} — {amount}")
+            else:
+                lines.append(f"{prefix} {title}")
+    if error_message:
+        lines.extend(["", error_message])
+    return "\n".join(lines)
+
+
+async def _render_household_payments_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+    force_new_keyboard: bool = False,
+) -> None:
+    items = db.list_active_household_items(user_id)
+    month = current_month_str(now_for_user(db, user_id, DEFAULT_TZ))
+    await db.init_household_questions_for_month(user_id, month)
+    unpaid = await db.get_unpaid_household_questions(user_id, month)
+    unpaid_set: set[str] = set(unpaid)
+    debit_code, debit_title = db.resolve_household_debit_category(user_id)
+    LOGGER.info(
+        "Open household payments settings (user_id=%s, month=%s, items_count=%s, unpaid_count=%s)",
+        user_id,
+        month,
+        len(items),
+        len(unpaid_set),
+    )
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=_format_household_payments_text(
+            items,
+            unpaid_set=unpaid_set,
+            debit_category=debit_title or debit_code,
+            error_message=error_message,
+        ),
+        reply_markup=household_settings_reply_keyboard(),
+        screen_id="st:household_payments",
+        force_new=True,
+    )
+
+
+async def _render_household_delete_menu(
+    *, state: FSMContext, message: Message, db, user_id: int
+) -> None:
+    items = db.list_active_household_items(user_id)
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text="Что удалить?" if items else "Активных платежей нет.",
+        reply_markup=household_payments_remove_reply_keyboard(items)
+        if items
+        else household_settings_reply_keyboard(),
+        screen_id="hp:del_payment_menu",
+        force_new=True,
+    )
+    await state.update_data(
+        hp_delete_map={
+            (f"{str(item.get('text', ''))}".rstrip("?")
+             + (f" — {item.get('amount')}" if item.get("amount") is not None else "")
+            ): item.get("code")
+            for item in items
+        }
+    )
+    if items:
+        await state.set_state(HouseholdSettingsState.waiting_for_removal)
+
+
+async def _render_household_debit_category_menu(
+    *, state: FSMContext, message: Message, db, user_id: int, error_message: str | None = None
+) -> None:
+    categories = db.list_active_income_categories(user_id)
+    if categories:
+        text = "Выбери категорию списания"
+        if error_message:
+            text = f"{error_message}\n\n{text}"
+    else:
+        text = "Категорий дохода пока нет."
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=text,
+        reply_markup=household_debit_category_select_reply_keyboard(categories)
+        if categories
+        else household_settings_reply_keyboard(),
+        screen_id="hp:debit_category_menu",
+        force_new=True,
+    )
+    await state.update_data(
+        hp_debit_map={category.get("title", ""): category.get("code") for category in categories}
+    )
+    if categories:
+        await state.set_state(HouseholdSettingsState.waiting_for_debit_category)
+
+
+async def _render_wishlist_debit_category_menu(
+    *, state: FSMContext, message: Message, db, user_id: int, error_message: str | None = None
+) -> None:
+    categories = db.list_active_income_categories(user_id)
+    selected = db.get_wishlist_debit_category(user_id)
+    selected_title = "Не выбрано"
+    if selected:
+        income_category = db.get_income_category_by_code(user_id, selected)
+        selected_title = income_category.get("title", selected) if income_category else "Категория удалена"
+    if categories:
+        text = (
+            "Категория списания для покупок (Wishlist)\n"
+            f"Текущая: {selected_title}\n\n"
+            "Выбери категорию списания"
+        )
+        if error_message:
+            text = f"{error_message}\n\n{text}"
+    else:
+        text = "Сначала добавь категории доходов/накоплений."
+    LOGGER.info("USER=%s ACTION=WISHLIST_DEBIT_CATEGORY_MENU_OPEN", user_id)
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=text,
+        reply_markup=wishlist_debit_category_select_reply_keyboard(categories)
+        if categories
+        else back_only_keyboard(),
+        screen_id="wl:debit_category_menu",
+        force_new=True,
+    )
+    await state.update_data(
+        wl_debit_map={category.get("title", ""): category.get("code") for category in categories}
+    )
+    if categories:
+        await state.set_state(WishlistSettingsState.waiting_for_debit_category)
+
+
+async def _render_wishlist_byt_category_menu(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> None:
+    categories = db.list_byt_reminder_categories(user_id)
+    if categories:
+        lines = ["Выбор категорий для напоминаний:", ""]
+        for category in categories:
+            status = "✅" if category.get("enabled") else "❌"
+            lines.append(f"{status} {category.get('title', '')}")
+        text = "\n".join(lines)
+        if error_message:
+            text = f"{error_message}\n\n{text}"
+    else:
+        text = "Категорий пока нет."
+    LOGGER.info("USER=%s ACTION=BYT_CATEGORY_MENU_OPEN", user_id)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
+        reply_markup=byt_category_toggle_keyboard(categories)
+        if categories
+        else back_only_keyboard(),
+    )
+
+
+def _format_category_text(
+    title: str, categories: list[dict], error_message: str | None = None
+) -> str:
+    lines: list[str] = [title, ""]
+    for category in categories:
+        lines.append(f"{category['title']} — {category['percent']}%")
+    total = sum(category.get("percent", 0) for category in categories)
+    lines.append("")
+    lines.append(f"Сумма: {total}%")
+    if error_message:
+        lines.append("")
+        lines.append(error_message)
+    return "\n".join(lines)
+
+
+def _format_wishlist_text(
+    categories: list[dict],
+    debit_category_title: str,
+    error_message: str | None = None,
+) -> str:
+    lines: list[str] = ["🧾 ВИШЛИСТ — настройки", "", "Категории:", ""]
+    if categories:
+        for category in categories:
+            mode = str(category.get("purchased_mode") or "days")
+            days = int(category.get("purchased_days") or 30)
+            if mode == "always":
+                display = "Всегда"
+            else:
+                display = f"{days} дней"
+            lines.append(f"{category.get('title', '')} — Купленное: {display}")
+    lines.extend(
+        [
+            "",
+            f"Категория списания: {debit_category_title}",
+        ]
+    )
+    if error_message:
+        lines.append("")
+        lines.append(error_message)
+    return "\n".join(lines)
+
+
+def _format_byt_rules_text(
+    settings: dict,
+    categories: list[dict],
+    error_message: str | None = None,
+) -> str:
+    on_off = {True: "ДА", False: "НЕТ", 1: "ДА", 0: "НЕТ"}
+    lines = [
+        "🔔 Напоминания — условия",
+        "",
+        format_byt_categories_status_text(categories),
+        f"Напоминания включены: {on_off.get(settings.get('byt_reminders_enabled', 1), 'НЕТ')}",
+        "Слать если список пуст: НЕТ",
+        'Формат: "Что ты купил?" (кнопки-товары)',
+        f"ОТЛОЖИТЬ: {on_off.get(settings.get('byt_defer_enabled', 1), 'НЕТ')}",
+        f"Макс. дней отложить: {settings.get('byt_defer_max_days', 365)}",
+        "",
+        "Время напоминаний настраивается по категориям.",
+    ]
+    if error_message:
+        lines.append("")
+        lines.append(error_message)
+    return "\n".join(lines)
+
+
+def _format_byt_timer_menu_text(
+    categories: list[dict], error_message: str | None = None
+) -> str:
+    lines = ["⏰ Время напоминаний", "", "Выбери категорию, затем выбери время(я)."]
+    if not categories:
+        lines.append("")
+        lines.append("Категорий пока нет.")
+    if error_message:
+        lines.append("")
+        lines.append(error_message)
+    return "\n".join(lines)
+
+
+def _format_byt_timer_category_text(
+    category_title: str, times: list[dict], error_message: str | None = None
+) -> str:
+    lines = [
+        "⏰ Время напоминаний",
+        "",
+        f"Категория: {category_title}",
+        "",
+        "Текущие времена:",
+        "",
+    ]
+    if times:
+        for timer in times:
+            if timer.get("time_hhmm"):
+                lines.append(str(timer.get("time_hhmm")))
+            else:
+                lines.append(
+                    f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
+                )
+    else:
+        lines.append("Время не задано")
+    if error_message:
+        lines.append("")
+        lines.append(error_message)
+    return "\n".join(lines)
+
+
+async def _render_income_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> list[dict]:
+    categories = db.list_active_income_categories(user_id)
+    LOGGER.info("Open income settings (reply mode) user_id=%s", user_id)
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=_format_category_text(
+            "📊 ДОХОД — категории и проценты", categories, error_message
+        ),
+        reply_markup=income_settings_reply_keyboard(),
+        screen_id="st:income",
+    )
+    return categories
+
+
+async def _render_wishlist_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> list[dict]:
+    categories = db.list_active_wishlist_categories(user_id)
+    debit_category = db.get_wishlist_debit_category(user_id)
+    debit_title = "Не выбрано"
+    if debit_category:
+        income_category = db.get_income_category_by_code(user_id, debit_category)
+        debit_title = income_category.get("title", debit_category) if income_category else "Категория удалена"
+    LOGGER.info("Open wishlist settings (reply mode) user_id=%s", user_id)
+    LOGGER.info("USER=%s ACTION=WISHLIST_SETTINGS_OPEN", user_id)
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=_format_wishlist_text(categories, debit_title, error_message),
+        reply_markup=wishlist_settings_reply_keyboard(),
+        screen_id="st:wishlist",
+    )
+    return categories
+
+
+async def _render_byt_rules_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> dict:
+    db.ensure_user_settings(user_id)
+    settings_row = db.get_user_settings(user_id)
+    categories = db.list_byt_reminder_categories(user_id)
+    LOGGER.info("Open byt conditions settings (reply mode) user_id=%s", user_id)
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=_format_byt_rules_text(settings_row, categories, error_message),
+        reply_markup=byt_rules_reply_keyboard(),
+        screen_id="st:byt_rules",
+    )
+    return settings_row
+
+
+async def _render_byt_timer_settings(
+    *,

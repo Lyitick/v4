@@ -52,3 +52,9 @@
 Ответ 2026-01-09 #6: добавлен parse_byt_manual_cursor_index, обновлён BYT manual handler, добавлены тесты, обновлены project_code*.txt.
 Запрос 2026-01-12 #1: автодвоеточие при вводе времени, прием числового ввода текстом для цифровых клавиатур, парсеры и тесты.
 Ответ 2026-01-12 #1: добавлены утилиты для времени/чисел и унифицированные ошибки, расширен ввод чисел текстом и автодвоеточие, добавлены тесты, обновлены project_code*.txt.
+Запрос 2026-01-12 #2: исправить ImportError из-за отсутствия HINT_USE_BUTTONS в Bot.utils.messages.
+Ответ 2026-01-12 #2: добавлена константа HINT_USE_BUTTONS в messages, обновлен project_code_6.txt.
+Запрос 2026-01-12 #3: исправить ImportError для ERR_GENERIC и EMPTY_LIST.
+Ответ 2026-01-12 #3: добавлены ERR_GENERIC и EMPTY_LIST в messages, обновлен project_code_6.txt.
+Запрос 2026-01-12 #4: исправить NameError get_settings в handlers/settings.py.
+Ответ 2026-01-12 #4: добавлен импорт get_settings в handlers/settings.py, обновлен project_code_2.txt.

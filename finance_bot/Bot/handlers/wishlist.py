@@ -17,18 +17,25 @@ from aiogram.types import (
     ReplyKeyboardRemove,
 )
 
+from Bot.config.settings import get_settings
 from Bot.database.crud import FinanceDatabase
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
+from Bot.constants.ui_labels import NAV_BACK, NAV_HOME
 from Bot.keyboards.main import (
     back_only_keyboard,
     wishlist_categories_keyboard,
     wishlist_reply_keyboard,
     wishlist_url_keyboard,
 )
+from Bot.keyboards.navigation import nav_back_home
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.wishlist_states import BytDeferState, WishlistState
-from Bot.utils.datetime_utils import get_next_reminder_dt, now_tz, resolve_deferred_until
+from Bot.utils.datetime_utils import get_next_reminder_dt, resolve_deferred_until
+from Bot.utils.messages import ERR_INVALID_INPUT
+from Bot.utils.time import now_for_user
+from Bot.services.wishlist_service import add_wish as add_wish_service
+from Bot.services.wishlist_service import list_wishlist_categories as list_wishlist_categories_service
 from Bot.utils.byt_render import (
     format_byt_category_checklist_text,
     format_byt_defer_confirmation_text,
@@ -47,6 +54,11 @@ from Bot.utils.ui_cleanup import ui_register_message, ui_register_user_message
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+DEFAULT_TZ = (
+    get_settings().timezone.key
+    if hasattr(get_settings().timezone, "key")
+    else str(get_settings().timezone)
+)
 
 
 async def _push_wl_step(state: FSMContext, step: str) -> None:
@@ -77,7 +89,8 @@ def humanize_wishlist_category(category: str) -> str:
 def _get_user_wishlist_categories(db: FinanceDatabase, user_id: int) -> list[dict]:
     """Return active wishlist categories."""
 
-    return db.list_active_wishlist_categories(user_id)
+    # DEPRECATED: use Bot.services.wishlist_service
+    return list_wishlist_categories_service(db, user_id)
 
 
 def _resolve_wish_category(
@@ -148,7 +161,7 @@ async def add_wish_start(message: Message, state: FSMContext) -> None:
         reply_markup=back_only_keyboard(),
     )
 
-@router.message(WishlistState.waiting_for_name, F.text != "⬅️ Назад")
+@router.message(WishlistState.waiting_for_name, ~F.text.in_({NAV_BACK, "⬅️ Назад"}))
 async def add_wish_name(message: Message, state: FSMContext) -> None:
     """Save wish name and request price."""
 
@@ -200,7 +213,7 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
     elif message.text == "✅ Газ":
         amount_str = current_sum.strip()
         if not amount_str:
-            await message.answer("Нужно ввести число. Попробуй снова.")
+            await message.answer(ERR_INVALID_INPUT)
             await safe_delete_message(
                 message.bot,
                 chat_id=message.chat.id,
@@ -213,7 +226,7 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
         try:
             price = float(normalized)
         except (TypeError, ValueError):
-            await message.answer("Нужно ввести число. Попробуй снова.")
+            await message.answer(ERR_INVALID_INPUT)
             await safe_delete_message(
                 message.bot,
                 chat_id=message.chat.id,
@@ -271,7 +284,7 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(WishlistState.waiting_for_url, F.text != "⬅️ Назад")
+@router.message(WishlistState.waiting_for_url, ~F.text.in_({NAV_BACK, "⬅️ Назад"}))
 async def add_wish_url(message: Message, state: FSMContext) -> None:
     """Save URL and request category selection."""
 
@@ -292,7 +305,7 @@ async def add_wish_url(message: Message, state: FSMContext) -> None:
     await message.answer(
         "Выбери категорию желания.", reply_markup=wishlist_categories_keyboard(categories)
     )
-    await message.answer("Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard())
+    await message.answer(f"Если нужно, нажми {NAV_BACK}.", reply_markup=back_only_keyboard())
 
 
 @router.message(F.text == "Купленное")
@@ -336,7 +349,7 @@ async def show_purchases(message: Message, state: FSMContext | None = None) -> N
 
 
 @router.message(
-    F.text == "⬅️ Назад",
+    F.text.in_({NAV_BACK, "⬅️ Назад"}),
     StateFilter(
         WishlistState.waiting_for_name,
         WishlistState.waiting_for_price,
@@ -417,7 +430,7 @@ async def invalid_price(message: Message) -> None:
     await message.answer("Используй кнопки калькулятора ниже для ввода цены.")
 
 
-@router.message(WishlistState.waiting_for_category, F.text == "⬅️ Назад")
+@router.message(WishlistState.waiting_for_category, F.text.in_({NAV_BACK, "⬅️ Назад"}))
 async def add_wish_back_from_category(message: Message, state: FSMContext) -> None:
     """Return to name step from category selection."""
 
@@ -439,7 +452,7 @@ async def waiting_category_text(message: Message) -> None:
         "Выбери категорию через кнопки ниже.",
         reply_markup=wishlist_categories_keyboard(categories),
     )
-    await message.answer("Если нужно, нажми ⬅️ Назад.", reply_markup=back_only_keyboard())
+    await message.answer(f"Если нужно, нажми {NAV_BACK}.", reply_markup=back_only_keyboard())
 
 
 def _build_byt_items_keyboard(
@@ -564,7 +577,7 @@ async def _refresh_byt_reminder_message(
         )
         return
 
-    now_dt = now_tz()
+    now_dt = now_for_user(db, user_id, DEFAULT_TZ)
     due_items, deferred_items = get_byt_category_items(db, user_id, category_title, now_dt)
     settings_row = db.get_user_settings(user_id)
     allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
@@ -676,7 +689,7 @@ async def run_byt_timer_check(
     """Run BYT reminders using timer configuration for the user."""
 
     await asyncio.sleep(0)
-    trigger_dt = run_time or now_tz()
+    trigger_dt = run_time or now_for_user(db, user_id, DEFAULT_TZ)
     if simulated_time:
         trigger_dt = trigger_dt.replace(
             hour=simulated_time.hour,
@@ -813,7 +826,7 @@ async def handle_byt_buy(callback: CallbackQuery, state: FSMContext) -> None:
     _, category_title = _resolve_wish_category(db, callback.from_user.id, wish)
 
     price = float(wish.get("price", 0) or 0)
-    purchase_time = now_tz()
+    purchase_time = now_for_user(db, callback.from_user.id, DEFAULT_TZ)
     db.decrease_savings(callback.from_user.id, "быт", price)
     db.mark_wish_purchased(item_id, purchased_at=purchase_time)
     db.add_purchase(
@@ -872,7 +885,7 @@ async def handle_byt_defer_menu(callback: CallbackQuery, state: FSMContext) -> N
     if not bool(settings_row.get("byt_defer_enabled", 1)):
         await safe_callback_answer(callback, "Отключено в настройках", show_alert=True, logger=LOGGER)
         return
-    now_dt = now_tz()
+    now_dt = now_for_user(db, callback.from_user.id, DEFAULT_TZ)
     category_title = None
     if category_id is not None:
         category_row = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
@@ -967,7 +980,7 @@ async def handle_byt_defer_next_menu(callback: CallbackQuery, state: FSMContext)
     if category_id is not None:
         category_row = db.get_wishlist_category_by_id(callback.from_user.id, category_id)
         category_title = category_row.get("title") if category_row else None
-    now_dt = now_tz()
+    now_dt = now_for_user(db, callback.from_user.id, DEFAULT_TZ)
     items = (
         db.list_active_byt_items_for_reminder(
             callback.from_user.id, now_dt, category_title
@@ -1048,7 +1061,7 @@ async def handle_byt_defer_next(callback: CallbackQuery, state: FSMContext) -> N
         else []
     )
     times_hhmm = [str(item.get("time_hhmm", "")) for item in times if item.get("time_hhmm")]
-    next_run = get_next_reminder_dt(now_tz(), times_hhmm)
+    next_run = get_next_reminder_dt(now_for_user(db, callback.from_user.id, DEFAULT_TZ), times_hhmm)
 
     existing_deferred = parse_deferred_until(wish.get("deferred_until"))
 
@@ -1064,7 +1077,7 @@ async def handle_byt_defer_next(callback: CallbackQuery, state: FSMContext) -> N
         deferred_until.isoformat(),
     )
 
-    now_dt = now_tz()
+    now_dt = now_for_user(db, callback.from_user.id, DEFAULT_TZ)
     due_items, deferred_items = get_byt_category_items(
         db, callback.from_user.id, category_title, now_dt
     )
@@ -1269,7 +1282,7 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
             )
             return
         reminder_message_id = data.get("reminder_message_id")
-        desired_deferred_until = now_tz() + timedelta(days=days)
+        desired_deferred_until = now_for_user(db, message.from_user.id, DEFAULT_TZ) + timedelta(days=days)
         wish = db.get_wish(defer_item_id)
         existing_deferred = parse_deferred_until(
             wish.get("deferred_until") if wish else None
@@ -1309,7 +1322,7 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
         if wish:
             category_id, category_title = _resolve_wish_category(db, message.from_user.id, wish)
             due_items, deferred_items = get_byt_category_items(
-                db, message.from_user.id, category_title, now_tz()
+                db, message.from_user.id, category_title, now_for_user(db, message.from_user.id, DEFAULT_TZ)
             )
             checklist_text = format_byt_category_checklist_text(
                 category_title, due_items, deferred_items

@@ -2,6 +2,8 @@
 
 from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
 
+from Bot.constants.ui_labels import NAV_BACK, NAV_HOME
+
 
 def income_calculator_keyboard() -> ReplyKeyboardMarkup:
     """Общая цифровая клавиатура для ввода сумм."""
@@ -15,7 +17,7 @@ def income_calculator_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="0"),
             KeyboardButton(text="✅ Газ"),
         ],
-        [KeyboardButton(text="⬅️ Назад")],
+        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
     ]
     return ReplyKeyboardMarkup(
         keyboard=keyboard,

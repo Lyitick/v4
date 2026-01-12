@@ -5,7 +5,6 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
@@ -28,6 +27,7 @@ from Bot.handlers import (
 )
 from Bot.handlers.wishlist import run_byt_timer_check
 from Bot.utils.logging import init_logging
+from Bot.utils.time import now_for_user
 
 
 def register_routers(dispatcher: Dispatcher) -> None:
@@ -68,17 +68,19 @@ def _format_token_context(token_source: str, fingerprint: str, env_path: Path) -
     return f"token_source={token_source}, fingerprint={fingerprint}"
 
 
-async def _run_byt_scheduler(bot: Bot, db, timezone: ZoneInfo) -> None:
+async def _run_byt_scheduler(bot: Bot, db, default_tz: str) -> None:
     """Background scheduler for BYT reminders."""
 
     while True:
-        now = datetime.now(tz=timezone)
         user_ids = set(db.get_users_with_byt_reminder_times()) | set(
             db.get_users_with_active_byt_wishes()
         )
+        now_values: dict[int, datetime] = {}
         for uid in user_ids:
-            await run_byt_timer_check(bot, db, user_id=uid, run_time=now)
-        sleep_for = 60 - now.second - now.microsecond / 1_000_000
+            now_values[uid] = now_for_user(db, uid, default_tz)
+            await run_byt_timer_check(bot, db, user_id=uid, run_time=now_values[uid])
+        reference = now_values[min(now_values)] if now_values else now_for_user(db, 0, default_tz)
+        sleep_for = 60 - reference.second - reference.microsecond / 1_000_000
         await asyncio.sleep(max(sleep_for, 1))
 
 
@@ -121,7 +123,11 @@ async def main() -> None:
         return
 
     reminder_task = asyncio.create_task(
-        _run_byt_scheduler(bot, db, settings.timezone)
+        _run_byt_scheduler(
+            bot,
+            db,
+            settings.timezone.key if hasattr(settings.timezone, "key") else str(settings.timezone),
+        )
     )
     try:
         logger.info(

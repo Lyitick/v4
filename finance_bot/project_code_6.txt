@@ -1,1651 +1,3 @@
-    buttons = [
-        [KeyboardButton(text="Купленное")],
-        [KeyboardButton(text="⏪ На главную")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def wishlist_categories_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
-    """Inline keyboard for wishlist categories."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for category in categories:
-        row.append(
-            InlineKeyboardButton(
-                text=category.get("title", ""),
-                callback_data=f"wlcat:{category.get('id')}",
-            )
-        )
-        if len(row) == 2:
-            inline_keyboard.append(row)
-            row = []
-    if row:
-        inline_keyboard.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def wishlist_url_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for skipping wishlist URL input."""
-
-    buttons = [[InlineKeyboardButton(text="скип", callback_data="wishlist_skip_url")]]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def purchase_confirmation_keyboard() -> ReplyKeyboardMarkup:
-    """Keyboard for confirming purchase suggestion."""
-
-    buttons = [[KeyboardButton(text="✅ Купил"), KeyboardButton(text="🔄 Продолжить копить")]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
-
-
-def income_confirm_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard with confirm income button."""
-
-    buttons = [[InlineKeyboardButton(text="✅ Получено", callback_data="income_confirm")]]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-===== Bot/keyboards/settings.py =====
-
-"""Settings keyboards."""
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
-
-from Bot.constants.ui_labels import (
-    WISHLIST_DEBIT_CATEGORY_BACK,
-    WISHLIST_DEBIT_CATEGORY_BUTTON,
-    WISHLIST_DEBIT_CATEGORY_NONE,
-    WISHLIST_BYT_CATEGORY_BUTTON,
-)
-
-
-def settings_menu_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for settings menu."""
-
-    buttons = [
-        [KeyboardButton(text="⚙️ Бытовые платежи ⚙️")],
-        [KeyboardButton(text="⏪ На главную")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def household_settings_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for household settings actions."""
-
-    buttons = [
-        [
-            InlineKeyboardButton(text="➕", callback_data="hh_set:add"),
-            InlineKeyboardButton(text="➖", callback_data="hh_set:del"),
-        ]
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=buttons)
-
-
-def household_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
-    """Inline keyboard for removing household items."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    for item in items:
-        title = str(item.get("text", "")).rstrip("?")
-        amount = item.get("amount")
-        label = f"{title} — {amount}" if amount is not None else title
-        inline_keyboard.append(
-            [
-                InlineKeyboardButton(
-                    text=label,
-                    callback_data=f"hh_set:remove:{item.get('code', '')}",
-                )
-            ]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for household payments settings actions."""
-
-    buttons = [
-        [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
-        [KeyboardButton(text="💰 Категория списания"), KeyboardButton(text="🧹 Обнулить")],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def household_debit_category_select_reply_keyboard(
-    categories: list[dict],
-) -> ReplyKeyboardMarkup:
-    """Reply keyboard for selecting household debit category."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for category in categories:
-        row.append(KeyboardButton(text=category.get("title", "")))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text="⬅ Назад")])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def household_payments_remove_reply_keyboard(
-    items: list[dict],
-) -> ReplyKeyboardMarkup:
-    """Reply keyboard for removing household payments in settings."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for item in items:
-        title = str(item.get("text", "")).rstrip("?")
-        amount = item.get("amount")
-        label = f"{title} — {amount}" if amount is not None else title
-        row.append(KeyboardButton(text=label))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text="⬅ Назад")])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def household_payments_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for household payments settings."""
-
-    inline_keyboard = [
-        [InlineKeyboardButton(text="➕ Добавить платеж", callback_data="hp:add_payment")],
-        [InlineKeyboardButton(text="➖ Удалить платеж", callback_data="hp:del_payment_menu")],
-        [InlineKeyboardButton(text="🔄 Обнулить", callback_data="hp:reset_questions")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def household_payments_remove_keyboard(items: list[dict]) -> InlineKeyboardMarkup:
-    """Inline keyboard for removing household payments in settings."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    for item in items:
-        title = str(item.get("text", "")).rstrip("?")
-        amount = item.get("amount")
-        label = f"{title} — {amount}" if amount is not None else title
-        inline_keyboard.append(
-            [
-                InlineKeyboardButton(
-                    text=label,
-                    callback_data=f"hp:del_payment:{item.get('code', '')}",
-                )
-            ]
-        )
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for settings home screen."""
-
-    inline_keyboard = [
-        [
-            InlineKeyboardButton(text="📊 Доход", callback_data="st:income"),
-            InlineKeyboardButton(text="🧾 Вишлист", callback_data="st:wishlist"),
-        ],
-        [InlineKeyboardButton(text="Напоминания", callback_data="st:byt_rules")],
-        [InlineKeyboardButton(text="🧾 Бытовые платежи", callback_data="st:household_payments")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def settings_home_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for settings home screen."""
-
-    buttons = [
-        [KeyboardButton(text="📊 Доход"), KeyboardButton(text="🧾 Вишлист")],
-        [KeyboardButton(text="Напоминания"), KeyboardButton(text="🧾 Бытовые платежи")],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def wishlist_settings_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for wishlist settings."""
-
-    inline_keyboard = [
-        [
-            InlineKeyboardButton(text="➕ Категорию", callback_data="wl:add_cat"),
-            InlineKeyboardButton(text="➖ Категорию", callback_data="wl:del_cat_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="⏳ Срок купленного", callback_data="wl:purchased_select_category"),
-        ],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for wishlist settings actions."""
-
-    buttons = [
-        [
-            KeyboardButton(text="➕ Добавить категорию вишлиста"),
-            KeyboardButton(text="➖ Удалить категорию вишлиста"),
-        ],
-        [KeyboardButton(text="🕒 Настроить купленное")],
-        [KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BUTTON)],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def wishlist_categories_select_reply_keyboard(categories: list[dict]) -> ReplyKeyboardMarkup:
-    """Reply keyboard for selecting wishlist category."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for category in categories:
-        row.append(KeyboardButton(text=category.get("title", "")))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text="⬅ Назад")])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def wishlist_purchased_mode_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for selecting wishlist purchased mode."""
-
-    buttons = [
-        [KeyboardButton(text="Всегда")],
-        [KeyboardButton(text="Настроить дни")],
-        [KeyboardButton(text="⬅ Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def wishlist_debit_category_select_reply_keyboard(
-    categories: list[dict],
-) -> ReplyKeyboardMarkup:
-    """Reply keyboard for selecting wishlist debit category."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for category in categories:
-        row.append(KeyboardButton(text=category.get("title", "")))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_NONE)])
-    rows.append([KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BACK)])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def wishlist_byt_category_select_reply_keyboard(
-    categories: list[dict],
-) -> ReplyKeyboardMarkup:
-    """Reply keyboard for selecting BYT wishlist category."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for category in categories:
-        row.append(KeyboardButton(text=category.get("title", "")))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text="⏪ Назад"), KeyboardButton(text="🏠 На главную")])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def byt_category_toggle_keyboard(categories: list[dict]) -> InlineKeyboardMarkup:
-    """Inline keyboard for toggling BYT categories."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for category in categories:
-        enabled = bool(category.get("enabled", 0))
-        label = f"{'✅' if enabled else '❌'} {category.get('title', '')}"
-        next_state = 0 if enabled else 1
-        row.append(
-            InlineKeyboardButton(
-                text=label,
-                callback_data=f"byt:category_toggle:{category.get('id')}:{next_state}",
-            )
-        )
-        if len(row) == 2:
-            inline_keyboard.append(row)
-            row = []
-    if row:
-        inline_keyboard.append(row)
-    inline_keyboard.append(
-        [
-            InlineKeyboardButton(text="⏪ Назад", callback_data="st:byt_rules"),
-            InlineKeyboardButton(text="🏠 На главную", callback_data="st:home"),
-        ]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def wishlist_categories_select_keyboard(
-    categories: list[dict], action_prefix: str
-) -> InlineKeyboardMarkup:
-    """Inline keyboard for selecting wishlist category."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for category in categories:
-        button = InlineKeyboardButton(
-            text=category.get("title", ""),
-            callback_data=f"{action_prefix}:{category.get('id')}",
-        )
-        row.append(button)
-        if len(row) == 2:
-            inline_keyboard.append(row)
-            row = []
-    if row:
-        inline_keyboard.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def byt_timer_categories_inline_keyboard(
-    categories: list[dict], action_prefix: str
-) -> InlineKeyboardMarkup:
-    """Inline keyboard for selecting BYT timer category."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for category in categories:
-        enabled = bool(category.get("enabled", 0))
-        label = f"{'✅' if enabled else '❌'} {category.get('title', '')}"
-        row.append(
-            InlineKeyboardButton(
-                text=label,
-                callback_data=f"{action_prefix}:{category.get('id')}",
-            )
-        )
-        if len(row) == 2:
-            inline_keyboard.append(row)
-            row = []
-    if row:
-        inline_keyboard.append(row)
-    inline_keyboard.append(
-        [
-            InlineKeyboardButton(text="⏪ Назад", callback_data="st:byt_rules"),
-            InlineKeyboardButton(text="🏠 На главную", callback_data="st:home"),
-        ]
-    )
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def wishlist_purchased_mode_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for selecting wishlist purchased mode."""
-
-    inline_keyboard = [
-        [InlineKeyboardButton(text="Всегда", callback_data="wl:purchased_mode:always")],
-        [InlineKeyboardButton(text="Несколько дней", callback_data="wl:purchased_mode:days")],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for BYT rules settings."""
-
-    inline_keyboard = [
-        [
-            InlineKeyboardButton(
-                text="Выбор категории для напоминаний", callback_data="wl:byt_category_menu"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                text="🔁 Вкл/Выкл напоминания", callback_data="byt:toggle_enabled"
-            ),
-            InlineKeyboardButton(
-                text="🔁 ОТЛОЖИТЬ Вкл/Выкл", callback_data="byt:toggle_defer"
-            ),
-        ],
-        [
-            InlineKeyboardButton(text="⏳ Макс. дни отложить", callback_data="byt:edit_max_defer_days"),
-            InlineKeyboardButton(text="⏰ Время напоминаний", callback_data="byt:timer_menu"),
-        ],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for BYT rules settings."""
-
-    buttons = [
-        [KeyboardButton(text=WISHLIST_BYT_CATEGORY_BUTTON)],
-        [
-            KeyboardButton(text="🔁 Вкл/Выкл напоминания"),
-            KeyboardButton(text="🔁 ОТЛОЖИТЬ Вкл/Выкл"),
-        ],
-        [KeyboardButton(text="⏰ Время напоминаний")],
-        [KeyboardButton(text="⏳ Макс. дни отложить")],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for BYT timer settings."""
-
-    inline_keyboard = [
-        [
-            InlineKeyboardButton(text="➕ Добавить время", callback_data="bt:add_time"),
-            InlineKeyboardButton(text="🗑 Удалить время", callback_data="bt:del_time_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="⏪ Назад", callback_data="byt:timer_menu"),
-            InlineKeyboardButton(text="🏠 На главную", callback_data="st:home"),
-        ],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def byt_timer_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for BYT timer settings."""
-
-    buttons = [
-        [
-            KeyboardButton(text="➕ Добавить время"),
-            KeyboardButton(text="🗑 Удалить время"),
-        ],
-        [KeyboardButton(text="⬅ Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def byt_timer_times_select_reply_keyboard(times: list[dict]) -> ReplyKeyboardMarkup:
-    """Reply keyboard for selecting BYT timer time."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for timer in times:
-        if timer.get("time_hhmm"):
-            label = str(timer.get("time_hhmm"))
-        else:
-            label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
-        row.append(KeyboardButton(text=label))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text="⬅ Назад")])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def byt_timer_times_select_keyboard(times: list[dict], action_prefix: str) -> InlineKeyboardMarkup:
-    """Inline keyboard for selecting BYT timer time."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for timer in times:
-        if timer.get("time_hhmm"):
-            label = str(timer.get("time_hhmm"))
-            callback_value = label
-        else:
-            label = f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
-            callback_value = str(timer.get("id"))
-        row.append(
-            InlineKeyboardButton(text=label, callback_data=f"{action_prefix}:{callback_value}")
-        )
-        if len(row) == 2:
-            inline_keyboard.append(row)
-            row = []
-    if row:
-        inline_keyboard.append(row)
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def settings_back_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard with a single back button for settings mode."""
-
-    buttons = [[KeyboardButton(text="⬅ Назад")]]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def income_settings_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for income settings actions."""
-
-    inline_keyboard = [
-        [
-            InlineKeyboardButton(text="➕ Категорию", callback_data="inc:add"),
-            InlineKeyboardButton(text="➖ Категорию", callback_data="inc:del_menu"),
-        ],
-        [
-            InlineKeyboardButton(text="✏️ Проценты", callback_data="inc:pct_menu"),
-        ],
-    ]
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def income_settings_reply_keyboard() -> ReplyKeyboardMarkup:
-    """Reply keyboard for income settings actions."""
-
-    buttons = [
-        [
-            KeyboardButton(text="➕ Добавить категорию дохода"),
-            KeyboardButton(text="➖ Удалить категорию дохода"),
-        ],
-        [KeyboardButton(text="⚙️ Проценты доходов")],
-        [KeyboardButton(text="⬅️ Назад")],
-    ]
-    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
-
-
-def income_categories_select_reply_keyboard(
-    categories: list[dict],
-) -> ReplyKeyboardMarkup:
-    """Reply keyboard for selecting income category."""
-
-    rows: list[list[KeyboardButton]] = []
-    row: list[KeyboardButton] = []
-    for category in categories:
-        title = category.get("title", "")
-        percent = category.get("percent", 0)
-        row.append(KeyboardButton(text=f"{title} — {percent}%"))
-        if len(row) == 2:
-            rows.append(row)
-            row = []
-    if row:
-        rows.append(row)
-    rows.append([KeyboardButton(text="⬅ Назад")])
-    return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
-
-
-def income_categories_select_keyboard(
-    categories: list[dict], action_prefix: str
-) -> InlineKeyboardMarkup:
-    """Inline keyboard for selecting an income category."""
-
-    inline_keyboard: list[list[InlineKeyboardButton]] = []
-    row: list[InlineKeyboardButton] = []
-    for category in categories:
-        button = InlineKeyboardButton(
-            text=f"{category['title']} ({category['percent']}%)",
-            callback_data=f"{action_prefix}:{category['id']}",
-        )
-        row.append(button)
-        if len(row) == 2:
-            inline_keyboard.append(row)
-            row = []
-    if row:
-        inline_keyboard.append(row)
-
-    return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
-
-
-def settings_stub_inline_keyboard() -> InlineKeyboardMarkup:
-    """Inline keyboard for stub sections with back button."""
-
-    return InlineKeyboardMarkup(inline_keyboard=[])
-
-===== Bot/main.py =====
-
-"""Entry point for finance bot."""
-import asyncio
-import contextlib
-import logging
-import sys
-from datetime import datetime
-from pathlib import Path
-from zoneinfo import ZoneInfo
-
-project_root = Path(__file__).resolve().parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-from aiogram import Bot, Dispatcher
-from aiogram.client.default import DefaultBotProperties
-from aiogram.exceptions import TelegramUnauthorizedError
-
-from Bot.config.settings import get_settings
-from Bot.database.get_db import get_db
-from Bot.handlers import (
-    callbacks,
-    common,
-    finances,
-    household_payments,
-    settings,
-    start,
-    wishlist,
-)
-from Bot.handlers.wishlist import run_byt_timer_check
-from Bot.utils.logging import init_logging
-
-
-def register_routers(dispatcher: Dispatcher) -> None:
-    """Register all routers to dispatcher."""
-
-    dispatcher.include_router(start.router)
-    dispatcher.include_router(finances.router)
-    dispatcher.include_router(household_payments.router)
-    dispatcher.include_router(settings.router)
-    dispatcher.include_router(wishlist.router)
-    dispatcher.include_router(callbacks.router)
-    dispatcher.include_router(common.router)
-
-
-def _token_fingerprint(token: str) -> str:
-    if not token:
-        return "empty"
-    if len(token) <= 8:
-        return f"{token[:2]}…{token[-2:]}"
-    return f"{token[:4]}…{token[-4:]}"
-
-
-def _validate_token(token: str) -> list[str]:
-    if not token.strip():
-        return ["BOT_TOKEN пустой или не загружен"]
-
-    errors = []
-    if ":" not in token:
-        errors.append("BOT_TOKEN не похож на токен (нет ':')")
-    if len(token) < 20:
-        errors.append("BOT_TOKEN слишком короткий (ожидается > 20 символов)")
-    return errors
-
-
-def _format_token_context(token_source: str, fingerprint: str, env_path: Path) -> str:
-    if token_source == ".env":
-        return f"token_source={token_source}, fingerprint={fingerprint}, env_path={env_path}"
-    return f"token_source={token_source}, fingerprint={fingerprint}"
-
-
-async def _run_byt_scheduler(bot: Bot, db, timezone: ZoneInfo) -> None:
-    """Background scheduler for BYT reminders."""
-
-    while True:
-        now = datetime.now(tz=timezone)
-        user_ids = set(db.get_users_with_byt_reminder_times()) | set(
-            db.get_users_with_active_byt_wishes()
-        )
-        for uid in user_ids:
-            await run_byt_timer_check(bot, db, user_id=uid, run_time=now)
-        sleep_for = 60 - now.second - now.microsecond / 1_000_000
-        await asyncio.sleep(max(sleep_for, 1))
-
-
-async def main() -> None:
-    """Run bot polling."""
-
-    init_logging()
-    settings = get_settings()
-    logger = logging.getLogger(__name__)
-    token = (settings.bot_token or "").strip()
-    token_source = settings.bot_token_source
-    fingerprint = _token_fingerprint(token)
-    token_context = _format_token_context(token_source, fingerprint, project_root / ".env")
-
-    errors = _validate_token(token)
-    for error in errors:
-        logger.error("%s (%s)", error, token_context)
-    if errors:
-        return
-
-    bot = Bot(
-        token=token,
-        default=DefaultBotProperties(parse_mode="HTML"),
-    )
-    dp = Dispatcher()
-
-    db = get_db()
-    register_routers(dp)
-
-    try:
-        await bot.me()
-    except TelegramUnauthorizedError:
-        logger.error(
-            "Unauthorized: токен неверный/отозван/бот удалён. "
-            "Проверь BotFather и переменные окружения. "
-            "(%s)",
-            token_context,
-        )
-        await bot.session.close()
-        return
-
-    reminder_task = asyncio.create_task(
-        _run_byt_scheduler(bot, db, settings.timezone)
-    )
-    try:
-        logger.info(
-            "Starting bot polling (%s)",
-            token_context,
-        )
-        await dp.start_polling(bot)
-    except TelegramUnauthorizedError:
-        logger.error(
-            "Unauthorized: токен неверный/отозван/бот удалён. "
-            "Проверь BotFather и переменные окружения. "
-            "(%s)",
-            token_context,
-        )
-    except Exception as error:  # noqa: BLE001
-        logger.exception("Bot stopped due to error: %s", error)
-    finally:
-        reminder_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await reminder_task
-        await bot.session.close()
-        logger.info("Bot shutdown complete")
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
-
-===== Bot/renderers/__init__.py =====
-
-"""Renderer layer package."""
-
-===== Bot/renderers/household.py =====
-
-"""Renderers for household payments UI."""
-from __future__ import annotations
-
-import html
-from typing import Dict, List
-
-from aiogram.types import InlineKeyboardMarkup
-
-from Bot.keyboards.household import household_payments_inline_keyboard
-
-
-def render_household_questions_text(
-    month: str,
-    questions: list[dict],
-    answers: dict[str, str],
-    current_index: int | None,
-) -> str:
-    header = f"<b>БЫТОВЫЕ ПЛАТЕЖИ — {html.escape(month)}</b>"
-    lines = [header]
-    for index, question in enumerate(questions, start=1):
-        code = str(question.get("code", ""))
-        text = html.escape(str(question.get("text", "")).strip())
-        text = text.rstrip("?").strip()
-        suffix = ""
-        answer = answers.get(code)
-        if answer == "yes":
-            suffix = " ✅"
-        elif answer == "no":
-            suffix = " ❌"
-        display = text
-        if current_index is not None and index - 1 == current_index:
-            display = f"<b>{display.upper()}</b>"
-        lines.append(f"{index}) {display}{suffix}")
-    return "\n".join(lines)
-
-
-def format_household_items(
-    items: List[Dict[str, int | str]],
-    unpaid_set: set[str],
-) -> str:
-    if not items:
-        return "Текущий список платежей: (пусто)"
-
-    lines = ["Текущий список платежей:"]
-    for index, item in enumerate(items, start=1):
-        title = str(item.get("text", "")).rstrip("?")
-        amount = item.get("amount")
-        code = str(item.get("code", ""))
-        status = "❌" if code in unpaid_set else "✅"
-        if amount is not None:
-            lines.append(f"{index}) {status} {title} — {amount}")
-        else:
-            lines.append(f"{index}) {status} {title}")
-    return "\n".join(lines)
-
-
-def build_household_question_keyboard(
-    question_code: str | None, show_back: bool
-) -> InlineKeyboardMarkup:
-    return household_payments_inline_keyboard(
-        show_back=show_back, question_code=question_code
-    )
-
-===== Bot/services/__init__.py =====
-
-"""Service layer package."""
-
-===== Bot/services/household.py =====
-
-"""Business logic for household payments flow."""
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Iterable
-
-
-@dataclass
-class HouseholdFlowState:
-    """Container for household flow state."""
-
-    month: str
-    questions: list[dict]
-    current_step_index: int
-    current_question_code: str | None
-    answers: dict[str, str]
-    processed_steps: set[str]
-
-
-def build_household_questions(items: Iterable[dict]) -> list[dict]:
-    return [
-        {
-            "code": str(item.get("code", "")),
-            "text": str(item.get("text", "")),
-            "amount": item.get("amount"),
-        }
-        for item in items
-        if item.get("code") is not None
-    ]
-
-
-def build_answers_from_status(status_map: dict[str, int]) -> dict[str, str]:
-    return {
-        str(code): "yes"
-        for code, value in status_map.items()
-        if int(value) == 1
-    }
-
-
-def filter_unpaid_questions(
-    questions: Iterable[dict], unpaid_codes: Iterable[str]
-) -> list[dict]:
-    unpaid_set = {str(code) for code in unpaid_codes}
-    return [question for question in questions if question.get("code") in unpaid_set]
-
-
-def get_current_question(questions: list[dict], index: int) -> dict | None:
-    if index < 0 or index >= len(questions):
-        return None
-    return questions[index]
-
-
-def get_next_index(index: int, questions: list[dict]) -> int:
-    return min(index + 1, len(questions))
-
-
-def get_previous_index(index: int) -> int:
-    return max(index - 1, 0)
-
-
-def should_ignore_answer(
-    answers: dict[str, str],
-    processed_steps: set[str],
-    question_code: str,
-    action: str,
-) -> bool:
-    return question_code in processed_steps and answers.get(question_code) == action
-
-
-def normalize_processed_steps(value: Iterable[str] | None) -> set[str]:
-    if not value:
-        return set()
-    return {str(item) for item in value}
-
-
-def update_flow_state(
-    month: str,
-    questions: list[dict],
-    current_step_index: int,
-    answers: dict[str, str] | None,
-    processed_steps: Iterable[str] | None,
-) -> HouseholdFlowState:
-    current_question = get_current_question(questions, current_step_index)
-    return HouseholdFlowState(
-        month=month,
-        questions=questions,
-        current_step_index=current_step_index,
-        current_question_code=str(current_question.get("code"))
-        if current_question
-        else None,
-        answers=dict(answers or {}),
-        processed_steps=normalize_processed_steps(processed_steps),
-    )
-
-===== Bot/states/__init__.py =====
-
-
-===== Bot/states/money_states.py =====
-
-"""FSM states for money flow."""
-from aiogram.fsm.state import State, StatesGroup
-
-
-class MoneyState(StatesGroup):
-    """State machine for income distribution."""
-
-    waiting_for_amount = State()
-    confirm_category = State()
-    waiting_for_purchase_confirmation = State()
-
-
-class HouseholdPaymentsState(StatesGroup):
-    """State machine for household payments flow."""
-
-    waiting_for_answer = State()
-
-
-class HouseholdSettingsState(StatesGroup):
-    """State machine for household payments settings."""
-
-    waiting_for_title = State()
-    waiting_for_amount = State()
-    waiting_for_removal = State()
-    waiting_for_debit_category = State()
-
-
-class IncomeSettingsState(StatesGroup):
-    """State machine for income settings."""
-
-    waiting_for_category_title = State()
-    waiting_for_new_category_percent = State()
-    waiting_for_removal = State()
-    waiting_for_percent_category = State()
-    waiting_for_percent = State()
-
-===== Bot/states/wishlist_states.py =====
-
-"""FSM states for wishlist."""
-from aiogram.fsm.state import State, StatesGroup
-
-
-class WishlistState(StatesGroup):
-    """State machine for wishlist management."""
-
-    waiting_for_name = State()
-    waiting_for_price = State()
-    waiting_for_url = State()
-    waiting_for_category = State()
-
-
-class WishlistBytReminderState(StatesGroup):
-    """State machine for BYT reminder flow."""
-
-    waiting_answer = State()
-
-
-class BytDeferState(StatesGroup):
-    """State machine for deferring BYT wishlist items."""
-
-    waiting_for_days = State()
-
-
-class WishlistSettingsState(StatesGroup):
-    """States for wishlist settings inputs."""
-
-    waiting_for_category_title = State()
-    waiting_for_removal = State()
-    waiting_for_purchased_category = State()
-    waiting_for_purchased_mode = State()
-    waiting_for_purchased_days = State()
-    waiting_for_debit_category = State()
-
-
-class BytSettingsState(StatesGroup):
-    """States for BYT settings inputs."""
-
-    waiting_for_max_defer_days = State()
-
-
-class BytTimerState(StatesGroup):
-    """States for BYT timer settings inputs."""
-
-    waiting_for_time_add = State()
-
-===== Bot/utils/__init__.py =====
-
-
-===== Bot/utils/byt_manual_check.py =====
-
-"""Helpers for manual BYT reminder checks."""
-
-from typing import Any
-
-
-def parse_byt_manual_cursor_index(raw: Any) -> int:
-    """Parse FSM stored cursor index for BYT manual check.
-
-    FSM may store index as int or str. Returns -1 when missing/invalid.
-    """
-    if raw is None:
-        return -1
-    try:
-        if isinstance(raw, str) and raw.strip() == "":
-            return -1
-        return int(raw)
-    except (TypeError, ValueError):
-        return -1
-
-
-def build_byt_times_sorted(times_by_category: dict[int, list[str]]) -> list[str]:
-    """Build a unique sorted list of HH:MM times from category mapping."""
-
-    times: set[str] = set()
-    for values in times_by_category.values():
-        for value in values:
-            cleaned = str(value).strip()
-            if cleaned:
-                times.add(cleaned)
-    return sorted(times)
-
-
-def select_next_byt_manual_time(
-    times_sorted: list[str],
-    current_date: str,
-    saved_date: str | None,
-    index: int,
-) -> tuple[str, int, str]:
-    """Select next time slot and return selected time, updated index, restart notice."""
-
-    if saved_date != current_date:
-        index = -1
-    next_index = index + 1
-    restart_notice = ""
-    if next_index >= len(times_sorted):
-        next_index = 0
-        restart_notice = "Сегодня все времена уже проверены — начинаю заново."
-    return times_sorted[next_index], next_index, restart_notice
-
-===== Bot/utils/byt_render.py =====
-
-"""Rendering helpers for BYT reminders."""
-
-from __future__ import annotations
-
-from datetime import datetime
-
-from Bot.database.crud import FinanceDatabase
-
-
-def format_byt_item_price(item: dict) -> str:
-    price = item.get("price")
-    if price in (None, "", 0):
-        return ""
-    try:
-        value = float(price)
-    except (TypeError, ValueError):
-        return ""
-    if value <= 0:
-        return ""
-    if value.is_integer():
-        return f"{int(value)}р"
-    return f"{value:.2f}".rstrip("0").rstrip(".") + "р"
-
-
-def format_byt_item_line(item: dict) -> str:
-    name = str(item.get("name", "")).strip()
-    price_label = format_byt_item_price(item)
-    if price_label:
-        return f"• {name} — {price_label}"
-    return f"• {name}"
-
-
-def parse_deferred_until(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        return datetime.fromisoformat(str(value))
-    except ValueError:
-        return None
-
-
-def format_byt_category_checklist_text(
-    category_title: str, due_items: list[dict], deferred_items: list[dict]
-) -> str:
-    lines: list[str] = [f"📋 Категория: {category_title}", ""]
-    if not due_items and not deferred_items:
-        lines.append("В этой категории нет активных напоминаний.")
-        return "\n".join(lines)
-
-    if due_items:
-        lines.append("🟢 Пора купить:")
-        for item in due_items:
-            lines.append(format_byt_item_line(item))
-        lines.append("")
-
-    if deferred_items:
-        lines.append("⏳ Отложено:")
-        for item in deferred_items:
-            deferred_until = parse_deferred_until(item.get("deferred_until"))
-            if deferred_until:
-                lines.append(
-                    f"{format_byt_item_line(item)} (до {deferred_until.strftime('%Y-%m-%d %H:%M')})"
-                )
-            else:
-                lines.append(format_byt_item_line(item))
-    return "\n".join(lines)
-
-
-def format_byt_categories_status_text(categories: list[dict]) -> str:
-    """Format BYT reminder category statuses as a checklist."""
-
-    lines = ["Категории для напоминаний:", ""]
-    if categories:
-        for category in categories:
-            status = "✅" if category.get("enabled") else "❌"
-            lines.append(f"{status} {category.get('title', '')}")
-    else:
-        lines.append("Категорий пока нет.")
-    return "\n".join(lines)
-
-
-def format_byt_defer_confirmation_text(
-    item: dict, category_title: str, deferred_until: datetime, checklist_text: str
-) -> str:
-    price_label = format_byt_item_price(item)
-    price_part = f", сумма: {price_label}" if price_label else ""
-    lines = [
-        f"✅ Отложено: «{item.get('name', '')}» (категория: {category_title}{price_part})",
-        f"⏰ До: {deferred_until.strftime('%Y-%m-%d %H:%M')}",
-        "",
-        checklist_text,
-    ]
-    return "\n".join(lines)
-
-
-def get_byt_category_items(
-    db: FinanceDatabase, user_id: int, category_title: str, now_dt: datetime
-) -> tuple[list[dict], list[dict]]:
-    total_items = db.get_active_byt_wishes(user_id, category_title)
-    due_items = db.list_active_byt_items_for_reminder(user_id, now_dt, category_title)
-    due_ids = {int(item.get("id")) for item in due_items if item.get("id") is not None}
-    deferred_items = [
-        item
-        for item in total_items
-        if item.get("id") is not None and int(item.get("id")) not in due_ids
-    ]
-    return due_items, deferred_items
-
-===== Bot/utils/byt_utils.py =====
-
-"""Utilities for BYT reminder source category."""
-
-from __future__ import annotations
-
-import logging
-from typing import Optional
-
-from Bot.database.crud import FinanceDatabase
-
-LOGGER = logging.getLogger(__name__)
-
-
-def normalize_wishlist_category_title(value: str) -> str:
-    """Normalize wishlist category titles for comparison."""
-
-    normalized = str(value or "").strip().casefold()
-    if normalized == "byt":
-        return "быт"
-    return normalized
-
-
-def wishlist_category_matches(wish_category: str, source_title: str) -> bool:
-    """Return True when wish category matches selected BYT source."""
-
-    return normalize_wishlist_category_title(wish_category) == normalize_wishlist_category_title(
-        source_title
-    )
-
-
-def get_byt_source_category_id(db: FinanceDatabase, user_id: int) -> Optional[int]:
-    """Return BYT source wishlist category id with fallback by name."""
-
-    db.ensure_user_settings(user_id)
-    settings_row = db.get_user_settings(user_id)
-    raw_id = settings_row.get("byt_wishlist_category_id")
-    category_id: Optional[int] = None
-    if raw_id is not None:
-        try:
-            category_id = int(raw_id)
-        except (TypeError, ValueError):
-            category_id = None
-    if category_id is not None:
-        category_row = db.get_wishlist_category_by_id(user_id, category_id)
-        if category_row:
-            return int(category_row.get("id"))
-        db.set_byt_wishlist_category_id(user_id, None)
-
-    fallback = db.get_wishlist_category_by_title(user_id, "быт")
-    if fallback:
-        fallback_id = int(fallback.get("id"))
-        db.set_byt_wishlist_category_id(user_id, fallback_id)
-        LOGGER.info(
-            "USER=%s ACTION=BYT_SOURCE_CATEGORY_SET META=category_id=%s",
-            user_id,
-            fallback_id,
-        )
-        return fallback_id
-    return None
-
-
-def get_byt_source_category(
-    db: FinanceDatabase, user_id: int
-) -> tuple[Optional[int], Optional[str]]:
-    """Return BYT source category id and title."""
-
-    category_id = get_byt_source_category_id(db, user_id)
-    if category_id is None:
-        return None, None
-    category_row = db.get_wishlist_category_by_id(user_id, category_id)
-    if not category_row:
-        return None, None
-    return category_id, str(category_row.get("title", ""))
-
-===== Bot/utils/datetime_utils.py =====
-
-"""Datetime utilities for the bot."""
-from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo
-
-from Bot.config import settings
-
-
-def now_tz() -> datetime:
-    """Return current datetime in configured timezone."""
-
-    return datetime.now(tz=settings.TIMEZONE)
-
-
-def current_month_str(now: datetime | None = None) -> str:
-    """Return current month label as YYYY-MM using configured timezone."""
-
-    current = now or now_tz()
-    return f"{current.year:04d}-{current.month:02d}"
-
-
-def add_one_month(source: datetime) -> datetime:
-    """Add one calendar month to datetime without external dependencies."""
-
-    year = source.year + (source.month // 12)
-    month = 1 if source.month == 12 else source.month + 1
-    last_day = (
-        (source.replace(day=1) + timedelta(days=32)).replace(day=1) - timedelta(days=1)
-    ).day
-    day = min(source.day, last_day)
-    return source.replace(year=year, month=month, day=day)
-
-
-def get_next_byt_run_dt(now: datetime, schedule_times: list[time]) -> datetime:
-    """Return next BYT reminder datetime based on schedule times."""
-
-    if not schedule_times:
-        return now
-
-    sorted_times = sorted(
-        schedule_times, key=lambda value: (value.hour, value.minute, value.second)
-    )
-    candidates = [
-        now.replace(
-            hour=slot.hour,
-            minute=slot.minute,
-            second=slot.second,
-            microsecond=0,
-        )
-        for slot in sorted_times
-    ]
-    for candidate in candidates:
-        if candidate >= now:
-            return candidate
-    return candidates[0] + timedelta(days=1)
-
-
-def get_next_reminder_dt(
-    now: datetime, times_hhmm: list[str], tz: ZoneInfo | None = None
-) -> datetime:
-    """Return next reminder datetime based on HH:MM list."""
-
-    timezone = tz or now.tzinfo
-    valid_times: list[time] = []
-    for raw in times_hhmm:
-        if not raw:
-            continue
-        parts = str(raw).strip().split(":", maxsplit=1)
-        if len(parts) != 2:
-            continue
-        try:
-            hour = int(parts[0])
-            minute = int(parts[1])
-        except (TypeError, ValueError):
-            continue
-        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
-            continue
-        valid_times.append(time(hour=hour, minute=minute))
-    if not valid_times:
-        valid_times = [time(hour=12, minute=0)]
-
-    sorted_times = sorted(valid_times, key=lambda value: (value.hour, value.minute))
-    candidates = [
-        now.replace(
-            hour=slot.hour,
-            minute=slot.minute,
-            second=0,
-            microsecond=0,
-            tzinfo=timezone,
-        )
-        for slot in sorted_times
-    ]
-    for candidate in candidates:
-        if candidate > now:
-            return candidate
-    return candidates[0] + timedelta(days=1)
-
-
-def resolve_deferred_until(
-    existing: datetime | None, candidate: datetime
-) -> datetime:
-    """Pick later deferred_until value."""
-
-    if existing and existing > candidate:
-        return existing
-    return candidate
-
-===== Bot/utils/logging.py =====
-
-"""Logging utilities."""
-import logging
-
-from Bot.config.logging_config import setup_logging
-
-
-def init_logging() -> logging.Logger:
-    """Initialize logging and return module logger.
-
-    Returns:
-        logging.Logger: Configured logger instance.
-    """
-
-    setup_logging()
-    return logging.getLogger(__name__)
-
-===== Bot/utils/savings.py =====
-
-"""Savings utility helpers."""
-from typing import Any, Dict, List, Tuple
-
-
-def _fallback_humanize_category(category: str) -> str:
-    name = str(category)
-    if name.startswith("savings_"):
-        name = name[len("savings_") :]
-    name = name.replace("_", " ").strip()
-    return name or str(category)
-
-
-def format_savings_summary(
-    savings: Dict[str, Dict[str, Any]],
-    categories_map: Dict[str, str] | None = None,
-) -> str:
-    """Format savings summary for user message."""
-
-    if not savings:
-        return "Пока нет накоплений."
-
-    lines: List[str] = []
-    for category, data in savings.items():
-        display_name = None
-        if categories_map is not None:
-            display_name = categories_map.get(str(category))
-        if not display_name:
-            display_name = _fallback_humanize_category(str(category))
-        current = data.get("current", 0)
-        goal = data.get("goal", 0)
-        purpose = data.get("purpose", "")
-        line = f"{display_name}: {current:.2f}"
-        if goal and goal > 0:
-            progress = min(current / goal * 100, 100)
-            extra = f" (цель {goal:.2f} для '{purpose}', прогресс {progress:.1f}%)"
-            line = f"{line}{extra}"
-        lines.append(line)
-    return "\n".join(lines)
-
-
-def find_reached_goal(
-    savings: Dict[str, Dict[str, Any]]
-) -> Tuple[str, Dict[str, Any]] | Tuple[None, None]:
-    """Find first saving goal that has been reached."""
-
-    for category, data in savings.items():
-        current = data.get("current", 0)
-        goal = data.get("goal", 0)
-        if goal and current >= goal:
-            return category, data
-    return None, None
-
-===== Bot/utils/telegram_safe.py =====
-
-"""Safe wrappers for Telegram API operations."""
-from __future__ import annotations
-
-import asyncio
-import logging
-
-from aiohttp import ClientConnectionError, ClientOSError
-from aiogram.exceptions import TelegramBadRequest, TelegramNetworkError
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
-
-LOGGER = logging.getLogger(__name__)
-
-DEFAULT_REQUEST_TIMEOUT = 30
-
-
-def _get_logger(logger: logging.Logger | None) -> logging.Logger:
-    return logger or LOGGER
-
-
-def _is_network_error(exc: Exception) -> bool:
-    return isinstance(
-        exc,
-        (
-            TelegramNetworkError,
-            ClientOSError,
-            ClientConnectionError,
-            asyncio.TimeoutError,
-            TimeoutError,
-        ),
-    )
-
-
-def _log_network_error(
-    logger: logging.Logger,
-    action: str,
-    exc: Exception,
-    attempt: int,
-    retries: int,
-) -> None:
-    logger.warning(
-        "NETWORK_RETRY action=%s attempt=%s/%s error=%s",
-        action,
-        attempt,
-        retries + 1,
-        exc,
-    )
-    if logger.isEnabledFor(logging.DEBUG):
-        logger.debug("Network error details for %s", action, exc_info=True)
-
-
-async def safe_delete_message(
-    bot,
-    chat_id: int,
-    message_id: int,
-    *,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-) -> bool:
-    """Safely delete a message without raising exceptions."""
-
-    log = _get_logger(logger)
-    for attempt in range(retries + 1):
-        try:
-            await bot.delete_message(
-                chat_id=chat_id,
-                message_id=message_id,
-                request_timeout=request_timeout,
-            )
-            return True
-        except TelegramBadRequest as exc:
-            text = str(exc).lower()
-            if (
-                "message to delete not found" in text
-                or "message can't be deleted" in text
-                or "message can’t be deleted" in text
-            ):
-                log.debug(
-                    "Safe delete skipped (chat_id=%s, message_id=%s): %s",
-                    chat_id,
-                    message_id,
-                    exc,
-                )
-                return False
-            log.warning(
-                "Safe delete failed (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe delete failure details", exc_info=True)
-            return False
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "delete_message", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return False
-            log.warning(
-                "Safe delete unexpected error (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe delete unexpected error details", exc_info=True)
-            return False
-    return False
-
-
-async def safe_edit_message_text(
-    bot,
-    chat_id: int,
-    message_id: int,
-    text: str,
-    reply_markup=None,
-    *,
-    parse_mode: str | None = None,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-) -> bool:
-    """Safely edit a message text without raising exceptions."""
-
-    log = _get_logger(logger)
-    if isinstance(reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)):
-        log.warning("Safe edit skipped due to reply keyboard markup")
-        return False
-
-    for attempt in range(retries + 1):
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                request_timeout=request_timeout,
-            )
-            return True
-        except TelegramBadRequest as exc:
-            lowered = str(exc).lower()
-            if "message is not modified" in lowered:
-                return True
-            if "message to edit not found" in lowered:
-                log.debug(
-                    "Safe edit skipped (chat_id=%s, message_id=%s): %s",
-                    chat_id,
-                    message_id,
-                    exc,
-                )
-                return False
-            log.warning(
-                "Safe edit failed (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe edit failure details", exc_info=True)
-            return False
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "edit_message_text", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return False
-            log.warning(
-                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe edit unexpected error details", exc_info=True)
-            return False
-    return False
-
-
-async def safe_edit_message_text_with_status(
-    bot,
-    chat_id: int,
-    message_id: int,
-    text: str,
-    reply_markup=None,
-    *,
-    parse_mode: str | None = None,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-) -> tuple[bool, bool]:
-    """Safely edit a message text, reporting network failures."""
-
-    log = _get_logger(logger)
-    if isinstance(reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)):
-        log.warning("Safe edit skipped due to reply keyboard markup")
-        return False, False
-
-    for attempt in range(retries + 1):
-        try:
-            await bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=message_id,
-                text=text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                request_timeout=request_timeout,
-            )
-            return True, False
-        except TelegramBadRequest as exc:
-            lowered = str(exc).lower()
-            if "message is not modified" in lowered:
-                return True, False
-            if "message to edit not found" in lowered:
-                log.debug(
-                    "Safe edit skipped (chat_id=%s, message_id=%s): %s",
-                    chat_id,
-                    message_id,
-                    exc,
-                )
-                return False, False
-            log.warning(
-                "Safe edit failed (chat_id=%s, message_id=%s): %s",
                 chat_id,
                 message_id,
                 exc,
@@ -2014,3 +366,1635 @@ async def ui_cleanup_to_context(
         ),
     )
 
+
+async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
+    data = await state.get_data()
+    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
+    if chat_id is None:
+        return
+    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
+
+
+async def ui_render_screen(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> int:
+    data = await state.get_data()
+    screen_id = data.get("ui_screen_message_id")
+    if screen_id is not None and not isinstance(
+        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
+    ):
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(screen_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            logger=LOGGER,
+        )
+        if edited:
+            await ui_set_screen_message(state, chat_id, int(screen_id))
+            return int(screen_id)
+    sent = await safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
+    )
+    if sent:
+        await ui_set_screen_message(state, chat_id, sent.message_id)
+        return int(sent.message_id)
+    return int(screen_id or 0)
+
+===== Bot/utils/ui_flow.py =====
+
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
+
+from Bot.utils.telegram_safe import safe_delete_message
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_get(state: FSMContext) -> dict[str, Any]:
+    data = await state.get_data()
+    return {
+        "greeting_id": data.get("ui_welcome_message_id"),
+        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
+    }
+
+
+async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
+    ui = await ui_get(state)
+    if ui.get("greeting_id") is not None:
+        return
+    # greeting_id не удаляем никогда
+    await state.update_data(ui_welcome_message_id=int(message_id))
+
+
+async def ui_track(
+    state: FSMContext, message_id: int, kind: str, screen: str | None
+) -> None:
+    ui = await ui_get(state)
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    tracked.append(int(message_id))
+    if len(tracked) > 300:
+        tracked = tracked[-300:]
+    await state.update_data(ui_tracked_message_ids=tracked)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, screen: str, message_id: int
+) -> None:
+    await ui_track(state, message_id, kind="ui", screen=screen)
+
+
+async def ui_cleanup_for_transition(
+    bot: Bot, state: FSMContext, chat_id: int, keep_greeting: bool = True
+) -> None:
+    ui = await ui_get(state)
+    greeting_id = ui.get("greeting_id") if keep_greeting else None
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    ids = [int(item) for item in tracked]
+    for message_id in ids:
+        if greeting_id and message_id == greeting_id:
+            continue
+        await safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            logger=LOGGER,
+        )
+    await state.update_data(ui_tracked_message_ids=[])
+
+
+async def ui_transition(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    new_screen: str,
+    send_screen: Callable[[], Awaitable[Message]],
+) -> Message:
+    await ui_cleanup_for_transition(bot, state, chat_id, keep_greeting=True)
+    sent = await send_screen()
+    await ui_set_screen_message(state, new_screen, sent.message_id)
+    return sent
+
+===== __init__.py =====
+
+
+===== docs/AUDIT_REPORT.md =====
+
+# Audit Report (finance_bot v4)
+
+## Found issues
+- UI cleanup tracked multiple message lists and could retain welcome in tracked ids.
+- Welcome message id was not persisted and could be duplicated after state loss.
+- Direct Telegram edit/delete calls could fail on network errors or invalid reply keyboards.
+- Income category titles contained bank/service suffixes and older rows were not sanitized.
+- Database access used direct `FinanceDatabase()` construction across handlers.
+
+## Fixes applied
+- Unified UI tracking to `ui_tracked_message_ids` and excluded welcome from tracked ids after cleanup.
+- Added persistent welcome id storage in `ui_pins` table and reused it on startup.
+- Implemented safe Telegram operations with retries and guarded edits against reply keyboards.
+- Added income title sanitizer and migration to update existing stored titles.
+- Introduced `get_db()` for a shared database instance and updated handlers.
+
+## Backlog / Follow-up
+- Expand safe Telegram wrapper adoption in remaining handlers and services.
+- Add safe reply markup editing helper if required by additional flows.
+
+===== docs/RUNBOOK.md =====
+
+# Runbook
+
+## Запуск бота
+```bash
+python Bot/main.py
+```
+
+## Прогон тестов
+```bash
+pytest
+```
+
+===== tests/__init__.py =====
+
+
+===== tests/integration/__init__.py =====
+
+
+===== tests/integration/test_database.py =====
+
+"""Integration tests for database operations."""
+from Bot.database.crud import FinanceDatabase, TABLES
+
+
+def setup_module(module) -> None:  # noqa: D401
+    """Clean database tables before tests."""
+
+    db = FinanceDatabase()
+    cursor = db.connection.cursor()
+    cursor.execute(f"DELETE FROM {TABLES.wishes}")
+    cursor.execute(f"DELETE FROM {TABLES.purchases}")
+    cursor.execute(f"DELETE FROM {TABLES.savings}")
+    db.connection.commit()
+
+
+def test_add_and_get_wish() -> None:
+    """Add wish and retrieve it."""
+
+    db = FinanceDatabase()
+    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
+    wish = db.get_wish(wish_id)
+    assert wish is not None
+    assert wish["name"] == "Test"
+
+
+def test_update_saving_and_purchase() -> None:
+    """Update savings and add purchase entry."""
+
+    db = FinanceDatabase()
+    db.update_saving(1, "Инструменты", 20.0)
+    savings = db.get_user_savings(1)
+    assert savings.get("Инструменты", {}).get("current") == 20.0
+    db.add_purchase(1, "Test", 10.0, "Инструменты")
+    purchases = db.get_purchases_by_user(1)
+    assert len(purchases) == 1
+
+===== tests/integration/test_schema_migration.py =====
+
+"""Integration tests for schema migration."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from Bot.database.crud import TABLES, migrate_schema
+
+
+def test_schema_migration_renames_tables(tmp_path: Path) -> None:
+    """Rename legacy tables without losing data."""
+
+    db_path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(db_path)
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE savings (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            category TEXT,
+            current REAL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE wishes (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            name TEXT,
+            price REAL,
+            category TEXT,
+            is_purchased INTEGER,
+            saved_amount REAL,
+            purchased_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE purchases (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            wish_name TEXT,
+            price REAL,
+            category TEXT,
+            purchased_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE household_payment_items (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            code TEXT,
+            text TEXT,
+            amount INTEGER,
+            position INTEGER,
+            is_active INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE household_payments (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            month TEXT,
+            question_code TEXT,
+            is_paid INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        "INSERT INTO savings (user_id, category, current) VALUES (?,?,?)",
+        (1, "БЫТ", 500.0),
+    )
+    cursor.execute(
+        """
+        INSERT INTO wishes (user_id, name, price, category, is_purchased, saved_amount, purchased_at)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (1, "Чайник", 1200.0, "БЫТ", 0, 0, None),
+    )
+    cursor.execute(
+        "INSERT INTO purchases (user_id, wish_name, price, category, purchased_at) VALUES (?,?,?,?,?)",
+        (1, "Тест", 100.0, "БЫТ", "2025-01-01"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO household_payment_items (user_id, code, text, amount, position, is_active)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (1, "rent", "Квартплата", 4000, 1, 1),
+    )
+    cursor.execute(
+        """
+        INSERT INTO household_payments (user_id, month, question_code, is_paid)
+        VALUES (?,?,?,?)
+        """,
+        (1, "2025-01", "rent", 0),
+    )
+    connection.commit()
+
+    migrate_schema(connection)
+    migrate_schema(connection)
+
+    cursor.execute(f"SELECT category, current FROM {TABLES.savings}")
+    savings_row = cursor.fetchone()
+    assert savings_row == ("БЫТ", 500.0)
+
+    cursor.execute(f"SELECT name FROM {TABLES.wishes}")
+    assert cursor.fetchone()[0] == "Чайник"
+
+    cursor.execute(f"SELECT wish_name FROM {TABLES.purchases}")
+    assert cursor.fetchone()[0] == "Тест"
+
+    cursor.execute(f"SELECT code FROM {TABLES.household_payment_items}")
+    assert cursor.fetchone()[0] == "rent"
+
+    cursor.execute(f"SELECT question_code FROM {TABLES.household_payments}")
+    assert cursor.fetchone()[0] == "rent"
+
+    connection.close()
+
+===== tests/run_all_tests.py =====
+
+"""Run all pytest suites."""
+import pytest
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main(["-q", "tests"]))
+
+===== tests/test_runner.py =====
+
+"""Helper to run tests programmatically."""
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    """Run pytest suite and return exit code."""
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", str(root / "tests")], check=False)
+    return result.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+===== tests/unit/__init__.py =====
+
+
+===== tests/unit/test_byt_manual_check.py =====
+
+"""Tests for manual BYT reminder check helpers."""
+
+from Bot.utils.byt_manual_check import (
+    build_byt_times_sorted,
+    parse_byt_manual_cursor_index,
+    select_next_byt_manual_time,
+)
+
+
+def test_build_byt_times_sorted_unique_sorted() -> None:
+    times_by_category = {
+        1: ["12:00", "18:00"],
+        2: ["14:00", "12:00"],
+    }
+    assert build_byt_times_sorted(times_by_category) == ["12:00", "14:00", "18:00"]
+
+
+def test_select_next_byt_manual_time_cycles() -> None:
+    times_sorted = ["12:00", "14:00"]
+    current_date = "2026-01-09"
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, -1
+    )
+    assert selected == "12:00"
+    assert index == 0
+    assert notice == ""
+
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, index
+    )
+    assert selected == "14:00"
+    assert index == 1
+    assert notice == ""
+
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, index
+    )
+    assert selected == "12:00"
+    assert index == 0
+    assert notice == "Сегодня все времена уже проверены — начинаю заново."
+
+
+def test_parse_byt_manual_cursor_index_zero_is_valid() -> None:
+    assert parse_byt_manual_cursor_index(0) == 0
+    assert parse_byt_manual_cursor_index("0") == 0
+
+
+def test_parse_byt_manual_cursor_index_invalid_returns_minus_one() -> None:
+    assert parse_byt_manual_cursor_index(None) == -1
+    assert parse_byt_manual_cursor_index("") == -1
+    assert parse_byt_manual_cursor_index("   ") == -1
+    assert parse_byt_manual_cursor_index("abc") == -1
+
+===== tests/unit/test_byt_reminder_schedule.py =====
+
+"""Tests for BYT reminder schedule helpers."""
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from Bot.utils.datetime_utils import get_next_reminder_dt
+
+
+def test_get_next_reminder_dt_today() -> None:
+    now = datetime(2026, 1, 8, 10, 30, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, ["12:00", "18:00"])
+    assert result == datetime(2026, 1, 8, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_get_next_reminder_dt_tomorrow() -> None:
+    now = datetime(2026, 1, 8, 19, 0, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, ["12:00", "18:00"])
+    assert result == datetime(2026, 1, 9, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_get_next_reminder_dt_default() -> None:
+    now = datetime(2026, 1, 8, 13, 0, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, [])
+    assert result == datetime(2026, 1, 9, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+===== tests/unit/test_byt_reminder_settings.py =====
+
+"""Tests for BYT reminder category and time settings."""
+
+from datetime import datetime
+
+from Bot.database import crud
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
+from Bot.keyboards.settings import byt_timer_categories_inline_keyboard
+from Bot.utils.byt_render import (
+    format_byt_categories_status_text,
+    format_byt_category_checklist_text,
+    format_byt_defer_confirmation_text,
+)
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_toggle_byt_category_and_times(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "Дом")
+        assert db.get_byt_reminder_category_enabled(1, category_id) is False
+        enabled = db.toggle_byt_reminder_category(1, category_id)
+        assert enabled is True
+        assert db.get_byt_reminder_category_enabled(1, category_id) is True
+        enabled = db.toggle_byt_reminder_category(1, category_id)
+        assert enabled is False
+
+        db.add_byt_reminder_time(1, category_id, "09:00")
+        times = db.list_byt_reminder_times(1, category_id)
+        assert times == [{"time_hhmm": "09:00"}]
+        db.remove_byt_reminder_time(1, category_id, "09:00")
+        assert db.list_byt_reminder_times(1, category_id) == []
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_defer_confirmation_text_contains_details() -> None:
+    item = {"name": "Швабра", "price": 1990}
+    deferred_until = datetime(2026, 1, 9, 12, 0)
+    checklist_text = format_byt_category_checklist_text("Быт", [item], [])
+    text = format_byt_defer_confirmation_text(
+        item, "Быт", deferred_until, checklist_text
+    )
+    assert "Швабра" in text
+    assert "2026-01-09 12:00" in text
+    assert "Категория: Быт" in text
+
+
+def test_byt_categories_status_text_format() -> None:
+    categories = [
+        {"title": "Быт", "enabled": 1},
+        {"title": "Еда", "enabled": 0},
+    ]
+    text = format_byt_categories_status_text(categories)
+    lines = [line for line in text.splitlines() if line.strip()]
+    status_lines = lines[1:]
+    assert status_lines == ["✅ Быт", "❌ Еда"]
+    assert all(not any(char.isdigit() for char in line) for line in status_lines)
+
+
+def test_byt_timer_categories_keyboard_inline() -> None:
+    categories = [{"id": 1, "title": "Быт", "enabled": 1}]
+    keyboard = byt_timer_categories_inline_keyboard(categories, "byt:timer_category")
+    assert isinstance(keyboard, InlineKeyboardMarkup)
+    assert not isinstance(keyboard, ReplyKeyboardMarkup)
+
+===== tests/unit/test_byt_source_category.py =====
+
+"""Tests for BYT source category selection."""
+
+from Bot.database import crud
+from Bot.utils.byt_utils import get_byt_source_category_id
+from Bot.utils.datetime_utils import now_tz
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_byt_source_category_respects_setting(tmp_path, monkeypatch) -> None:
+    """Return stored BYT source category id when configured."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "Дом")
+        db.set_byt_wishlist_category_id(1, category_id)
+        assert get_byt_source_category_id(db, 1) == category_id
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_source_category_fallback_by_name(tmp_path, monkeypatch) -> None:
+    """Fallback should pick wishlist category named 'быт' and persist it."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "быт")
+        assert get_byt_source_category_id(db, 1) == category_id
+        assert db.get_byt_wishlist_category_id(1) == category_id
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_source_category_missing_returns_none(tmp_path, monkeypatch) -> None:
+    """Return None when no BYT category is configured or found."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        assert get_byt_source_category_id(db, 1) is None
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_query_filters_by_category(tmp_path, monkeypatch) -> None:
+    """BYT query should return items only from selected category."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_a = db.create_wishlist_category(1, "быт")
+        category_b = db.create_wishlist_category(1, "подарки")
+        db.add_wish(1, "Швабра", 100, None, "быт")
+        db.add_wish(1, "Подарок", 200, None, "подарки")
+        now_dt = now_tz()
+        items = db.list_active_byt_items_for_reminder(1, now_dt, "быт")
+        assert {item["name"] for item in items} == {"Швабра"}
+        assert db.get_active_byt_wishes(1, "быт")[0]["name"] == "Швабра"
+        assert category_a != category_b
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+===== tests/unit/test_handlers.py =====
+
+"""Tests for handler utilities."""
+from Bot.handlers.finances import _format_savings_summary, _find_reached_goal
+
+
+def test_format_savings_summary_empty() -> None:
+    """Empty savings returns default message."""
+
+    assert _format_savings_summary({}) == "Пока нет накоплений."
+
+
+def test_find_reached_goal() -> None:
+    """Goal detection returns first satisfied category."""
+
+    savings = {
+        "категория": {"current": 150, "goal": 100, "purpose": "test"},
+        "другая": {"current": 50, "goal": 100, "purpose": "none"},
+    }
+    category, data = _find_reached_goal(savings)
+    assert category == "категория"
+    assert data["goal"] == 100
+
+===== tests/unit/test_household_debit_category.py =====
+
+"""Tests for household debit category settings."""
+from Bot.database import crud
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_set_and_get_household_debit_category(tmp_path, monkeypatch) -> None:
+    """Household debit category should persist in user settings."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.set_household_debit_category(1, "alpha")
+        assert db.get_household_debit_category(1) == "alpha"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_apply_household_debit_category_updates_savings(tmp_path, monkeypatch) -> None:
+    """Yes answer should debit savings from selected category."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.set_household_debit_category(2, "custom_cat")
+        changed = db.apply_household_payment_answer(
+            user_id=2,
+            month="2026-01",
+            question_code="q1",
+            amount=100.0,
+            answer="yes",
+            debit_category="custom_cat",
+        )
+        assert changed is True
+        savings_map = db.get_user_savings_map(2)
+        assert savings_map.get("custom_cat") == -100.0
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_resolve_household_debit_category_fallback(tmp_path, monkeypatch) -> None:
+    """Fallback should select first available income category."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute(
+            f"""
+            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (3, "alpha", "Alpha", 50, 1),
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (3, "beta", "Beta", 50, 2),
+        )
+        db.connection.commit()
+
+        code, title = db.resolve_household_debit_category(3)
+        assert code == "alpha"
+        assert title == "Alpha"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+===== tests/unit/test_household_idempotency.py =====
+
+"""Tests for household idempotency handling."""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+pytest.importorskip("aiogram")
+
+from Bot.handlers.household_payments import handle_household_answer  # noqa: E402
+
+
+class DummyState:
+    def __init__(self, data: dict) -> None:
+        self._data = data
+        self.update_data = AsyncMock(side_effect=self._update)
+        self.get_data = AsyncMock(side_effect=self._get)
+        self.get_state = AsyncMock(return_value="state")
+
+    async def _get(self) -> dict:
+        return self._data
+
+    async def _update(self, **kwargs) -> None:
+        self._data.update(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_handle_household_answer_skips_processed_code(monkeypatch) -> None:
+    """Duplicate callbacks should not reapply DB updates."""
+
+    db_stub = SimpleNamespace(apply_household_payment_answer=MagicMock(return_value=True))
+    monkeypatch.setattr("Bot.handlers.household_payments.get_db", lambda: db_stub)
+
+    message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    callback = SimpleNamespace(
+        data="hh_pay:yes:q1",
+        from_user=SimpleNamespace(id=1),
+        message=message,
+        bot=SimpleNamespace(edit_message_text=AsyncMock(return_value=None)),
+        answer=AsyncMock(return_value=None),
+    )
+
+    state = SimpleNamespace(
+        get_data=AsyncMock(
+            return_value={
+                "hh_month": "2025-01",
+                "hh_questions": [
+                    {"code": "q1", "text": "Q1", "amount": 10},
+                    {"code": "q2", "text": "Q2", "amount": 5},
+                ],
+                "current_step_index": 0,
+                "hh_index": 0,
+                "hh_answers": {},
+                "hh_ui_message_id": 10,
+                "processed_steps": [],
+            }
+        ),
+        update_data=AsyncMock(return_value=None),
+        get_state=AsyncMock(return_value="state"),
+    )
+
+    await handle_household_answer(callback, state)
+    assert db_stub.apply_household_payment_answer.call_count == 1
+
+    state.get_data = AsyncMock(
+        return_value={
+            "hh_month": "2025-01",
+            "hh_questions": [
+                {"code": "q1", "text": "Q1", "amount": 10},
+                {"code": "q2", "text": "Q2", "amount": 5},
+            ],
+            "current_step_index": 0,
+            "hh_index": 0,
+            "hh_answers": {"q1": "yes"},
+            "hh_ui_message_id": 10,
+            "processed_steps": ["q1"],
+        }
+    )
+
+    await handle_household_answer(callback, state)
+    assert db_stub.apply_household_payment_answer.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_household_answer_no_updates_ui_on_unchanged_db(
+    monkeypatch,
+) -> None:
+    """No answers should still update UI when DB reports no change."""
+
+    db_stub = SimpleNamespace(apply_household_payment_answer=MagicMock(return_value=False))
+    monkeypatch.setattr("Bot.handlers.household_payments.get_db", lambda: db_stub)
+
+    message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    callback = SimpleNamespace(
+        data="hh_pay:no:q1",
+        from_user=SimpleNamespace(id=1),
+        message=message,
+        bot=SimpleNamespace(edit_message_text=AsyncMock(return_value=None)),
+        answer=AsyncMock(return_value=None),
+    )
+
+    state = DummyState(
+        {
+            "hh_month": "2025-01",
+            "hh_questions": [
+                {"code": "q1", "text": "Q1", "amount": 10},
+                {"code": "q2", "text": "Q2", "amount": 5},
+            ],
+            "current_step_index": 0,
+            "hh_index": 0,
+            "hh_answers": {},
+            "hh_ui_message_id": 10,
+            "processed_steps": [],
+        }
+    )
+
+    await handle_household_answer(callback, state)
+
+    assert db_stub.apply_household_payment_answer.call_count == 1
+    kwargs = state.update_data.await_args.kwargs
+    assert kwargs["hh_answers"]["q1"] == "no"
+    assert "q1" in kwargs["processed_steps"]
+    assert kwargs["current_step_index"] == 1
+    callback.bot.edit_message_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_household_answer_no_double_tap_is_idempotent(
+    monkeypatch,
+) -> None:
+    """Duplicate no answers should not reapply DB or UI updates."""
+
+    db_stub = SimpleNamespace(apply_household_payment_answer=MagicMock(return_value=False))
+    monkeypatch.setattr("Bot.handlers.household_payments.get_db", lambda: db_stub)
+
+    message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    callback = SimpleNamespace(
+        data="hh_pay:no:q1",
+        from_user=SimpleNamespace(id=1),
+        message=message,
+        bot=SimpleNamespace(edit_message_text=AsyncMock(return_value=None)),
+        answer=AsyncMock(return_value=None),
+    )
+
+    state = DummyState(
+        {
+            "hh_month": "2025-01",
+            "hh_questions": [
+                {"code": "q1", "text": "Q1", "amount": 10},
+                {"code": "q2", "text": "Q2", "amount": 5},
+            ],
+            "current_step_index": 0,
+            "hh_index": 0,
+            "hh_answers": {},
+            "hh_ui_message_id": 10,
+            "processed_steps": [],
+        }
+    )
+
+    await handle_household_answer(callback, state)
+    await handle_household_answer(callback, state)
+
+    assert db_stub.apply_household_payment_answer.call_count == 1
+    callback.bot.edit_message_text.assert_awaited_once()
+
+===== tests/unit/test_household_payments.py =====
+
+"""Tests for household payments workflow."""
+from datetime import datetime
+
+import pytest
+
+from Bot.config import settings
+from Bot.database.crud import FinanceDatabase, TABLES
+from Bot.handlers.household_payments import reset_household_cycle_if_needed
+from Bot.utils.datetime_utils import current_month_str
+
+
+@pytest.mark.asyncio
+async def test_reset_cycle_creates_statuses_after_threshold() -> None:
+    """Statuses should appear after threshold date only once."""
+
+    db = FinanceDatabase()
+    user_id = 99991
+    month = "2025-01"
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    before_threshold = datetime(2025, 1, 5, 10, 0, tzinfo=settings.TIMEZONE)
+    await reset_household_cycle_if_needed(user_id, db, now=before_threshold)
+    assert not await db.household_status_exists(user_id, month)
+
+    after_threshold = datetime(2025, 1, 6, 12, 0, tzinfo=settings.TIMEZONE)
+    await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
+    assert await db.has_unpaid_household_questions(user_id, month)
+
+    await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
+    cursor = db.connection.execute(
+        f"SELECT COUNT(*) FROM {TABLES.household_payments} WHERE user_id = ? AND month = ?",
+        (user_id, month),
+    )
+    assert cursor.fetchone()[0] == len(items)
+
+
+@pytest.mark.asyncio
+async def test_mark_and_check_unpaid_questions() -> None:
+    """Marking paid questions should update unpaid check."""
+
+    db = FinanceDatabase()
+    user_id = 99992
+    month = current_month_str(datetime(2025, 2, 6, 12, 0, tzinfo=settings.TIMEZONE))
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    await db.init_household_questions_for_month(user_id, month)
+    assert await db.has_unpaid_household_questions(user_id, month)
+
+    for item in items:
+        await db.mark_household_question_paid(user_id, month, str(item.get("code")))
+    assert not await db.has_unpaid_household_questions(user_id, month)
+
+
+@pytest.mark.asyncio
+async def test_question_flow_and_savings_update() -> None:
+    """Yes/No answers adjust savings and skip paid questions."""
+
+    db = FinanceDatabase()
+    user_id = 99993
+    month = current_month_str(datetime(2025, 3, 6, 12, 0, tzinfo=settings.TIMEZONE))
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.savings} WHERE user_id = ? AND category = 'быт'",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    db.update_saving(user_id, "быт", 5000)
+    await db.init_household_questions_for_month(user_id, month)
+
+    unpaid = await db.get_unpaid_household_questions(user_id, month)
+    assert unpaid
+    first_code = str(unpaid[0])
+    first_item = next(item for item in items if str(item.get("code")) == first_code)
+    amount = float(first_item.get("amount") or 0)
+
+    changed = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="yes",
+        debit_category="быт",
+    )
+    assert changed is True
+
+    savings_map = db.get_user_savings_map(user_id)
+    assert savings_map.get("быт") == 5000 - amount
+
+    changed_again = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="yes",
+        debit_category="быт",
+    )
+    assert changed_again is False
+
+    changed_back = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="no",
+        debit_category="быт",
+    )
+    assert changed_back is True
+    savings_map = db.get_user_savings_map(user_id)
+    assert savings_map.get("быт") == 5000
+
+===== tests/unit/test_household_renderers.py =====
+
+"""Tests for household renderers."""
+
+from Bot.renderers.household import format_household_items, render_household_questions_text
+
+
+def test_render_questions_text_marks_answers() -> None:
+    questions = [
+        {"code": "q1", "text": "Оплатил интернет?", "amount": 100},
+        {"code": "q2", "text": "Оплатил свет?", "amount": 200},
+    ]
+    answers = {"q1": "yes", "q2": "no"}
+    text = render_household_questions_text("2025-02", questions, answers, current_index=1)
+    assert "✅" in text
+    assert "❌" in text
+    assert "2025-02" in text
+
+
+def test_format_household_items() -> None:
+    items = [
+        {"code": "q1", "text": "Интернет?", "amount": 100},
+        {"code": "q2", "text": "Свет?", "amount": 200},
+    ]
+    text = format_household_items(items, unpaid_set={"q2"})
+    assert "✅" in text
+    assert "❌" in text
+    assert "Интернет" in text
+
+===== tests/unit/test_household_services.py =====
+
+"""Tests for household services."""
+
+from Bot.services.household import (
+    build_household_questions,
+    get_current_question,
+    get_next_index,
+    get_previous_index,
+    should_ignore_answer,
+    update_flow_state,
+)
+
+
+def test_flow_state_and_navigation() -> None:
+    questions = build_household_questions(
+        [
+            {"code": "q1", "text": "Первый?", "amount": 100},
+            {"code": "q2", "text": "Второй?", "amount": 200},
+        ]
+    )
+    flow = update_flow_state(
+        month="2025-01",
+        questions=questions,
+        current_step_index=0,
+        answers={},
+        processed_steps=[],
+    )
+    assert flow.current_question_code == "q1"
+    assert get_current_question(questions, 1)["code"] == "q2"
+    assert get_next_index(0, questions) == 1
+    assert get_next_index(1, questions) == 2
+    assert get_previous_index(0) == 0
+    assert get_previous_index(1) == 0
+
+
+def test_idempotency_check() -> None:
+    answers = {"q1": "yes"}
+    processed_steps = {"q1"}
+    assert should_ignore_answer(answers, processed_steps, "q1", "yes") is True
+    assert should_ignore_answer(answers, processed_steps, "q1", "no") is False
+    assert should_ignore_answer(answers, processed_steps, "q2", "yes") is False
+
+===== tests/unit/test_imports.py =====
+
+"""Basic import tests."""
+
+
+def test_import_main() -> None:
+    """Ensure main module is importable."""
+
+    import Bot.main  # noqa: F401
+
+
+def test_import_handlers() -> None:
+    """Ensure handlers modules are importable."""
+
+    import Bot.handlers.start  # noqa: F401
+    import Bot.handlers.finances  # noqa: F401
+    import Bot.handlers.household_payments  # noqa: F401
+    import Bot.handlers.wishlist  # noqa: F401
+    import Bot.handlers.callbacks  # noqa: F401
+    import Bot.handlers.common  # noqa: F401
+
+
+def test_register_routers_smoke() -> None:
+    """Ensure register_routers includes key routers."""
+
+    from aiogram import Dispatcher
+
+    from Bot.handlers import household_payments, settings, start, wishlist
+    from Bot.main import register_routers
+
+    dp = Dispatcher()
+    register_routers(dp)
+    routers = list(getattr(dp, "sub_routers", []))
+
+    assert start.router in routers
+    assert household_payments.router in routers
+    assert settings.router in routers
+    assert wishlist.router in routers
+
+===== tests/unit/test_income_categories.py =====
+
+"""Tests for income category seeding and flow guards."""
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from Bot.database import crud
+
+
+def test_income_categories_not_seeded(tmp_path, monkeypatch) -> None:
+    """Income categories should start empty for a new user."""
+
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+
+    db = crud.FinanceDatabase()
+    try:
+        assert db.list_active_income_categories(12345) == []
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_start_income_flow_with_empty_categories(monkeypatch) -> None:
+    """Handler should stop flow when no income categories exist."""
+
+    pytest.importorskip("aiogram")
+
+    from Bot.handlers import finances  # noqa: WPS433
+
+    db_stub = SimpleNamespace(list_active_income_categories=MagicMock(return_value=[]))
+    monkeypatch.setattr("Bot.handlers.finances.get_db", lambda: db_stub)
+    monkeypatch.setattr(
+        "Bot.handlers.finances.build_main_menu_for_user",
+        AsyncMock(return_value="menu"),
+    )
+    monkeypatch.setattr("Bot.handlers.finances.ui_register_message", AsyncMock())
+    monkeypatch.setattr("Bot.handlers.finances.safe_delete_message", AsyncMock())
+
+    sent_message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(id=20),
+        message_id=5,
+        bot=SimpleNamespace(),
+        answer=AsyncMock(return_value=sent_message),
+    )
+    state = SimpleNamespace(clear=AsyncMock(), set_state=AsyncMock(), update_data=AsyncMock())
+
+    async def _run() -> None:
+        await finances.start_income_flow(message, state)
+
+    asyncio.run(_run())
+
+    assert db_stub.list_active_income_categories.call_count == 1
+    state.set_state.assert_not_awaited()
+    message.answer.assert_awaited_once()
+    assert "Категории дохода не настроены" in message.answer.await_args.args[0]
+
+===== tests/unit/test_telegram_safe.py =====
+
+"""Tests for telegram_safe utilities."""
+from unittest.mock import AsyncMock
+
+import pytest
+
+pytest.importorskip("aiogram")
+
+from aiogram.exceptions import TelegramNetworkError  # noqa: E402
+
+from Bot.utils.telegram_safe import safe_edit_message_text  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_text_retries_network_error() -> None:
+    """Network errors should trigger retries for edit operations."""
+
+    bot = AsyncMock()
+    bot.edit_message_text = AsyncMock(
+        side_effect=[TelegramNetworkError("fail"), None]
+    )
+
+    result = await safe_edit_message_text(
+        bot,
+        chat_id=123,
+        message_id=456,
+        text="hello",
+    )
+
+    assert result is True
+    assert bot.edit_message_text.call_count == 2
+
+===== tests/unit/test_telegram_safe_delete.py =====
+
+"""Tests for safe_delete_message."""
+
+from unittest.mock import AsyncMock
+import sys
+import types
+from pathlib import Path
+
+import asyncio
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+if "aiogram" not in sys.modules:
+    aiogram = types.ModuleType("aiogram")
+    exceptions = types.ModuleType("aiogram.exceptions")
+    types_mod = types.ModuleType("aiogram.types")
+    filters = types.ModuleType("aiogram.filters")
+    fsm = types.ModuleType("aiogram.fsm")
+    fsm_context = types.ModuleType("aiogram.fsm.context")
+
+    class TelegramBadRequest(Exception):
+        pass
+
+    class TelegramNetworkError(Exception):
+        pass
+
+    exceptions.TelegramBadRequest = TelegramBadRequest
+    exceptions.TelegramNetworkError = TelegramNetworkError
+
+    class ReplyKeyboardMarkup:
+        pass
+
+    class ReplyKeyboardRemove:
+        pass
+
+    class Message:
+        pass
+
+    class InlineKeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class InlineKeyboardMarkup:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class KeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class DummyRouter:
+        def message(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class Bot:
+        pass
+
+    class DummyF:
+        class _Field:
+            def __eq__(self, other):
+                return ("eq", other)
+
+        text = _Field()
+
+    class FSMContext:
+        pass
+
+    class Command:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
+    types_mod.ReplyKeyboardRemove = ReplyKeyboardRemove
+    types_mod.Message = Message
+    types_mod.InlineKeyboardButton = InlineKeyboardButton
+    types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
+    types_mod.KeyboardButton = KeyboardButton
+    aiogram.exceptions = exceptions
+    aiogram.types = types_mod
+    aiogram.Router = DummyRouter
+    aiogram.F = DummyF()
+    aiogram.Bot = Bot
+    fsm_context.FSMContext = FSMContext
+    fsm.context = fsm_context
+    aiogram.fsm = fsm
+    aiogram.filters = filters
+    filters.Command = Command
+    sys.modules["aiogram"] = aiogram
+    sys.modules["aiogram.exceptions"] = exceptions
+    sys.modules["aiogram.types"] = types_mod
+    sys.modules["aiogram.filters"] = filters
+    sys.modules["aiogram.fsm"] = fsm
+    sys.modules["aiogram.fsm.context"] = fsm_context
+
+if "aiohttp" not in sys.modules:
+    aiohttp = types.ModuleType("aiohttp")
+
+    class ClientConnectionError(Exception):
+        pass
+
+    class ClientOSError(Exception):
+        pass
+
+    aiohttp.ClientConnectionError = ClientConnectionError
+    aiohttp.ClientOSError = ClientOSError
+    sys.modules["aiohttp"] = aiohttp
+
+from aiogram.exceptions import TelegramBadRequest  # noqa: E402
+
+from Bot.utils.telegram_safe import safe_delete_message  # noqa: E402
+
+
+def test_safe_delete_message_not_found() -> None:
+    async def run() -> None:
+        bot = AsyncMock()
+        bot.delete_message = AsyncMock(
+            side_effect=TelegramBadRequest("message to delete not found")
+        )
+
+        result = await safe_delete_message(bot, chat_id=1, message_id=2)
+
+        assert result is False
+        assert bot.delete_message.call_count == 1
+
+    asyncio.run(run())
+
+===== tests/unit/test_text_sanitizer.py =====
+
+"""Tests for income text sanitizer."""
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from Bot.utils.text_sanitizer import sanitize_income_title  # noqa: E402
+
+
+def test_sanitize_income_title_removes_bank_suffixes() -> None:
+    text = "бытовые расходы на тиньк (озон)"
+    assert sanitize_income_title(text) == "бытовые расходы"
+
+
+def test_sanitize_income_title_trims_separators() -> None:
+    text = "Инвестиции — на Альфу"
+    assert sanitize_income_title(text) == "Инвестиции"
+
+
+def test_sanitize_income_title_removes_tinkoff_suffix() -> None:
+    text = "убил боль — на тиньк"
+    assert sanitize_income_title(text) == "убил боль"
+
+
+def test_sanitize_income_title_removes_ozon_suffix() -> None:
+    text = "что-то (озон)"
+    assert sanitize_income_title(text) == "что-то"
+
+===== tests/unit/test_ui_cleanup.py =====
+
+"""Tests for UI cleanup utilities."""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+import asyncio
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+if "aiogram" not in sys.modules:
+    aiogram = types.ModuleType("aiogram")
+
+    class DummyRouter:
+        def message(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class DummyF:
+        class _Field:
+            def __eq__(self, other):
+                return ("eq", other)
+
+        text = _Field()
+
+    class Bot:
+        pass
+
+    aiogram.F = DummyF()
+    aiogram.Router = DummyRouter
+    aiogram.Bot = Bot
+
+    exceptions = types.ModuleType("aiogram.exceptions")
+
+    class TelegramBadRequest(Exception):
+        pass
+
+    exceptions.TelegramBadRequest = TelegramBadRequest
+    aiogram.exceptions = exceptions
+
+    filters = types.ModuleType("aiogram.filters")
+
+    class Command:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    filters.Command = Command
+    aiogram.filters = filters
+
+    fsm = types.ModuleType("aiogram.fsm")
+    fsm_context = types.ModuleType("aiogram.fsm.context")
+
+    class FSMContext:
+        pass
+
+    fsm_context.FSMContext = FSMContext
+    fsm.context = fsm_context
+    aiogram.fsm = fsm
+
+    types_mod = types.ModuleType("aiogram.types")
+
+    class Message:
+        pass
+
+    class ReplyKeyboardMarkup:
+        pass
+
+    class ReplyKeyboardRemove:
+        pass
+
+    class InlineKeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class InlineKeyboardMarkup:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class KeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    types_mod.Message = Message
+    types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
+    types_mod.ReplyKeyboardRemove = ReplyKeyboardRemove
+    types_mod.InlineKeyboardButton = InlineKeyboardButton
+    types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
+    types_mod.KeyboardButton = KeyboardButton
+    aiogram.types = types_mod
+
+    sys.modules["aiogram"] = aiogram
+    sys.modules["aiogram.exceptions"] = exceptions
+    sys.modules["aiogram.filters"] = filters
+    sys.modules["aiogram.fsm"] = fsm
+    sys.modules["aiogram.fsm.context"] = fsm_context
+    sys.modules["aiogram.types"] = types_mod
+
+from Bot.handlers.start import back_to_main
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_to_context,
+    ui_register_protected_message,
+    ui_set_welcome_message,
+    ui_track_message,
+)
+
+
+class DummyState:
+    """Minimal FSMContext stand-in for unit tests."""
+
+    def __init__(self, initial=None) -> None:
+        self.data = dict(initial or {})
+
+    async def get_data(self) -> dict:
+        return dict(self.data)
+
+    async def update_data(self, **kwargs) -> None:
+        self.data.update(kwargs)
+
+
+class DummyBot:
+    """Minimal bot mock with async delete_message."""
+
+    def __init__(self) -> None:
+        self.delete_message = AsyncMock()
+        self.edit_message_text = AsyncMock()
+        self.send_message = AsyncMock()
+
+
+def test_ui_track_deduplicates() -> None:
+    """Tracking avoids duplicate message ids."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_track_message(state, 1, 10)
+        await ui_track_message(state, 1, 10)
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == [10]
+
+    asyncio.run(run_test())
+
+
+def test_ui_cleanup_keeps_welcome() -> None:
+    """Cleanup removes tracked messages while keeping welcome."""
+
+    async def run_test() -> None:
+        state = DummyState(
+            {
+                "ui_welcome_message_id": 111,
+                "ui_tracked_message_ids": [111, 222, 333],
+            }
+        )
+
+        bot = DummyBot()
+        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU")
+
+        deleted_ids = {
+            call.kwargs["message_id"] for call in bot.delete_message.call_args_list
+        }
+        assert deleted_ids == {222, 333}
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == []
+
+    asyncio.run(run_test())
+
+
+def test_ui_register_protected_not_tracked() -> None:
+    """Protected messages are stored separately from tracked list."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_register_protected_message(state, 1, 55)
+        data = await state.get_data()
+        assert data.get("ui_protected_message_ids") == [55]
+        assert data.get("ui_tracked_message_ids") in (None, [])
+
+    asyncio.run(run_test())
+
+
+def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
+    """back_to_main deletes user message, cleans UI, and renders menu."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 55})
+        cleanup_mock = AsyncMock()
+        render_mock = AsyncMock()
+        build_menu_mock = AsyncMock(return_value=MagicMock())
+        safe_delete_mock = AsyncMock(return_value=True)
+
+        monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
+        monkeypatch.setattr("Bot.handlers.start.ui_render_screen", render_mock)
+        monkeypatch.setattr(
+            "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
+        )
+        monkeypatch.setattr("Bot.handlers.start.ui_safe_delete_message", safe_delete_mock)
+
+        message = SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            from_user=SimpleNamespace(id=2),
+            message_id=10,
+            bot=SimpleNamespace(),
+        )
+
+        await back_to_main(message, state)
+
+        safe_delete_mock.assert_awaited_once()
+        cleanup_mock.assert_awaited_once()
+        _, kwargs = cleanup_mock.await_args
+        assert kwargs.get("keep_ids") is None
+        build_menu_mock.assert_awaited_once_with(2)
+        render_mock.assert_awaited_once()
+
+    asyncio.run(run_test())
+
+
+def test_welcome_reused_on_start() -> None:
+    """Welcome message is reused when id exists."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 77})
+        bot = DummyBot()
+        bot.send_message.return_value = SimpleNamespace(message_id=88)
+
+        welcome_id = await ui_set_welcome_message(bot, state, 1, "Hello")
+
+        assert welcome_id == 77
+        bot.edit_message_text.assert_awaited_once()
+        bot.send_message.assert_not_called()
+
+    asyncio.run(run_test())
+
+===== tests/unit/test_utils.py =====
+
+"""Utility tests."""
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
+from Bot.utils.datetime_utils import get_next_byt_run_dt, resolve_deferred_until
+from Bot.utils.logging import init_logging
+
+
+def test_init_logging_returns_logger() -> None:
+    """init_logging should return a logger instance."""
+
+    logger = init_logging()
+    assert logger.name == "Bot.utils.logging"
+
+
+def test_get_next_byt_run_dt_before_slot() -> None:

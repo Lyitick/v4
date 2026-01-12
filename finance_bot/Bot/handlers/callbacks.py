@@ -13,10 +13,17 @@ from Bot.handlers.finances import (
 )
 from Bot.keyboards.main import back_only_keyboard, wishlist_categories_keyboard
 from Bot.states.wishlist_states import WishlistState
+from Bot.config.settings import get_settings
+from Bot.constants.ui_labels import NAV_BACK
 from Bot.handlers.wishlist import (
     _get_user_wishlist_categories,
     humanize_wishlist_category,
 )
+from Bot.services.wishlist_service import add_wish as add_wish_service
+from Bot.services.wishlist_service import purchase_wish as purchase_wish_service
+from Bot.services.types import ServiceError
+from Bot.utils.messages import ERR_GENERIC, EMPTY_LIST
+from Bot.utils.time import now_for_user
 from Bot.utils.telegram_safe import (
     safe_answer,
     safe_callback_answer,
@@ -28,6 +35,11 @@ from Bot.utils.ui_cleanup import ui_register_message
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
+DEFAULT_TZ = (
+    get_settings().timezone.key
+    if hasattr(get_settings().timezone, "key")
+    else str(get_settings().timezone)
+)
 
 @router.callback_query(F.data.startswith("wlcat:"))
 async def handle_category_selection(callback: CallbackQuery, state: FSMContext) -> None:
@@ -101,7 +113,7 @@ async def skip_wishlist_url(callback: CallbackQuery, state: FSMContext) -> None:
         )
         await safe_answer(
             callback.message,
-            "Если нужно, нажми ⬅️ Назад.",
+            f"Если нужно, нажми {NAV_BACK}.",
             reply_markup=back_only_keyboard(),
             logger=LOGGER,
         )
@@ -117,13 +129,21 @@ async def _finalize_wish(
 
     db = get_db()
     data = await state.get_data()
-    wish_id = db.add_wish(
+    clock = lambda uid: now_for_user(db, uid, DEFAULT_TZ)
+    result = add_wish_service(
+        db=db,
+        clock=clock,
+        logger=LOGGER,
         user_id=callback.from_user.id,
         name=data.get("name", ""),
         price=float(data.get("price", 0)),
         url=data.get("url"),
         category=category_code,
     )
+    if isinstance(result, ServiceError):
+        await safe_callback_answer(callback, ERR_GENERIC, show_alert=True, logger=LOGGER)
+        return
+    wish_id = result.get("id")
     lines = [
         f"Категория: {humanized_category}",
         f"Название: {data.get('name')}",
@@ -175,7 +195,7 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
                 callback.message.bot,
                 chat_id=callback.message.chat.id,
                 message_id=callback.message.message_id,
-                text="Желаний в этой категории пока нет.",
+                text=EMPTY_LIST,
                 reply_markup=wishlist_categories_keyboard(
                     _get_user_wishlist_categories(db, callback.from_user.id)
                 ),
@@ -184,7 +204,7 @@ async def _send_wishes_list(callback: CallbackQuery, category: str) -> None:
             if not edited:
                 await safe_answer(
                     callback.message,
-                    "Желаний в этой категории пока нет.",
+                    EMPTY_LIST,
                     reply_markup=wishlist_categories_keyboard(
                         _get_user_wishlist_categories(db, callback.from_user.id)
                     ),
@@ -257,30 +277,44 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
             )
             return
 
-    result = db.purchase_wish(callback.from_user.id, wish_id, debit_category)
-    status = result.get("status")
-    if status == "not_found":
-        await safe_callback_answer(callback, "Желание не найдено.", show_alert=True, logger=LOGGER)
+    clock = lambda uid: now_for_user(db, uid, DEFAULT_TZ)
+    result = purchase_wish_service(
+        db=db,
+        clock=clock,
+        logger=LOGGER,
+        user_id=callback.from_user.id,
+        wish_id=wish_id,
+        debit_category=debit_category,
+    )
+    if isinstance(result, ServiceError):
+        if result.code == "not_found":
+            await safe_callback_answer(
+                callback, "Желание не найдено.", show_alert=True, logger=LOGGER
+            )
+            return
+        if result.code == "insufficient":
+            available = 0.0
+            try:
+                available = float(result.message or 0.0)
+            except (TypeError, ValueError):
+                available = 0.0
+            await safe_callback_answer(
+                (
+                    "Недостаточно средств в накоплениях для этой категории.\n"
+                    f"Нужно: {price:.2f}, доступно: {available:.2f}."
+                ),
+                show_alert=True,
+                logger=LOGGER,
+            )
+            return
+        await safe_callback_answer(
+            ERR_GENERIC,
+            show_alert=True,
+            logger=LOGGER,
+        )
         return
-    if status == "already":
+    if result.already_done:
         await safe_callback_answer(callback, "Уже отмечено как купленное.", logger=LOGGER)
-        return
-    if status == "insufficient":
-        await safe_callback_answer(
-            (
-                "Недостаточно средств в накоплениях для этой категории.\n"
-                f"Нужно: {price:.2f}, доступно: {float(result.get('available', 0.0)):.2f}."
-            ),
-            show_alert=True,
-            logger=LOGGER,
-        )
-        return
-    if status == "error":
-        await safe_callback_answer(
-            "Не удалось списать: ошибка базы данных.",
-            show_alert=True,
-            logger=LOGGER,
-        )
         return
 
     if callback.message:
@@ -291,7 +325,7 @@ async def handle_wish_purchase(callback: CallbackQuery) -> None:
             text=f"🎉 Поздравляю, ты купил {wish['name']} за {price:.2f}!",
             logger=LOGGER,
         )
-    if status == "debited":
+    if result.message == "debited":
         LOGGER.info(
             "USER=%s ACTION=WISHLIST_DEBIT META=category=%s amount=%.2f item_id=%s",
             callback.from_user.id,

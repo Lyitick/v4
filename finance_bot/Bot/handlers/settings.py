@@ -23,6 +23,7 @@ from Bot.constants.ui_labels import (
     WISHLIST_DEBIT_CATEGORY_NONE,
     WISHLIST_BYT_CATEGORY_BUTTON,
 )
+from Bot.config.settings import get_settings
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import back_only_keyboard

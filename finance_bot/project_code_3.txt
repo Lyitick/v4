@@ -97,6 +97,7 @@ from Bot.services.household import (
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
 from Bot.utils.byt_manual_check import (
     build_byt_times_sorted,
+    parse_byt_manual_cursor_index,
     select_next_byt_manual_time,
 )
 from Bot.utils.datetime_utils import current_month_str, now_tz
@@ -712,7 +713,7 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     data = await state.get_data()
     current_date = now_dt.date().isoformat()
     saved_date = data.get("byt_manual_cursor_date")
-    index = int(data.get("byt_manual_cursor_index") or -1)
+    index = parse_byt_manual_cursor_index(data.get("byt_manual_cursor_index"))
     LOGGER.info(
         "USER=%s ACTION=BYT_MANUAL_CURSOR META=before date=%s index=%s",
         user_id,

@@ -1,352 +1,310 @@
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe edit failure details", exc_info=True)
-            return False, False
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "edit_message_text", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return False, True
-            log.warning(
-                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
-                chat_id,
-                message_id,
-                exc,
-            )
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe edit unexpected error details", exc_info=True)
-            return False, False
-    return False, False
-
-
-async def safe_send_message(
-    bot,
-    chat_id: int,
-    text: str,
-    reply_markup=None,
-    *,
-    parse_mode: str | None = None,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-):
-    """Safely send a message using bot.send_message without raising exceptions."""
-
-    log = _get_logger(logger)
-    normalized = "" if text is None else str(text)
-    if not normalized.strip():
-        normalized = "."
-    for attempt in range(retries + 1):
-        try:
-            return await bot.send_message(
-                chat_id=chat_id,
-                text=normalized,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                request_timeout=request_timeout,
-            )
-        except TelegramBadRequest as exc:
-            log.warning("Safe send failed: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe send failure details", exc_info=True)
-            return None
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "send_message", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return None
-            log.warning("Safe send unexpected error: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe send unexpected error details", exc_info=True)
-            return None
-    return None
-
-
-async def safe_answer(
-    message_or_callback,
-    text: str,
-    reply_markup=None,
-    *,
-    parse_mode: str | None = None,
-    retries: int = 2,
-    base_delay: float = 0.3,
-    logger: logging.Logger | None = None,
-    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
-) -> int | None:
-    """Safely send a message using .answer without raising exceptions."""
-
-    log = _get_logger(logger)
-    for attempt in range(retries + 1):
-        try:
-            sent = await message_or_callback.answer(
-                text,
-                reply_markup=reply_markup,
-                parse_mode=parse_mode,
-                request_timeout=request_timeout,
-            )
-            return int(sent.message_id)
-        except TelegramBadRequest as exc:
-            log.warning("Safe answer failed: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe answer failure details", exc_info=True)
-            return None
-        except Exception as exc:  # noqa: BLE001
-            if _is_network_error(exc):
-                _log_network_error(log, "answer", exc, attempt + 1, retries)
-                if attempt < retries:
-                    await asyncio.sleep(base_delay * 2**attempt)
-                    continue
-                return None
-            log.warning("Safe answer unexpected error: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe answer unexpected error details", exc_info=True)
-            return None
-    return None
-
-
-async def safe_callback_answer(
-    callback,
-    text: str | None = None,
-    *,
-    show_alert: bool | None = None,
-    logger: logging.Logger | None = None,
-) -> None:
-    """Safely answer a callback query without raising exceptions."""
-
-    log = _get_logger(logger)
-    try:
-        await callback.answer(text=text, show_alert=show_alert)
-    except Exception as exc:  # noqa: BLE001
-        if _is_network_error(exc):
-            log.warning("Safe callback answer failed due to network error: %s", exc)
-            if log.isEnabledFor(logging.DEBUG):
-                log.debug("Safe callback answer network details", exc_info=True)
             return
-        log.warning("Safe callback answer unexpected error: %s", exc)
-        if log.isEnabledFor(logging.DEBUG):
-            log.debug("Safe callback answer unexpected error details", exc_info=True)
 
-===== Bot/utils/text_sanitizer.py =====
+        LOGGER.info(
+            "BYT defer days submit user_id=%s item_id=%s days=%s",
+            message.from_user.id if message.from_user else "unknown",
+            defer_item_id,
+            days,
+        )
 
-"""Text sanitizers for user-facing labels."""
-from __future__ import annotations
+        await state.clear()
+        if wish:
+            category_id, category_title = _resolve_wish_category(db, message.from_user.id, wish)
+            due_items, deferred_items = get_byt_category_items(
+                db, message.from_user.id, category_title, now_tz()
+            )
+            checklist_text = format_byt_category_checklist_text(
+                category_title, due_items, deferred_items
+            )
+            message_text = format_byt_defer_confirmation_text(
+                wish, category_title, deferred_until, checklist_text
+            )
+            category_row = db.get_wishlist_category_by_title(message.from_user.id, category_title)
+            category_ref = int(category_row["id"]) if category_row else category_id
+            keyboard = (
+                _build_byt_items_keyboard(
+                    due_items,
+                    allow_defer=bool(settings_row.get("byt_defer_enabled", 1)),
+                    category_id=category_ref,
+                )
+                if due_items
+                else None
+            )
+            if reminder_message_id:
+                edited = await safe_edit_message_text(
+                    message.bot,
+                    chat_id=message.chat.id,
+                    message_id=int(reminder_message_id),
+                    text=message_text,
+                    reply_markup=keyboard,
+                    logger=LOGGER,
+                )
+                if not edited:
+                    sent = await message.answer(message_text, reply_markup=keyboard)
+                    if sent:
+                        await ui_register_message(state, sent.chat.id, sent.message_id)
+            else:
+                sent = await message.answer(message_text, reply_markup=keyboard)
+                if sent:
+                    await ui_register_message(state, sent.chat.id, sent.message_id)
+            await message.answer(" ", reply_markup=ReplyKeyboardRemove())
+        else:
+            await message.answer(
+                f"Отложено на {days} дн.", reply_markup=ReplyKeyboardRemove()
+            )
 
-import re
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+    else:
+        if current_sum == "0":
+            new_sum = message.text
+        else:
+            new_sum = current_sum + message.text
 
+    new_display_message_id = display_message_id
+    new_display_chat_id = display_chat_id
+    if display_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=display_chat_id,
+            message_id=int(display_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+        if not edited:
+            prompt = await message.answer(f": {new_sum}")
+            new_display_message_id = prompt.message_id
+            new_display_chat_id = message.chat.id
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        new_display_message_id = prompt.message_id
+        new_display_chat_id = message.chat.id
 
-_TAIL_PATTERNS = [
-    r"на\s+тиньк",
-    r"на\s+альфу",
-    r"на\s+сбер",
-    r"на\s+яндекс",
-]
-
-
-def sanitize_income_title(text: str) -> str:
-    value = str(text or "")
-    for pattern in _TAIL_PATTERNS:
-        value = re.sub(rf"\s*(?:—|-|:)?\s*{pattern}", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"\s*\(\s*озон\s*\)", "", value, flags=re.IGNORECASE)
-    value = re.sub(r"\(\s*\)", "", value)
-    value = re.sub(r"\s{2,}", " ", value)
-    return value.strip(" -—:\t\n")
-
-===== Bot/utils/ui_cleanup.py =====
-
-import logging
-from typing import List
-
-from aiogram import Bot
-from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
-from aiogram.fsm.context import FSMContext
-
-from Bot.database.get_db import get_db
-from Bot.utils.telegram_safe import (
-    safe_delete_message,
-    safe_edit_message_text,
-    safe_send_message,
-)
-
-LOGGER = logging.getLogger(__name__)
-
-
-async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) -> None:
-    """Track a UI message id for later cleanup."""
-
-    data = await state.get_data()
-    ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    if message_id not in ids:
-        ids.append(int(message_id))
-    if len(ids) > 300:
-        ids = ids[-300:]
-    current_chat_id = data.get("ui_chat_id")
     await state.update_data(
-        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
-        ui_tracked_message_ids=ids,
+        defer_days_str=new_sum,
+        defer_display_message_id=new_display_message_id,
+        defer_display_chat_id=new_display_chat_id,
     )
 
-
-async def ui_register_protected_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
-    """Track a UI message id that should never be deleted."""
-
-    data = await state.get_data()
-    ids: List[int] = list(data.get("ui_protected_message_ids") or [])
-    if message_id not in ids:
-        ids.append(int(message_id))
-    if len(ids) > 300:
-        ids = ids[-300:]
-    current_chat_id = data.get("ui_chat_id")
-    await state.update_data(
-        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
-        ui_protected_message_ids=ids,
-    )
-
-
-async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
-    """Do not track user messages for later cleanup."""
-
-    data = await state.get_data()
-    if data.get("ui_chat_id") is None:
-        await state.update_data(ui_chat_id=chat_id)
-
-
-async def ui_safe_delete_message(
-    bot: Bot,
-    chat_id: int,
-    message_id: int,
-    log_context: str | None = None,
-    state: FSMContext | None = None,
-) -> bool:
-    if state is not None:
-        protected_ids = await ui_get_protected_ids(state)
-        if int(message_id) in protected_ids:
-            LOGGER.info("SKIP_DELETE_PROTECTED message_id=%s", message_id)
-            return False
-    return await safe_delete_message(
-        bot,
-        chat_id=chat_id,
-        message_id=message_id,
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
         logger=LOGGER,
     )
 
 
-async def ui_get_welcome_id(state: FSMContext) -> int | None:
-    data = await state.get_data()
-    welcome_id = data.get("ui_welcome_message_id")
-    return int(welcome_id) if welcome_id is not None else None
+@router.message(
+    BytDeferState.waiting_for_days,
+    F.text.regexp(r"^\\s*\\+?\\d+\\s*$"),
+)
+async def handle_byt_defer_days_manual(message: Message, state: FSMContext) -> None:
+    """Handle manual numeric input for BYT defer days."""
 
-
-async def ui_get_protected_ids(state: FSMContext) -> set[int]:
-    welcome_id = await ui_get_welcome_id(state)
-    if welcome_id is None:
-        return set()
-    return {int(welcome_id)}
-
-
-async def ui_set_welcome_id(
-    state: FSMContext, message_id: int, chat_id: int | None = None
-) -> None:
-    update = {"ui_welcome_message_id": int(message_id)}
-    if chat_id is not None:
-        update["ui_chat_id"] = int(chat_id)
-    await state.update_data(**update)
-
-
-async def ui_set_welcome_message(
-    bot: Bot, state: FSMContext, chat_id: int, text: str
-) -> int:
-    welcome_id = await ui_get_welcome_id(state)
-    if welcome_id is not None:
-        edited = await safe_edit_message_text(
-            bot,
-            chat_id=chat_id,
-            message_id=int(welcome_id),
-            text=text,
+    value = parse_positive_int(message.text or "")
+    if value is None:
+        await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
             logger=LOGGER,
         )
-        if edited:
-            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id)
-            return int(welcome_id)
+        return
 
-    if welcome_id is None:
-        db = get_db()
-        persisted = db.get_welcome_message_id(chat_id)
-        if persisted is not None:
-            await ui_set_welcome_id(state, int(persisted), chat_id=chat_id)
-            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, persisted)
-            return int(persisted)
-
-    sent = await safe_send_message(bot, chat_id=chat_id, text=text, logger=LOGGER)
-    if sent:
-        await ui_set_welcome_id(state, int(sent.message_id), chat_id=chat_id)
-        get_db().set_welcome_message_id(chat_id, int(sent.message_id))
-        LOGGER.info("WELCOME created (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
-        return int(sent.message_id)
-    return 0
-
-
-async def ui_set_settings_mode_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
-    await ui_register_message(state, chat_id, message_id)
-
-
-async def ui_set_screen_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
-    await ui_register_message(state, chat_id, message_id)
-    await state.update_data(ui_screen_message_id=int(message_id), ui_chat_id=chat_id)
-
-
-async def ui_track_message(
-    state: FSMContext, chat_id: int, message_id: int
-) -> None:
-    await ui_register_message(state, chat_id, message_id)
-
-
-async def ui_cleanup_to_context(
-    bot: Bot,
-    state: FSMContext,
-    chat_id: int,
-    context_name: str,
-    keep_ids: List[int] | None = None,
-) -> None:
     data = await state.get_data()
-    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
-    protected_ids = await ui_get_protected_ids(state)
-    extra_protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
-    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
-    for protected_id in extra_protected_ids:
-        protected_ids.add(int(protected_id))
-    keep_id_set.update(protected_ids)
-    delete_ids = []
-    for mid in tracked_ids:
-        mid_int = int(mid)
-        if mid_int in keep_id_set:
-            continue
-        delete_ids.append(mid_int)
-    kept_ids = {mid for mid in (int(item) for item in tracked_ids) if mid in keep_id_set}
-    deleted_count = 0
-    for message_id in delete_ids:
-        deleted = await ui_safe_delete_message(
-            bot,
-            chat_id=chat_id,
-            message_id=message_id,
-            log_context=f"context={context_name}",
-            state=state,
+    display_chat_id = data.get("defer_display_chat_id", message.chat.id)
+    display_message_id = data.get("defer_display_message_id")
+    new_sum = str(value)
+
+    if display_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=display_chat_id,
+            message_id=int(display_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
         )
-        if deleted:
-            deleted_count += 1
+        if not edited:
+            prompt = await message.answer(f": {new_sum}")
+            display_message_id = prompt.message_id
+            display_chat_id = message.chat.id
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        display_message_id = prompt.message_id
+        display_chat_id = message.chat.id
+
+    await state.update_data(
+        defer_days_str=new_sum,
+        defer_display_message_id=display_message_id,
+        defer_display_chat_id=display_chat_id,
+    )
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+@router.message(BytDeferState.waiting_for_days)
+async def handle_byt_defer_days_invalid(message: Message) -> None:
+    """Prompt to use calculator buttons for defer days."""
+
+    await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
+
+===== Bot/keyboards/__init__.py =====
+
+
+===== Bot/keyboards/calculator.py =====
+
+"""Calculator keyboard definitions."""
+
+from aiogram.types import KeyboardButton, ReplyKeyboardMarkup
+
+
+def income_calculator_keyboard() -> ReplyKeyboardMarkup:
+    """Общая цифровая клавиатура для ввода сумм."""
+
+    keyboard = [
+        [KeyboardButton(text="7"), KeyboardButton(text="8"), KeyboardButton(text="9")],
+        [KeyboardButton(text="4"), KeyboardButton(text="5"), KeyboardButton(text="6")],
+        [KeyboardButton(text="1"), KeyboardButton(text="2"), KeyboardButton(text="3")],
+        [
+            KeyboardButton(text="Очистить"),
+            KeyboardButton(text="0"),
+            KeyboardButton(text="✅ Газ"),
+        ],
+        [KeyboardButton(text="⬅️ Назад")],
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=keyboard,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+===== Bot/keyboards/household.py =====
+
+"""Keyboards for household payments."""
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    KeyboardButton,
+    ReplyKeyboardMarkup,
+)
+
+
+def household_payments_answer_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard with Yes/No and Back options for household payments."""
+
+    buttons = [
+        [
+            KeyboardButton(text="✅ Да"),
+            KeyboardButton(text="❌ Нет"),
+            KeyboardButton(text="⬅️ Назад"),
+        ]
+    ]
+    return ReplyKeyboardMarkup(
+        keyboard=buttons,
+        resize_keyboard=True,
+        one_time_keyboard=False,
+    )
+
+
+def household_payments_inline_keyboard(
+    show_back: bool, question_code: str | None = None
+) -> InlineKeyboardMarkup:
+    """Inline keyboard with Yes/No/Back options for household payments."""
+
+    suffix = f":{question_code}" if question_code else ""
+    buttons = [
+        [
+            InlineKeyboardButton(text="Да", callback_data=f"hh_pay:yes{suffix}"),
+            InlineKeyboardButton(text="Нет", callback_data=f"hh_pay:no{suffix}"),
+        ]
+    ]
+    if show_back:
+        buttons[0].append(
+            InlineKeyboardButton(text="Назад", callback_data=f"hh_pay:back{suffix}")
+        )
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+===== Bot/keyboards/main.py =====
+
+"""Keyboard definitions."""
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
+
+def main_menu_keyboard(
+    show_household: bool = False,
+    show_test_button: bool = False,
+    show_settings: bool = True,
+) -> ReplyKeyboardMarkup:
+    """Create main menu keyboard."""
+
+    buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
+    if show_household:
+        buttons.append([KeyboardButton(text="Бытовые платежи")])
+    if show_settings:
+        buttons.append([KeyboardButton(text="⚙️")])
+    if show_test_button:
+        buttons.append([KeyboardButton(text="Проверить напоминания")])  # TODO: удалить после тестов
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def yes_no_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with Yes/No options."""
+
+    buttons = [[KeyboardButton(text="Да"), KeyboardButton(text="Нет")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True, one_time_keyboard=True)
+
+
+def yes_no_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard with Yes/No options to avoid opening system keyboard."""
+
+    buttons = [
+        [
+            InlineKeyboardButton(text="Да", callback_data="confirm_yes"),
+            InlineKeyboardButton(text="Нет", callback_data="confirm_no"),
+        ]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def back_to_main_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with back to main option."""
+
+    buttons = [[KeyboardButton(text="⏪ На главную")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def back_only_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard with a single back button."""
+
+    buttons = [[KeyboardButton(text="⬅️ Назад")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_reply_keyboard() -> ReplyKeyboardMarkup:
+    """Keyboard for wishlist actions."""
+
+    buttons = [[KeyboardButton(text="➕"), KeyboardButton(text="Купленное")], [KeyboardButton(text="⏪ На главную")]]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_reply_keyboard_no_add() -> ReplyKeyboardMarkup:
+    """Keyboard for wishlist actions without add button (+)."""
+
+    buttons = [
+        [KeyboardButton(text="Купленное")],
+        [KeyboardButton(text="⏪ На главную")],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
     LOGGER.info(
         "UI_CLEANUP context=%s deleted=%s kept=%s welcome_id=%s",
@@ -1630,10 +1588,42 @@ if "aiogram" not in sys.modules:
         def __init__(self, *args, **kwargs):
             return None
 
-    class DummyRouter:
-        def message(self, *args, **kwargs):
-            def decorator(func):
-                return func
+===== Bot/utils/messages.py =====
+
+"""Message constants for user-facing prompts and errors."""
+
+ERR_INVALID_INPUT = "⚠️ Не понял ввод. Выбери кнопку ниже или введи корректное значение."
+HINT_TIME_FORMAT = "Формат времени: чч:мм (например 09:30)."
+
+===== Bot/utils/number_input.py =====
+
+"""Utilities for parsing numeric input."""
+
+from __future__ import annotations
+
+
+def parse_int_choice(text: str) -> int | None:
+    """Parse a simple integer choice like "2" or "+2"."""
+
+    value = (text or "").strip()
+    if not value:
+        return None
+    if value.startswith("+"):
+        value = value[1:]
+    if not value.isdigit():
+        return None
+    return int(value)
+
+
+def parse_positive_int(text: str) -> int | None:
+    """Parse a positive integer (> 0) from input."""
+
+    value = parse_int_choice(text)
+    if value is None or value <= 0:
+        return None
+    return value
+
+===== Bot/utils/savings.py =====
 
             return decorator
 
@@ -1775,226 +1765,43 @@ if "aiogram" not in sys.modules:
 
         text = _Field()
 
-    class Bot:
-        pass
-
-    aiogram.F = DummyF()
-    aiogram.Router = DummyRouter
-    aiogram.Bot = Bot
-
-    exceptions = types.ModuleType("aiogram.exceptions")
-
-    class TelegramBadRequest(Exception):
-        pass
-
-    exceptions.TelegramBadRequest = TelegramBadRequest
-    aiogram.exceptions = exceptions
-
-    filters = types.ModuleType("aiogram.filters")
-
-    class Command:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    filters.Command = Command
-    aiogram.filters = filters
-
-    fsm = types.ModuleType("aiogram.fsm")
-    fsm_context = types.ModuleType("aiogram.fsm.context")
-
-    class FSMContext:
-        pass
-
-    fsm_context.FSMContext = FSMContext
-    fsm.context = fsm_context
-    aiogram.fsm = fsm
-
-    types_mod = types.ModuleType("aiogram.types")
-
-    class Message:
-        pass
-
-    class ReplyKeyboardMarkup:
-        pass
-
-    class ReplyKeyboardRemove:
-        pass
-
-    class InlineKeyboardButton:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    class InlineKeyboardMarkup:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    class KeyboardButton:
-        def __init__(self, *args, **kwargs):
-            return None
-
-    types_mod.Message = Message
-    types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
-    types_mod.ReplyKeyboardRemove = ReplyKeyboardRemove
-    types_mod.InlineKeyboardButton = InlineKeyboardButton
-    types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
-    types_mod.KeyboardButton = KeyboardButton
-    aiogram.types = types_mod
-
-    sys.modules["aiogram"] = aiogram
-    sys.modules["aiogram.exceptions"] = exceptions
-    sys.modules["aiogram.filters"] = filters
-    sys.modules["aiogram.fsm"] = fsm
-    sys.modules["aiogram.fsm.context"] = fsm_context
-    sys.modules["aiogram.types"] = types_mod
-
-from Bot.handlers.start import back_to_main
-from Bot.utils.ui_cleanup import (
-    ui_cleanup_to_context,
-    ui_register_protected_message,
-    ui_set_welcome_message,
-    ui_track_message,
-)
-
-
-class DummyState:
-    """Minimal FSMContext stand-in for unit tests."""
-
-    def __init__(self, initial=None) -> None:
-        self.data = dict(initial or {})
-
-    async def get_data(self) -> dict:
-        return dict(self.data)
-
-    async def update_data(self, **kwargs) -> None:
-        self.data.update(kwargs)
-
-
-class DummyBot:
-    """Minimal bot mock with async delete_message."""
-
-    def __init__(self) -> None:
-        self.delete_message = AsyncMock()
-        self.edit_message_text = AsyncMock()
-        self.send_message = AsyncMock()
-
-
-def test_ui_track_deduplicates() -> None:
-    """Tracking avoids duplicate message ids."""
-
-    async def run_test() -> None:
-        state = DummyState()
-        await ui_track_message(state, 1, 10)
-        await ui_track_message(state, 1, 10)
-        data = await state.get_data()
-        assert data["ui_tracked_message_ids"] == [10]
-
-    asyncio.run(run_test())
-
-
-def test_ui_cleanup_keeps_welcome() -> None:
-    """Cleanup removes tracked messages while keeping welcome."""
-
-    async def run_test() -> None:
-        state = DummyState(
-            {
-                "ui_welcome_message_id": 111,
-                "ui_tracked_message_ids": [111, 222, 333],
-            }
-        )
-
-        bot = DummyBot()
-        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU")
-
-        deleted_ids = {
-            call.kwargs["message_id"] for call in bot.delete_message.call_args_list
-        }
-        assert deleted_ids == {222, 333}
-        data = await state.get_data()
-        assert data["ui_tracked_message_ids"] == []
-
-    asyncio.run(run_test())
-
-
-def test_ui_register_protected_not_tracked() -> None:
-    """Protected messages are stored separately from tracked list."""
-
-    async def run_test() -> None:
-        state = DummyState()
-        await ui_register_protected_message(state, 1, 55)
-        data = await state.get_data()
-        assert data.get("ui_protected_message_ids") == [55]
-        assert data.get("ui_tracked_message_ids") in (None, [])
-
-    asyncio.run(run_test())
-
-
-def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
-    """back_to_main deletes user message, cleans UI, and renders menu."""
-
-    async def run_test() -> None:
-        state = DummyState({"ui_welcome_message_id": 55})
-        cleanup_mock = AsyncMock()
-        render_mock = AsyncMock()
-        build_menu_mock = AsyncMock(return_value=MagicMock())
-        safe_delete_mock = AsyncMock(return_value=True)
-
-        monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
-        monkeypatch.setattr("Bot.handlers.start.ui_render_screen", render_mock)
-        monkeypatch.setattr(
-            "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
-        )
-        monkeypatch.setattr("Bot.handlers.start.ui_safe_delete_message", safe_delete_mock)
-
-        message = SimpleNamespace(
-            chat=SimpleNamespace(id=1),
-            from_user=SimpleNamespace(id=2),
-            message_id=10,
-            bot=SimpleNamespace(),
-        )
-
-        await back_to_main(message, state)
-
-        safe_delete_mock.assert_awaited_once()
-        cleanup_mock.assert_awaited_once()
-        _, kwargs = cleanup_mock.await_args
-        assert kwargs.get("keep_ids") is None
-        build_menu_mock.assert_awaited_once_with(2)
-        render_mock.assert_awaited_once()
-
-    asyncio.run(run_test())
-
-
-def test_welcome_reused_on_start() -> None:
-    """Welcome message is reused when id exists."""
-
-    async def run_test() -> None:
-        state = DummyState({"ui_welcome_message_id": 77})
-        bot = DummyBot()
-        bot.send_message.return_value = SimpleNamespace(message_id=88)
-
-        welcome_id = await ui_set_welcome_message(bot, state, 1, "Hello")
-
-        assert welcome_id == 77
-        bot.edit_message_text.assert_awaited_once()
-        bot.send_message.assert_not_called()
-
-    asyncio.run(run_test())
-
-===== tests/unit/test_utils.py =====
-
-"""Utility tests."""
-from datetime import datetime, time
-from zoneinfo import ZoneInfo
-
-from Bot.utils.datetime_utils import get_next_byt_run_dt, resolve_deferred_until
-from Bot.utils.logging import init_logging
-
-
-def test_init_logging_returns_logger() -> None:
-    """init_logging should return a logger instance."""
-
-    logger = init_logging()
-    assert logger.name == "Bot.utils.logging"
-
-
-def test_get_next_byt_run_dt_before_slot() -> None:
+    for attempt in range(retries + 1):
+        try:
+            await bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+            return True, False
+        except TelegramBadRequest as exc:
+            lowered = str(exc).lower()
+            if "message is not modified" in lowered:
+                return True, False
+            if "message to edit not found" in lowered:
+                log.debug(
+                    "Safe edit skipped (chat_id=%s, message_id=%s): %s",
+                    chat_id,
+                    message_id,
+                    exc,
+                )
+                return False, False
+            log.warning(
+                "Safe edit failed (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit failure details", exc_info=True)
+            return False, False
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "edit_message_text", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return False, True
+            log.warning(

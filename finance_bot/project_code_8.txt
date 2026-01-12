@@ -1,0 +1,221 @@
+        )
+
+        bot = DummyBot()
+        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU")
+
+        deleted_ids = {
+            call.kwargs["message_id"] for call in bot.delete_message.call_args_list
+        }
+        assert deleted_ids == {222, 333}
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == []
+
+    asyncio.run(run_test())
+
+
+def test_ui_register_protected_not_tracked() -> None:
+    """Protected messages are stored separately from tracked list."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_register_protected_message(state, 1, 55)
+        data = await state.get_data()
+        assert data.get("ui_protected_message_ids") == [55]
+        assert data.get("ui_tracked_message_ids") in (None, [])
+
+    asyncio.run(run_test())
+
+
+def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
+    """back_to_main deletes user message, cleans UI, and renders menu."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 55})
+        cleanup_mock = AsyncMock()
+        render_mock = AsyncMock()
+        build_menu_mock = AsyncMock(return_value=MagicMock())
+        safe_delete_mock = AsyncMock(return_value=True)
+
+        monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
+        monkeypatch.setattr("Bot.handlers.start.ui_render_screen", render_mock)
+        monkeypatch.setattr(
+            "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
+        )
+        monkeypatch.setattr("Bot.handlers.start.ui_safe_delete_message", safe_delete_mock)
+
+        message = SimpleNamespace(
+            chat=SimpleNamespace(id=1),
+            from_user=SimpleNamespace(id=2),
+            message_id=10,
+            bot=SimpleNamespace(),
+        )
+
+        await back_to_main(message, state)
+
+        safe_delete_mock.assert_awaited_once()
+        cleanup_mock.assert_awaited_once()
+        _, kwargs = cleanup_mock.await_args
+        assert kwargs.get("keep_ids") is None
+        build_menu_mock.assert_awaited_once_with(2)
+        render_mock.assert_awaited_once()
+
+    asyncio.run(run_test())
+
+
+def test_welcome_reused_on_start() -> None:
+    """Welcome message is reused when id exists."""
+
+    async def run_test() -> None:
+        state = DummyState({"ui_welcome_message_id": 77})
+        bot = DummyBot()
+        bot.send_message.return_value = SimpleNamespace(message_id=88)
+
+        welcome_id = await ui_set_welcome_message(bot, state, 1, "Hello")
+
+        assert welcome_id == 77
+        bot.edit_message_text.assert_awaited_once()
+        bot.send_message.assert_not_called()
+
+    asyncio.run(run_test())
+
+===== tests/unit/test_utils.py =====
+
+"""Utility tests."""
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
+
+from Bot.utils.datetime_utils import get_next_byt_run_dt, resolve_deferred_until
+from Bot.utils.logging import init_logging
+
+
+def test_init_logging_returns_logger() -> None:
+    """init_logging should return a logger instance."""
+
+    logger = init_logging()
+    assert logger.name == "Bot.utils.logging"
+
+
+def test_get_next_byt_run_dt_before_slot() -> None:
+    """Return today's slot when current time is before it."""
+
+    tz = ZoneInfo("UTC")
+    now = datetime(2024, 1, 1, 10, 0, tzinfo=tz)
+    result = get_next_byt_run_dt(now, [time(12, 0)])
+    assert result == datetime(2024, 1, 1, 12, 0, tzinfo=tz)
+
+
+def test_get_next_byt_run_dt_after_slot() -> None:
+    """Return next day's slot when current time is after it."""
+
+    tz = ZoneInfo("UTC")
+    now = datetime(2024, 1, 1, 13, 0, tzinfo=tz)
+    result = get_next_byt_run_dt(now, [time(12, 0)])
+    assert result == datetime(2024, 1, 2, 12, 0, tzinfo=tz)
+
+
+def test_get_next_byt_run_dt_multiple_slots() -> None:
+    """Pick closest upcoming slot from multiple options."""
+
+    tz = ZoneInfo("UTC")
+    now = datetime(2024, 1, 1, 12, 0, tzinfo=tz)
+    result = get_next_byt_run_dt(now, [time(9, 0), time(18, 0)])
+    assert result == datetime(2024, 1, 1, 18, 0, tzinfo=tz)
+
+
+def test_resolve_deferred_until_keeps_later() -> None:
+    """Do not shorten existing deferred_until value."""
+
+    tz = ZoneInfo("UTC")
+    existing = datetime(2024, 1, 3, 12, 0, tzinfo=tz)
+    candidate = datetime(2024, 1, 2, 12, 0, tzinfo=tz)
+    result = resolve_deferred_until(existing, candidate)
+    assert result == existing
+
+===== tests/unit/test_wishlist_debit_category.py =====
+
+"""Tests for wishlist debit category settings."""
+from Bot.database import crud
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_set_and_get_wishlist_debit_category(tmp_path, monkeypatch) -> None:
+    """Wishlist debit category should persist in user settings."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.set_wishlist_debit_category(1, "alpha")
+        assert db.get_wishlist_debit_category(1) == "alpha"
+        db.set_wishlist_debit_category(1, None)
+        assert db.get_wishlist_debit_category(1) is None
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+===== tests/unit/test_wishlist_purchase.py =====
+
+"""Tests for wishlist purchase flow."""
+from Bot.database import crud
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_purchase_wishlist_without_debit(tmp_path, monkeypatch) -> None:
+    """Purchase without debit should not change savings."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        wish_id = db.add_wish(1, "Laptop", 100.0, None, "Work")
+        result = db.purchase_wish(1, wish_id, None)
+        assert result.get("status") == "no_debit"
+        wish = db.get_wish(wish_id)
+        assert wish is not None
+        assert wish.get("is_purchased") == 1
+        assert wish.get("debited_at") is None
+        savings_map = db.get_user_savings_map(1)
+        assert "alpha" not in savings_map
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_purchase_wishlist_debit_idempotent(tmp_path, monkeypatch) -> None:
+    """Purchase should debit once and be idempotent."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        wish_id = db.add_wish(2, "Phone", 50.0, None, "Fun")
+        db.update_saving(2, "alpha", 100.0)
+        result = db.purchase_wish(2, wish_id, "alpha")
+        assert result.get("status") == "debited"
+        savings_map = db.get_user_savings_map(2)
+        assert savings_map.get("alpha") == 50.0
+        result_again = db.purchase_wish(2, wish_id, "alpha")
+        assert result_again.get("status") == "already"
+        savings_map_again = db.get_user_savings_map(2)
+        assert savings_map_again.get("alpha") == 50.0
+        wish = db.get_wish(wish_id)
+        assert wish is not None
+        assert wish.get("debited_at") is not None
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+===== utils/__init__.py =====
+
+from Bot.utils import *  # noqa: F401,F403
+
+===== utils/logging.py =====
+
+from Bot.utils.logging import *  # noqa: F401,F403
+

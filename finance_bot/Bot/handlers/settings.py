@@ -54,9 +54,9 @@ from Bot.states.wishlist_states import (
     WishlistSettingsState,
 )
 from Bot.utils.datetime_utils import current_month_str
-from Bot.config.settings import get_settings
-from Bot.utils.messages import ERR_INVALID_INPUT
-from Bot.utils.time import get_user_timezone, now_for_user, set_user_timezone
+from Bot.utils.messages import ERR_INVALID_INPUT, HINT_TIME_FORMAT
+from Bot.utils.number_input import parse_int_choice, parse_positive_int
+from Bot.utils.time_input import normalize_time_partial
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.telegram_safe import (
     safe_delete_message,
@@ -151,23 +151,6 @@ async def _apply_reply_keyboard(message: Message, reply_markup: ReplyKeyboardMar
             message_id=temp.message_id,
             logger=LOGGER,
         )
-
-
-def _parse_time_text(raw: str) -> tuple[int, int] | None:
-    value = raw.strip()
-    if ":" not in value:
-        return None
-    parts = value.split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        hour = int(parts[0])
-        minute = int(parts[1])
-    except ValueError:
-        return None
-    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
-        return None
-    return hour, minute
 
 
 async def _cleanup_input_ui(
@@ -2358,21 +2341,39 @@ async def byt_timer_add_time_value(message: Message, state: FSMContext) -> None:
     await _register_user_message(state, message)
     await _delete_user_message(message)
     text = (message.text or "").strip()
-    parsed = _parse_time_text(text)
-    if not parsed:
+    data = await state.get_data()
+    time_draft = data.get("time_draft")
+    combined = None
+    if time_draft and time_draft.endswith(":") and text.isdigit() and len(text) == 2:
+        combined = f"{time_draft}{text}"
+    normalized, is_complete = normalize_time_partial(combined or text)
+    if not normalized:
         chat_id, message_id = await _get_settings_message_ids(state, message)
         await _edit_settings_page(
             bot=message.bot,
             state=state,
             chat_id=chat_id,
             message_id=message_id,
-            text=ERR_INVALID_INPUT,
+            text=f"{ERR_INVALID_INPUT} {HINT_TIME_FORMAT}",
             reply_markup=None,
         )
         return
 
-    hour, minute = parsed
-    data = await state.get_data()
+    if not is_complete:
+        await state.update_data(time_draft=normalized)
+        chat_id, message_id = await _get_settings_message_ids(state, message)
+        await _edit_settings_page(
+            bot=message.bot,
+            state=state,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"Введи минуты (мм). Текущее: {normalized}",
+            reply_markup=None,
+        )
+        return
+
+    await state.update_data(time_draft=None)
+    hour, minute = [int(part) for part in normalized.split(":")]
     category_id = data.get("byt_timer_category_id")
     if category_id is None:
         await state.set_state(None)
@@ -2482,29 +2483,55 @@ async def wishlist_add_category_title(message: Message, state: FSMContext) -> No
     await render_settings_screen(previous_screen, message=message, state=state)
 
 
-@router.message(
-    IncomeSettingsState.waiting_for_new_category_percent, F.text.in_(PERCENT_INPUT_BUTTONS)
-)
+@router.message(IncomeSettingsState.waiting_for_new_category_percent)
 async def income_new_category_percent(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text not in PERCENT_INPUT_BUTTONS:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Используй кнопки калькулятора.",
-            reply_markup=None,
-        )
+    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     percent_str = data.get("new_income_percent_str", "0")
     display_chat_id = data.get("new_income_display_chat_id", message.chat.id)
     display_message_id = data.get("new_income_display_message_id")
+
+    if text not in PERCENT_INPUT_BUTTONS:
+        parsed_value = parse_int_choice(text)
+        if parsed_value is None:
+            chat_id, message_id = await _get_settings_message_ids(state, message)
+            await _edit_settings_page(
+                bot=message.bot,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{ERR_INVALID_INPUT} Введи число.",
+                reply_markup=None,
+            )
+            return
+        percent_str = str(parsed_value)
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {percent_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {percent_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            new_income_percent_str=percent_str,
+            new_income_display_chat_id=display_chat_id,
+            new_income_display_message_id=display_message_id,
+        )
+        return
 
     if text in PERCENT_DIGITS:
         percent_str = percent_str.lstrip("0") if percent_str != "0" else ""
@@ -2629,9 +2656,7 @@ async def household_payment_title(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(
-    HouseholdSettingsState.waiting_for_amount, F.text.in_(PERCENT_INPUT_BUTTONS)
-)
+@router.message(HouseholdSettingsState.waiting_for_amount)
 async def household_payment_amount(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     text = (message.text or "").strip()
@@ -2640,6 +2665,45 @@ async def household_payment_amount(message: Message, state: FSMContext) -> None:
     amount_str = data.get("hp_amount_str", "0")
     display_chat_id = data.get("hp_amount_display_chat_id", message.chat.id)
     display_message_id = data.get("hp_amount_display_message_id")
+    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
+        return
+
+    if text not in PERCENT_INPUT_BUTTONS:
+        parsed_value = parse_positive_int(text)
+        if parsed_value is None:
+            chat_id, message_id = await _get_settings_message_ids(state, message)
+            await _edit_settings_page(
+                bot=message.bot,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{ERR_INVALID_INPUT} Введи число.",
+                reply_markup=None,
+            )
+            return
+        amount_str = str(parsed_value)
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {amount_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {amount_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            hp_amount_str=amount_str,
+            hp_amount_display_chat_id=display_chat_id,
+            hp_amount_display_message_id=display_message_id,
+        )
+        return
 
     if text in PERCENT_DIGITS:
         amount_str = amount_str.lstrip("0") if amount_str != "0" else ""
@@ -2966,21 +3030,54 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text not in PERCENT_INPUT_BUTTONS:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Используй кнопки калькулятора.",
-            reply_markup=None,
-        )
+    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     percent_str = data.get("percent_str", "0")
     display_chat_id = data.get("percent_display_chat_id", message.chat.id)
     display_message_id = data.get("percent_display_message_id")
+
+    if text not in PERCENT_INPUT_BUTTONS:
+        parsed_value = parse_int_choice(text)
+        if parsed_value is None:
+            chat_id, message_id = await _get_settings_message_ids(state, message)
+            await _edit_settings_page(
+                bot=message.bot,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{ERR_INVALID_INPUT} Введи число.",
+                reply_markup=None,
+            )
+            return
+        percent_str = str(parsed_value)
+        LOGGER.info(
+            "Percent input: user=%s scope=%s value=%s",
+            message.from_user.id,
+            data.get("edit_scope", "income"),
+            percent_str,
+        )
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {percent_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {percent_str}",
+            )
+            display_message_id = fallback.message_id
+            await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            percent_str=percent_str,
+            percent_display_chat_id=display_chat_id,
+            percent_display_message_id=display_message_id,
+        )
+        return
 
     if text in PERCENT_DIGITS:
         percent_str = percent_str.lstrip("0") if percent_str != "0" else ""
@@ -3103,21 +3200,49 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text not in PERCENT_INPUT_BUTTONS:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Используй кнопки калькулятора.",
-            reply_markup=None,
-        )
+    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     days_str = data.get("purchased_days_str", "0")
     display_chat_id = data.get("purchased_display_chat_id", message.chat.id)
     display_message_id = data.get("purchased_display_message_id")
+
+    if text not in PERCENT_INPUT_BUTTONS:
+        parsed_value = parse_positive_int(text)
+        if parsed_value is None:
+            chat_id, message_id = await _get_settings_message_ids(state, message)
+            await _edit_settings_page(
+                bot=message.bot,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{ERR_INVALID_INPUT} Введи число.",
+                reply_markup=None,
+            )
+            return
+        days_str = str(parsed_value)
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {days_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {days_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+                await ui_register_message(state, display_chat_id, display_message_id)
+        await state.update_data(
+            purchased_days_str=days_str,
+            purchased_display_chat_id=display_chat_id,
+            purchased_display_message_id=display_message_id,
+        )
+        return
 
     if text in PERCENT_DIGITS:
         days_str = days_str.lstrip("0") if days_str != "0" else ""
@@ -3223,21 +3348,48 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text not in PERCENT_INPUT_BUTTONS:
-        chat_id, message_id = await _get_settings_message_ids(state, message)
-        await _edit_settings_page(
-            bot=message.bot,
-            state=state,
-            chat_id=chat_id,
-            message_id=message_id,
-            text="Используй кнопки калькулятора.",
-            reply_markup=None,
-        )
+    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     days_str = data.get("byt_max_days_str", "0")
     display_chat_id = data.get("byt_max_display_chat_id", message.chat.id)
     display_message_id = data.get("byt_max_display_message_id")
+
+    if text not in PERCENT_INPUT_BUTTONS:
+        parsed_value = parse_positive_int(text)
+        if parsed_value is None:
+            chat_id, message_id = await _get_settings_message_ids(state, message)
+            await _edit_settings_page(
+                bot=message.bot,
+                state=state,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=f"{ERR_INVALID_INPUT} Введи число.",
+                reply_markup=None,
+            )
+            return
+        days_str = str(parsed_value)
+        try:
+            await _safe_edit(
+                message.bot,
+                chat_id=display_chat_id,
+                message_id=int(display_message_id),
+                text=f": {days_str}",
+            )
+        except Exception:
+            fallback = await safe_send_message(
+                message.bot,
+                chat_id=display_chat_id,
+                text=f": {days_str}",
+            )
+            if fallback:
+                display_message_id = fallback.message_id
+        await state.update_data(
+            byt_max_days_str=days_str,
+            byt_max_display_chat_id=display_chat_id,
+            byt_max_display_message_id=display_message_id,
+        )
+        return
 
     if text in PERCENT_DIGITS:
         days_str = days_str.lstrip("0") if days_str != "0" else ""

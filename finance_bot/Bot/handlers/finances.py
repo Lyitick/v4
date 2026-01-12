@@ -20,6 +20,8 @@ from Bot.handlers.wishlist import humanize_wishlist_category
 from Bot.utils.savings import find_reached_goal, format_savings_summary
 from Bot.utils.telegram_safe import safe_delete_message, safe_edit_message_text
 from Bot.utils.ui_cleanup import ui_register_message
+from Bot.utils.messages import ERR_INVALID_INPUT
+from Bot.utils.number_input import parse_positive_int
 
 LOGGER = logging.getLogger(__name__)
 
@@ -351,6 +353,49 @@ async def handle_income_digit(message: Message, state: FSMContext) -> None:
         message_id=message.message_id,
         logger=LOGGER,
     )
+    except Exception:
+        pass
+
+
+@router.message(
+    MoneyState.waiting_for_amount,
+    F.text.regexp(r"^\\s*\\+?\\d+\\s*$"),
+)
+async def handle_income_manual_number(message: Message, state: FSMContext) -> None:
+    """Handle manual numeric input for income calculator."""
+
+    value = parse_positive_int(message.text or "")
+    if value is None:
+        await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
+        try:
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+        except Exception:
+            pass
+        return
+
+    data = await state.get_data()
+    sum_message_id = data.get("income_message_id")
+    new_sum = str(value)
+
+    income_message_id = await _refresh_income_message(
+        message=message,
+        income_message_id=sum_message_id,
+        income_sum=new_sum,
+    )
+    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
+
+    try:
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
     except Exception:
         pass
 

@@ -42,6 +42,8 @@ from Bot.utils.byt_render import (
     get_byt_category_items,
     parse_deferred_until,
 )
+from Bot.utils.messages import ERR_INVALID_INPUT
+from Bot.utils.number_input import parse_positive_int
 from Bot.utils.telegram_safe import (
     safe_answer,
     safe_callback_answer,
@@ -284,7 +286,53 @@ async def add_wish_price_calc(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(WishlistState.waiting_for_url, ~F.text.in_({NAV_BACK, "⬅️ Назад"}))
+@router.message(
+    WishlistState.waiting_for_price,
+    F.text.regexp(r"^\\s*\\+?\\d+\\s*$"),
+)
+async def add_wish_price_manual(message: Message, state: FSMContext) -> None:
+    """Handle manual numeric price input."""
+
+    value = parse_positive_int(message.text or "")
+    if value is None:
+        await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+
+    data = await state.get_data()
+    price_message_id = data.get("price_message_id")
+    new_sum = str(value)
+
+    if price_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=int(price_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+        if not edited:
+            prompt = await message.answer(f": {new_sum}")
+            price_message_id = prompt.message_id
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        price_message_id = prompt.message_id
+
+    await state.update_data(price_sum=new_sum, price_message_id=price_message_id)
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
+@router.message(WishlistState.waiting_for_url, F.text != "⬅️ Назад")
 async def add_wish_url(message: Message, state: FSMContext) -> None:
     """Save URL and request category selection."""
 
@@ -427,7 +475,7 @@ async def wishlist_add_back(message: Message, state: FSMContext) -> None:
 async def invalid_price(message: Message) -> None:
     """Handle invalid price input."""
 
-    await message.answer("Используй кнопки калькулятора ниже для ввода цены.")
+    await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
 
 
 @router.message(WishlistState.waiting_for_category, F.text.in_({NAV_BACK, "⬅️ Назад"}))
@@ -1410,8 +1458,61 @@ async def handle_byt_defer_days(message: Message, state: FSMContext) -> None:
     )
 
 
+@router.message(
+    BytDeferState.waiting_for_days,
+    F.text.regexp(r"^\\s*\\+?\\d+\\s*$"),
+)
+async def handle_byt_defer_days_manual(message: Message, state: FSMContext) -> None:
+    """Handle manual numeric input for BYT defer days."""
+
+    value = parse_positive_int(message.text or "")
+    if value is None:
+        await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+        return
+
+    data = await state.get_data()
+    display_chat_id = data.get("defer_display_chat_id", message.chat.id)
+    display_message_id = data.get("defer_display_message_id")
+    new_sum = str(value)
+
+    if display_message_id:
+        edited = await safe_edit_message_text(
+            message.bot,
+            chat_id=display_chat_id,
+            message_id=int(display_message_id),
+            text=f": {new_sum}",
+            logger=LOGGER,
+        )
+        if not edited:
+            prompt = await message.answer(f": {new_sum}")
+            display_message_id = prompt.message_id
+            display_chat_id = message.chat.id
+    else:
+        prompt = await message.answer(f": {new_sum}")
+        display_message_id = prompt.message_id
+        display_chat_id = message.chat.id
+
+    await state.update_data(
+        defer_days_str=new_sum,
+        defer_display_message_id=display_message_id,
+        defer_display_chat_id=display_chat_id,
+    )
+    await safe_delete_message(
+        message.bot,
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        logger=LOGGER,
+    )
+
+
 @router.message(BytDeferState.waiting_for_days)
 async def handle_byt_defer_days_invalid(message: Message) -> None:
     """Prompt to use calculator buttons for defer days."""
 
-    await message.answer("Используй кнопки калькулятора ниже.")
+    await message.answer(f"{ERR_INVALID_INPUT} Введи число.")

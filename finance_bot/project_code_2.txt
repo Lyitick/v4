@@ -1038,8 +1038,15 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     HouseholdPaymentsState.waiting_for_answer,
     F.data.startswith("hh_pay:"),
 )
-async def handle_household_answer(callback: CallbackQuery, state: FSMContext) -> None:
-    """Handle Yes/No/Back answers for household questions."""
+from Bot.keyboards.calculator import income_calculator_keyboard
+from Bot.handlers.common import build_main_menu_for_user
+from Bot.states.money_states import MoneyState
+from Bot.handlers.wishlist import humanize_wishlist_category
+from Bot.utils.savings import find_reached_goal, format_savings_summary
+from Bot.utils.telegram_safe import safe_delete_message, safe_edit_message_text
+from Bot.utils.ui_cleanup import ui_register_message
+from Bot.utils.messages import ERR_INVALID_INPUT
+from Bot.utils.number_input import parse_positive_int
 
     data = await state.get_data()
     month = data.get("hh_month")
@@ -1695,6 +1702,56 @@ async def _render_household_payments_settings(
         screen_id="st:household_payments",
         force_new=True,
     )
+    except Exception:
+        pass
+
+
+@router.message(
+    MoneyState.waiting_for_amount,
+    F.text.regexp(r"^\\s*\\+?\\d+\\s*$"),
+)
+async def handle_income_manual_number(message: Message, state: FSMContext) -> None:
+    """Handle manual numeric input for income calculator."""
+
+    value = parse_positive_int(message.text or "")
+    if value is None:
+        await message.answer(f"{ERR_INVALID_INPUT} Введи число.")
+        try:
+            await safe_delete_message(
+                message.bot,
+                chat_id=message.chat.id,
+                message_id=message.message_id,
+                logger=LOGGER,
+            )
+        except Exception:
+            pass
+        return
+
+    data = await state.get_data()
+    sum_message_id = data.get("income_message_id")
+    new_sum = str(value)
+
+    income_message_id = await _refresh_income_message(
+        message=message,
+        income_message_id=sum_message_id,
+        income_sum=new_sum,
+    )
+    await state.update_data(income_sum=new_sum, income_message_id=income_message_id)
+
+    try:
+        await safe_delete_message(
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
+    except Exception:
+        pass
+
+
+@router.message(MoneyState.waiting_for_amount, F.text == "✅ Газ")
+async def handle_income_confirm(message: Message, state: FSMContext) -> None:
+    """Handle confirmation of income input via calculator button."""
 
 
 async def _render_household_delete_menu(
@@ -1898,103 +1955,3 @@ def _format_byt_timer_menu_text(
         lines.append(error_message)
     return "\n".join(lines)
 
-
-def _format_byt_timer_category_text(
-    category_title: str, times: list[dict], error_message: str | None = None
-) -> str:
-    lines = [
-        "⏰ Время напоминаний",
-        "",
-        f"Категория: {category_title}",
-        "",
-        "Текущие времена:",
-        "",
-    ]
-    if times:
-        for timer in times:
-            if timer.get("time_hhmm"):
-                lines.append(str(timer.get("time_hhmm")))
-            else:
-                lines.append(
-                    f"{int(timer.get('hour', 0)):02d}:{int(timer.get('minute', 0)):02d}"
-                )
-    else:
-        lines.append("Время не задано")
-    if error_message:
-        lines.append("")
-        lines.append(error_message)
-    return "\n".join(lines)
-
-
-async def _render_income_settings(
-    *,
-    state: FSMContext,
-    message: Message,
-    db,
-    user_id: int,
-    error_message: str | None = None,
-) -> list[dict]:
-    categories = db.list_active_income_categories(user_id)
-    LOGGER.info("Open income settings (reply mode) user_id=%s", user_id)
-    await _render_reply_settings_page(
-        message=message,
-        state=state,
-        text=_format_category_text(
-            "📊 ДОХОД — категории и проценты", categories, error_message
-        ),
-        reply_markup=income_settings_reply_keyboard(),
-        screen_id="st:income",
-    )
-    return categories
-
-
-async def _render_wishlist_settings(
-    *,
-    state: FSMContext,
-    message: Message,
-    db,
-    user_id: int,
-    error_message: str | None = None,
-) -> list[dict]:
-    categories = db.list_active_wishlist_categories(user_id)
-    debit_category = db.get_wishlist_debit_category(user_id)
-    debit_title = "Не выбрано"
-    if debit_category:
-        income_category = db.get_income_category_by_code(user_id, debit_category)
-        debit_title = income_category.get("title", debit_category) if income_category else "Категория удалена"
-    LOGGER.info("Open wishlist settings (reply mode) user_id=%s", user_id)
-    LOGGER.info("USER=%s ACTION=WISHLIST_SETTINGS_OPEN", user_id)
-    await _render_reply_settings_page(
-        message=message,
-        state=state,
-        text=_format_wishlist_text(categories, debit_title, error_message),
-        reply_markup=wishlist_settings_reply_keyboard(),
-        screen_id="st:wishlist",
-    )
-    return categories
-
-
-async def _render_byt_rules_settings(
-    *,
-    state: FSMContext,
-    message: Message,
-    db,
-    user_id: int,
-    error_message: str | None = None,
-) -> dict:
-    db.ensure_user_settings(user_id)
-    settings_row = db.get_user_settings(user_id)
-    categories = db.list_byt_reminder_categories(user_id)
-    LOGGER.info("Open byt conditions settings (reply mode) user_id=%s", user_id)
-    await _render_reply_settings_page(
-        message=message,
-        state=state,
-        text=_format_byt_rules_text(settings_row, categories, error_message),
-        reply_markup=byt_rules_reply_keyboard(),
-        screen_id="st:byt_rules",
-    )
-    return settings_row
-
-
-async def _render_byt_timer_settings(
-    *,

@@ -1,41 +1,1029 @@
-    """Return today's slot when current time is before it."""
-
-    tz = ZoneInfo("UTC")
-    now = datetime(2024, 1, 1, 10, 0, tzinfo=tz)
-    result = get_next_byt_run_dt(now, [time(12, 0)])
-    assert result == datetime(2024, 1, 1, 12, 0, tzinfo=tz)
-
-
-def test_get_next_byt_run_dt_after_slot() -> None:
-    """Return next day's slot when current time is after it."""
-
-    tz = ZoneInfo("UTC")
-    now = datetime(2024, 1, 1, 13, 0, tzinfo=tz)
-    result = get_next_byt_run_dt(now, [time(12, 0)])
-    assert result == datetime(2024, 1, 2, 12, 0, tzinfo=tz)
+                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit unexpected error details", exc_info=True)
+            return False, False
+    return False, False
 
 
-def test_get_next_byt_run_dt_multiple_slots() -> None:
-    """Pick closest upcoming slot from multiple options."""
+async def safe_send_message(
+    bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+):
+    """Safely send a message using bot.send_message without raising exceptions."""
 
-    tz = ZoneInfo("UTC")
-    now = datetime(2024, 1, 1, 12, 0, tzinfo=tz)
-    result = get_next_byt_run_dt(now, [time(9, 0), time(18, 0)])
-    assert result == datetime(2024, 1, 1, 18, 0, tzinfo=tz)
+    log = _get_logger(logger)
+    normalized = "" if text is None else str(text)
+    if not normalized.strip():
+        normalized = "."
+    for attempt in range(retries + 1):
+        try:
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=normalized,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+        except TelegramBadRequest as exc:
+            log.warning("Safe send failed: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe send failure details", exc_info=True)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "send_message", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return None
+            log.warning("Safe send unexpected error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe send unexpected error details", exc_info=True)
+            return None
+    return None
 
 
-def test_resolve_deferred_until_keeps_later() -> None:
-    """Do not shorten existing deferred_until value."""
+async def safe_answer(
+    message_or_callback,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+) -> int | None:
+    """Safely send a message using .answer without raising exceptions."""
 
-    tz = ZoneInfo("UTC")
-    existing = datetime(2024, 1, 3, 12, 0, tzinfo=tz)
-    candidate = datetime(2024, 1, 2, 12, 0, tzinfo=tz)
-    result = resolve_deferred_until(existing, candidate)
-    assert result == existing
+    log = _get_logger(logger)
+    for attempt in range(retries + 1):
+        try:
+            sent = await message_or_callback.answer(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+            return int(sent.message_id)
+        except TelegramBadRequest as exc:
+            log.warning("Safe answer failed: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe answer failure details", exc_info=True)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "answer", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return None
+            log.warning("Safe answer unexpected error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe answer unexpected error details", exc_info=True)
+            return None
+    return None
 
-===== tests/unit/test_wishlist_debit_category.py =====
 
-"""Tests for wishlist debit category settings."""
+async def safe_callback_answer(
+    callback,
+    text: str | None = None,
+    *,
+    show_alert: bool | None = None,
+    logger: logging.Logger | None = None,
+) -> None:
+    """Safely answer a callback query without raising exceptions."""
+
+    log = _get_logger(logger)
+    try:
+        await callback.answer(text=text, show_alert=show_alert)
+    except Exception as exc:  # noqa: BLE001
+        if _is_network_error(exc):
+            log.warning("Safe callback answer failed due to network error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe callback answer network details", exc_info=True)
+            return
+        log.warning("Safe callback answer unexpected error: %s", exc)
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("Safe callback answer unexpected error details", exc_info=True)
+
+===== Bot/utils/text_sanitizer.py =====
+
+"""Text sanitizers for user-facing labels."""
+from __future__ import annotations
+
+import re
+
+
+_TAIL_PATTERNS = [
+    r"на\s+тиньк",
+    r"на\s+альфу",
+    r"на\s+сбер",
+    r"на\s+яндекс",
+]
+
+
+def sanitize_income_title(text: str) -> str:
+    value = str(text or "")
+    for pattern in _TAIL_PATTERNS:
+        value = re.sub(rf"\s*(?:—|-|:)?\s*{pattern}", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s*\(\s*озон\s*\)", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\(\s*\)", "", value)
+    value = re.sub(r"\s{2,}", " ", value)
+    return value.strip(" -—:\t\n")
+
+===== Bot/utils/time_input.py =====
+
+"""Utilities for normalizing time input."""
+
+from __future__ import annotations
+
+import re
+
+
+def _is_valid_time(hour: int, minute: int) -> bool:
+    return 0 <= hour <= 23 and 0 <= minute <= 59
+
+
+def normalize_time_partial(text: str) -> tuple[str, bool]:
+    """Normalize partial time input into HH:, HH:MM, or empty string.
+
+    Returns a tuple of (normalized, is_complete).
+    """
+
+    value = (text or "").replace(" ", "")
+    if not value:
+        return "", False
+
+    if re.fullmatch(r"\d{2}$", value):
+        hour = int(value)
+        if 0 <= hour <= 23:
+            return f"{hour:02d}:", False
+        return "", False
+
+    if re.fullmatch(r"\d{2}:$", value):
+        hour = int(value[:2])
+        if 0 <= hour <= 23:
+            return f"{hour:02d}:", False
+        return "", False
+
+    if re.fullmatch(r"\d{4}$", value):
+        hour = int(value[:2])
+        minute = int(value[2:])
+        if _is_valid_time(hour, minute):
+            return f"{hour:02d}:{minute:02d}", True
+        return "", False
+
+    if re.fullmatch(r"\d{2}:\d{2}$", value):
+        hour = int(value[:2])
+        minute = int(value[3:])
+        if _is_valid_time(hour, minute):
+            return f"{hour:02d}:{minute:02d}", True
+        return "", False
+
+    return "", False
+
+===== Bot/utils/ui_cleanup.py =====
+
+import logging
+from typing import List
+
+from aiogram import Bot
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.fsm.context import FSMContext
+
+from Bot.database.get_db import get_db
+from Bot.utils.telegram_safe import (
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
+
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) -> None:
+    """Track a UI message id for later cleanup."""
+
+    data = await state.get_data()
+    ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    if message_id not in ids:
+        ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
+    current_chat_id = data.get("ui_chat_id")
+    await state.update_data(
+        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
+        ui_tracked_message_ids=ids,
+    )
+
+
+async def ui_register_protected_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    """Track a UI message id that should never be deleted."""
+
+    data = await state.get_data()
+    ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    if message_id not in ids:
+        ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
+    current_chat_id = data.get("ui_chat_id")
+    await state.update_data(
+        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
+        ui_protected_message_ids=ids,
+    )
+
+
+async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
+    """Do not track user messages for later cleanup."""
+
+    data = await state.get_data()
+    if data.get("ui_chat_id") is None:
+        await state.update_data(ui_chat_id=chat_id)
+
+
+async def ui_safe_delete_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    log_context: str | None = None,
+    state: FSMContext | None = None,
+) -> bool:
+    if state is not None:
+        protected_ids = await ui_get_protected_ids(state)
+        if int(message_id) in protected_ids:
+            LOGGER.info("SKIP_DELETE_PROTECTED message_id=%s", message_id)
+            return False
+    return await safe_delete_message(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        logger=LOGGER,
+    )
+
+
+async def ui_get_welcome_id(state: FSMContext) -> int | None:
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    return int(welcome_id) if welcome_id is not None else None
+
+
+async def ui_get_protected_ids(state: FSMContext) -> set[int]:
+    welcome_id = await ui_get_welcome_id(state)
+    if welcome_id is None:
+        return set()
+    return {int(welcome_id)}
+
+
+async def ui_set_welcome_id(
+    state: FSMContext, message_id: int, chat_id: int | None = None
+) -> None:
+    update = {"ui_welcome_message_id": int(message_id)}
+    if chat_id is not None:
+        update["ui_chat_id"] = int(chat_id)
+    await state.update_data(**update)
+
+
+async def ui_set_welcome_message(
+    bot: Bot, state: FSMContext, chat_id: int, text: str
+) -> int:
+    welcome_id = await ui_get_welcome_id(state)
+    if welcome_id is not None:
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(welcome_id),
+            text=text,
+            logger=LOGGER,
+        )
+        if edited:
+            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id)
+            return int(welcome_id)
+
+    if welcome_id is None:
+        db = get_db()
+        persisted = db.get_welcome_message_id(chat_id)
+        if persisted is not None:
+            await ui_set_welcome_id(state, int(persisted), chat_id=chat_id)
+            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, persisted)
+            return int(persisted)
+
+    sent = await safe_send_message(bot, chat_id=chat_id, text=text, logger=LOGGER)
+    if sent:
+        await ui_set_welcome_id(state, int(sent.message_id), chat_id=chat_id)
+        get_db().set_welcome_message_id(chat_id, int(sent.message_id))
+        LOGGER.info("WELCOME created (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
+        return int(sent.message_id)
+    return 0
+
+
+async def ui_set_settings_mode_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+    await state.update_data(ui_screen_message_id=int(message_id), ui_chat_id=chat_id)
+
+
+async def ui_track_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_cleanup_to_context(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    context_name: str,
+    keep_ids: List[int] | None = None,
+) -> None:
+    data = await state.get_data()
+    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    protected_ids = await ui_get_protected_ids(state)
+    extra_protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
+    for protected_id in extra_protected_ids:
+        protected_ids.add(int(protected_id))
+    keep_id_set.update(protected_ids)
+    delete_ids = []
+    for mid in tracked_ids:
+        mid_int = int(mid)
+        if mid_int in keep_id_set:
+            continue
+        delete_ids.append(mid_int)
+    kept_ids = {mid for mid in (int(item) for item in tracked_ids) if mid in keep_id_set}
+    deleted_count = 0
+    for message_id in delete_ids:
+        deleted = await ui_safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            log_context=f"context={context_name}",
+            state=state,
+        )
+        if deleted:
+            deleted_count += 1
+
+    LOGGER.info(
+        "UI_CLEANUP context=%s deleted=%s kept=%s welcome_id=%s",
+        context_name,
+        deleted_count,
+        len(kept_ids),
+        await ui_get_welcome_id(state),
+    )
+    await state.update_data(
+        ui_tracked_message_ids=list(
+            {
+                int(item)
+                for item in (keep_ids or [])
+                if item is not None
+                and int(item) not in protected_ids
+            }
+        ),
+    )
+
+
+async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
+    data = await state.get_data()
+    chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
+    if chat_id is None:
+        return
+    await ui_cleanup_to_context(bot, state, int(chat_id), "MAIN_MENU")
+
+
+async def ui_render_screen(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    parse_mode: str | None = None,
+) -> int:
+    data = await state.get_data()
+    screen_id = data.get("ui_screen_message_id")
+    if screen_id is not None and not isinstance(
+        reply_markup, (ReplyKeyboardMarkup, ReplyKeyboardRemove)
+    ):
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(screen_id),
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            logger=LOGGER,
+        )
+        if edited:
+            await ui_set_screen_message(state, chat_id, int(screen_id))
+            return int(screen_id)
+    sent = await safe_send_message(
+        bot,
+        chat_id=chat_id,
+        text=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        logger=LOGGER,
+    )
+    if sent:
+        await ui_set_screen_message(state, chat_id, sent.message_id)
+        return int(sent.message_id)
+    return int(screen_id or 0)
+
+===== Bot/utils/ui_flow.py =====
+
+import logging
+from collections.abc import Awaitable, Callable
+from typing import Any
+
+from aiogram import Bot
+from aiogram.fsm.context import FSMContext
+from aiogram.types import Message
+
+from Bot.utils.telegram_safe import safe_delete_message
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_get(state: FSMContext) -> dict[str, Any]:
+    data = await state.get_data()
+    return {
+        "greeting_id": data.get("ui_welcome_message_id"),
+        "tracked_ids": list(data.get("ui_tracked_message_ids") or []),
+    }
+
+
+async def ui_set_greeting(state: FSMContext, message_id: int) -> None:
+    ui = await ui_get(state)
+    if ui.get("greeting_id") is not None:
+        return
+    # greeting_id не удаляем никогда
+    await state.update_data(ui_welcome_message_id=int(message_id))
+
+
+async def ui_track(
+    state: FSMContext, message_id: int, kind: str, screen: str | None
+) -> None:
+    ui = await ui_get(state)
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    tracked.append(int(message_id))
+    if len(tracked) > 300:
+        tracked = tracked[-300:]
+    await state.update_data(ui_tracked_message_ids=tracked)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, screen: str, message_id: int
+) -> None:
+    await ui_track(state, message_id, kind="ui", screen=screen)
+
+
+async def ui_cleanup_for_transition(
+    bot: Bot, state: FSMContext, chat_id: int, keep_greeting: bool = True
+) -> None:
+    ui = await ui_get(state)
+    greeting_id = ui.get("greeting_id") if keep_greeting else None
+    tracked: list[int] = list(ui.get("tracked_ids") or [])
+    ids = [int(item) for item in tracked]
+    for message_id in ids:
+        if greeting_id and message_id == greeting_id:
+            continue
+        await safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            logger=LOGGER,
+        )
+    await state.update_data(ui_tracked_message_ids=[])
+
+
+async def ui_transition(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    new_screen: str,
+    send_screen: Callable[[], Awaitable[Message]],
+) -> Message:
+    await ui_cleanup_for_transition(bot, state, chat_id, keep_greeting=True)
+    sent = await send_screen()
+    await ui_set_screen_message(state, new_screen, sent.message_id)
+    return sent
+
+===== __init__.py =====
+
+
+===== docs/AUDIT_REPORT.md =====
+
+# Audit Report (finance_bot v4)
+
+## Found issues
+- UI cleanup tracked multiple message lists and could retain welcome in tracked ids.
+- Welcome message id was not persisted and could be duplicated after state loss.
+- Direct Telegram edit/delete calls could fail on network errors or invalid reply keyboards.
+- Income category titles contained bank/service suffixes and older rows were not sanitized.
+- Database access used direct `FinanceDatabase()` construction across handlers.
+
+## Fixes applied
+- Unified UI tracking to `ui_tracked_message_ids` and excluded welcome from tracked ids after cleanup.
+- Added persistent welcome id storage in `ui_pins` table and reused it on startup.
+- Implemented safe Telegram operations with retries and guarded edits against reply keyboards.
+- Added income title sanitizer and migration to update existing stored titles.
+- Introduced `get_db()` for a shared database instance and updated handlers.
+
+## Backlog / Follow-up
+- Expand safe Telegram wrapper adoption in remaining handlers and services.
+- Add safe reply markup editing helper if required by additional flows.
+
+===== docs/RUNBOOK.md =====
+
+# Runbook
+
+## Запуск бота
+```bash
+python Bot/main.py
+```
+
+## Прогон тестов
+```bash
+pytest
+```
+
+===== tests/__init__.py =====
+
+
+===== tests/integration/__init__.py =====
+
+
+===== tests/integration/test_database.py =====
+
+"""Integration tests for database operations."""
+from Bot.database.crud import FinanceDatabase, TABLES
+
+
+def setup_module(module) -> None:  # noqa: D401
+    """Clean database tables before tests."""
+
+    db = FinanceDatabase()
+    cursor = db.connection.cursor()
+    cursor.execute(f"DELETE FROM {TABLES.wishes}")
+    cursor.execute(f"DELETE FROM {TABLES.purchases}")
+    cursor.execute(f"DELETE FROM {TABLES.savings}")
+    db.connection.commit()
+
+
+def test_add_and_get_wish() -> None:
+    """Add wish and retrieve it."""
+
+    db = FinanceDatabase()
+    wish_id = db.add_wish(1, "Test", 10.0, None, "Инструменты")
+    wish = db.get_wish(wish_id)
+    assert wish is not None
+    assert wish["name"] == "Test"
+
+
+def test_update_saving_and_purchase() -> None:
+    """Update savings and add purchase entry."""
+
+    db = FinanceDatabase()
+    db.update_saving(1, "Инструменты", 20.0)
+    savings = db.get_user_savings(1)
+    assert savings.get("Инструменты", {}).get("current") == 20.0
+    db.add_purchase(1, "Test", 10.0, "Инструменты")
+    purchases = db.get_purchases_by_user(1)
+    assert len(purchases) == 1
+
+===== tests/integration/test_schema_migration.py =====
+
+"""Integration tests for schema migration."""
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+from Bot.database.crud import TABLES, migrate_schema
+
+
+def test_schema_migration_renames_tables(tmp_path: Path) -> None:
+    """Rename legacy tables without losing data."""
+
+    db_path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(db_path)
+    cursor = connection.cursor()
+    cursor.execute(
+        """
+        CREATE TABLE savings (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            category TEXT,
+            current REAL
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE wishes (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            name TEXT,
+            price REAL,
+            category TEXT,
+            is_purchased INTEGER,
+            saved_amount REAL,
+            purchased_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE purchases (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            wish_name TEXT,
+            price REAL,
+            category TEXT,
+            purchased_at TEXT
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE household_payment_items (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            code TEXT,
+            text TEXT,
+            amount INTEGER,
+            position INTEGER,
+            is_active INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        """
+        CREATE TABLE household_payments (
+            id INTEGER PRIMARY KEY,
+            user_id INTEGER,
+            month TEXT,
+            question_code TEXT,
+            is_paid INTEGER
+        )
+        """
+    )
+    cursor.execute(
+        "INSERT INTO savings (user_id, category, current) VALUES (?,?,?)",
+        (1, "БЫТ", 500.0),
+    )
+    cursor.execute(
+        """
+        INSERT INTO wishes (user_id, name, price, category, is_purchased, saved_amount, purchased_at)
+        VALUES (?,?,?,?,?,?,?)
+        """,
+        (1, "Чайник", 1200.0, "БЫТ", 0, 0, None),
+    )
+    cursor.execute(
+        "INSERT INTO purchases (user_id, wish_name, price, category, purchased_at) VALUES (?,?,?,?,?)",
+        (1, "Тест", 100.0, "БЫТ", "2025-01-01"),
+    )
+    cursor.execute(
+        """
+        INSERT INTO household_payment_items (user_id, code, text, amount, position, is_active)
+        VALUES (?,?,?,?,?,?)
+        """,
+        (1, "rent", "Квартплата", 4000, 1, 1),
+    )
+    cursor.execute(
+        """
+        INSERT INTO household_payments (user_id, month, question_code, is_paid)
+        VALUES (?,?,?,?)
+        """,
+        (1, "2025-01", "rent", 0),
+    )
+    connection.commit()
+
+    migrate_schema(connection)
+    migrate_schema(connection)
+
+    cursor.execute(f"SELECT category, current FROM {TABLES.savings}")
+    savings_row = cursor.fetchone()
+    assert savings_row == ("БЫТ", 500.0)
+
+    cursor.execute(f"SELECT name FROM {TABLES.wishes}")
+    assert cursor.fetchone()[0] == "Чайник"
+
+    cursor.execute(f"SELECT wish_name FROM {TABLES.purchases}")
+    assert cursor.fetchone()[0] == "Тест"
+
+    cursor.execute(f"SELECT code FROM {TABLES.household_payment_items}")
+    assert cursor.fetchone()[0] == "rent"
+
+    cursor.execute(f"SELECT question_code FROM {TABLES.household_payments}")
+    assert cursor.fetchone()[0] == "rent"
+
+    connection.close()
+
+===== tests/run_all_tests.py =====
+
+"""Run all pytest suites."""
+import pytest
+
+
+if __name__ == "__main__":
+    raise SystemExit(pytest.main(["-q", "tests"]))
+
+===== tests/test_runner.py =====
+
+"""Helper to run tests programmatically."""
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main() -> int:
+    """Run pytest suite and return exit code."""
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run([sys.executable, "-m", "pytest", "-q", str(root / "tests")], check=False)
+    return result.returncode
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
+===== tests/unit/__init__.py =====
+
+
+===== tests/unit/test_byt_manual_check.py =====
+
+"""Tests for manual BYT reminder check helpers."""
+
+from Bot.utils.byt_manual_check import (
+    build_byt_times_sorted,
+    parse_byt_manual_cursor_index,
+    select_next_byt_manual_time,
+)
+
+
+def test_build_byt_times_sorted_unique_sorted() -> None:
+    times_by_category = {
+        1: ["12:00", "18:00"],
+        2: ["14:00", "12:00"],
+    }
+    assert build_byt_times_sorted(times_by_category) == ["12:00", "14:00", "18:00"]
+
+
+def test_select_next_byt_manual_time_cycles() -> None:
+    times_sorted = ["12:00", "14:00"]
+    current_date = "2026-01-09"
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, -1
+    )
+    assert selected == "12:00"
+    assert index == 0
+    assert notice == ""
+
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, index
+    )
+    assert selected == "14:00"
+    assert index == 1
+    assert notice == ""
+
+    selected, index, notice = select_next_byt_manual_time(
+        times_sorted, current_date, current_date, index
+    )
+    assert selected == "12:00"
+    assert index == 0
+    assert notice == "Сегодня все времена уже проверены — начинаю заново."
+
+
+def test_parse_byt_manual_cursor_index_zero_is_valid() -> None:
+    assert parse_byt_manual_cursor_index(0) == 0
+    assert parse_byt_manual_cursor_index("0") == 0
+
+
+def test_parse_byt_manual_cursor_index_invalid_returns_minus_one() -> None:
+    assert parse_byt_manual_cursor_index(None) == -1
+    assert parse_byt_manual_cursor_index("") == -1
+    assert parse_byt_manual_cursor_index("   ") == -1
+    assert parse_byt_manual_cursor_index("abc") == -1
+
+===== tests/unit/test_byt_reminder_schedule.py =====
+
+"""Tests for BYT reminder schedule helpers."""
+
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from Bot.utils.datetime_utils import get_next_reminder_dt
+
+
+def test_get_next_reminder_dt_today() -> None:
+    now = datetime(2026, 1, 8, 10, 30, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, ["12:00", "18:00"])
+    assert result == datetime(2026, 1, 8, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_get_next_reminder_dt_tomorrow() -> None:
+    now = datetime(2026, 1, 8, 19, 0, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, ["12:00", "18:00"])
+    assert result == datetime(2026, 1, 9, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_get_next_reminder_dt_default() -> None:
+    now = datetime(2026, 1, 8, 13, 0, tzinfo=ZoneInfo("UTC"))
+    result = get_next_reminder_dt(now, [])
+    assert result == datetime(2026, 1, 9, 12, 0, tzinfo=ZoneInfo("UTC"))
+
+===== tests/unit/test_byt_reminder_settings.py =====
+
+"""Tests for BYT reminder category and time settings."""
+
+from datetime import datetime
+
+from Bot.database import crud
+from aiogram.types import InlineKeyboardMarkup, ReplyKeyboardMarkup
+
+from Bot.keyboards.settings import byt_timer_categories_inline_keyboard
+from Bot.utils.byt_render import (
+    format_byt_categories_status_text,
+    format_byt_category_checklist_text,
+    format_byt_defer_confirmation_text,
+)
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_toggle_byt_category_and_times(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "Дом")
+        assert db.get_byt_reminder_category_enabled(1, category_id) is False
+        enabled = db.toggle_byt_reminder_category(1, category_id)
+        assert enabled is True
+        assert db.get_byt_reminder_category_enabled(1, category_id) is True
+        enabled = db.toggle_byt_reminder_category(1, category_id)
+        assert enabled is False
+
+        db.add_byt_reminder_time(1, category_id, "09:00")
+        times = db.list_byt_reminder_times(1, category_id)
+        assert times == [{"time_hhmm": "09:00"}]
+        db.remove_byt_reminder_time(1, category_id, "09:00")
+        assert db.list_byt_reminder_times(1, category_id) == []
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_defer_confirmation_text_contains_details() -> None:
+    item = {"name": "Швабра", "price": 1990}
+    deferred_until = datetime(2026, 1, 9, 12, 0)
+    checklist_text = format_byt_category_checklist_text("Быт", [item], [])
+    text = format_byt_defer_confirmation_text(
+        item, "Быт", deferred_until, checklist_text
+    )
+    assert "Швабра" in text
+    assert "2026-01-09 12:00" in text
+    assert "Категория: Быт" in text
+
+
+def test_byt_categories_status_text_format() -> None:
+    categories = [
+        {"title": "Быт", "enabled": 1},
+        {"title": "Еда", "enabled": 0},
+    ]
+    text = format_byt_categories_status_text(categories)
+    lines = [line for line in text.splitlines() if line.strip()]
+    status_lines = lines[1:]
+    assert status_lines == ["✅ Быт", "❌ Еда"]
+    assert all(not any(char.isdigit() for char in line) for line in status_lines)
+
+
+def test_byt_timer_categories_keyboard_inline() -> None:
+    categories = [{"id": 1, "title": "Быт", "enabled": 1}]
+    keyboard = byt_timer_categories_inline_keyboard(categories, "byt:timer_category")
+    assert isinstance(keyboard, InlineKeyboardMarkup)
+    assert not isinstance(keyboard, ReplyKeyboardMarkup)
+
+===== tests/unit/test_byt_source_category.py =====
+
+"""Tests for BYT source category selection."""
+
+from Bot.database import crud
+from Bot.utils.byt_utils import get_byt_source_category_id
+from Bot.utils.datetime_utils import now_tz
+
+
+def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+    return crud.FinanceDatabase()
+
+
+def test_byt_source_category_respects_setting(tmp_path, monkeypatch) -> None:
+    """Return stored BYT source category id when configured."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "Дом")
+        db.set_byt_wishlist_category_id(1, category_id)
+        assert get_byt_source_category_id(db, 1) == category_id
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_source_category_fallback_by_name(tmp_path, monkeypatch) -> None:
+    """Fallback should pick wishlist category named 'быт' and persist it."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_id = db.create_wishlist_category(1, "быт")
+        assert get_byt_source_category_id(db, 1) == category_id
+        assert db.get_byt_wishlist_category_id(1) == category_id
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_source_category_missing_returns_none(tmp_path, monkeypatch) -> None:
+    """Return None when no BYT category is configured or found."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        assert get_byt_source_category_id(db, 1) is None
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_byt_query_filters_by_category(tmp_path, monkeypatch) -> None:
+    """BYT query should return items only from selected category."""
+
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        category_a = db.create_wishlist_category(1, "быт")
+        category_b = db.create_wishlist_category(1, "подарки")
+        db.add_wish(1, "Швабра", 100, None, "быт")
+        db.add_wish(1, "Подарок", 200, None, "подарки")
+        now_dt = now_tz()
+        items = db.list_active_byt_items_for_reminder(1, now_dt, "быт")
+        assert {item["name"] for item in items} == {"Швабра"}
+        assert db.get_active_byt_wishes(1, "быт")[0]["name"] == "Швабра"
+        assert category_a != category_b
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+===== tests/unit/test_handlers.py =====
+
+"""Tests for handler utilities."""
+from Bot.handlers.finances import _format_savings_summary, _find_reached_goal
+
+
+def test_format_savings_summary_empty() -> None:
+    """Empty savings returns default message."""
+
+    assert _format_savings_summary({}) == "Пока нет накоплений."
+
+
+def test_find_reached_goal() -> None:
+    """Goal detection returns first satisfied category."""
+
+    savings = {
+        "категория": {"current": 150, "goal": 100, "purpose": "test"},
+        "другая": {"current": 50, "goal": 100, "purpose": "none"},
+    }
+    category, data = _find_reached_goal(savings)
+    assert category == "категория"
+    assert data["goal"] == 100
+
+===== tests/unit/test_household_debit_category.py =====
+
+"""Tests for household debit category settings."""
 from Bot.database import crud
 
 
@@ -46,77 +1034,967 @@ def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
     return crud.FinanceDatabase()
 
 
-def test_set_and_get_wishlist_debit_category(tmp_path, monkeypatch) -> None:
-    """Wishlist debit category should persist in user settings."""
+def test_set_and_get_household_debit_category(tmp_path, monkeypatch) -> None:
+    """Household debit category should persist in user settings."""
 
     db = _fresh_db(tmp_path, monkeypatch)
     try:
-        db.set_wishlist_debit_category(1, "alpha")
-        assert db.get_wishlist_debit_category(1) == "alpha"
-        db.set_wishlist_debit_category(1, None)
-        assert db.get_wishlist_debit_category(1) is None
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-===== tests/unit/test_wishlist_purchase.py =====
-
-"""Tests for wishlist purchase flow."""
-from Bot.database import crud
-
-
-def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
-    db_path = tmp_path / "finance.db"
-    monkeypatch.setattr(crud, "DB_PATH", db_path)
-    crud.FinanceDatabase._instance = None
-    return crud.FinanceDatabase()
-
-
-def test_purchase_wishlist_without_debit(tmp_path, monkeypatch) -> None:
-    """Purchase without debit should not change savings."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        wish_id = db.add_wish(1, "Laptop", 100.0, None, "Work")
-        result = db.purchase_wish(1, wish_id, None)
-        assert result.get("status") == "no_debit"
-        wish = db.get_wish(wish_id)
-        assert wish is not None
-        assert wish.get("is_purchased") == 1
-        assert wish.get("debited_at") is None
-        savings_map = db.get_user_savings_map(1)
-        assert "alpha" not in savings_map
+        db.set_household_debit_category(1, "alpha")
+        assert db.get_household_debit_category(1) == "alpha"
     finally:
         db.close()
         crud.FinanceDatabase._instance = None
 
 
-def test_purchase_wishlist_debit_idempotent(tmp_path, monkeypatch) -> None:
-    """Purchase should debit once and be idempotent."""
+def test_apply_household_debit_category_updates_savings(tmp_path, monkeypatch) -> None:
+    """Yes answer should debit savings from selected category."""
 
     db = _fresh_db(tmp_path, monkeypatch)
     try:
-        wish_id = db.add_wish(2, "Phone", 50.0, None, "Fun")
-        db.update_saving(2, "alpha", 100.0)
-        result = db.purchase_wish(2, wish_id, "alpha")
-        assert result.get("status") == "debited"
+        db.set_household_debit_category(2, "custom_cat")
+        changed = db.apply_household_payment_answer(
+            user_id=2,
+            month="2026-01",
+            question_code="q1",
+            amount=100.0,
+            answer="yes",
+            debit_category="custom_cat",
+        )
+        assert changed is True
         savings_map = db.get_user_savings_map(2)
-        assert savings_map.get("alpha") == 50.0
-        result_again = db.purchase_wish(2, wish_id, "alpha")
-        assert result_again.get("status") == "already"
-        savings_map_again = db.get_user_savings_map(2)
-        assert savings_map_again.get("alpha") == 50.0
-        wish = db.get_wish(wish_id)
-        assert wish is not None
-        assert wish.get("debited_at") is not None
+        assert savings_map.get("custom_cat") == -100.0
     finally:
         db.close()
         crud.FinanceDatabase._instance = None
 
-===== utils/__init__.py =====
 
-from Bot.utils import *  # noqa: F401,F403
+def test_resolve_household_debit_category_fallback(tmp_path, monkeypatch) -> None:
+    """Fallback should select first available income category."""
 
-===== utils/logging.py =====
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        cursor = db.connection.cursor()
+        cursor.execute(
+            f"""
+            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (3, "alpha", "Alpha", 50, 1),
+        )
+        cursor.execute(
+            f"""
+            INSERT INTO {crud.TABLES.income_categories} (user_id, code, title, percent, position, is_active)
+            VALUES (?, ?, ?, ?, ?, 1)
+            """,
+            (3, "beta", "Beta", 50, 2),
+        )
+        db.connection.commit()
 
-from Bot.utils.logging import *  # noqa: F401,F403
+        code, title = db.resolve_household_debit_category(3)
+        assert code == "alpha"
+        assert title == "Alpha"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+===== tests/unit/test_household_idempotency.py =====
+
+"""Tests for household idempotency handling."""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+pytest.importorskip("aiogram")
+
+from Bot.handlers.household_payments import handle_household_answer  # noqa: E402
+
+
+class DummyState:
+    def __init__(self, data: dict) -> None:
+        self._data = data
+        self.update_data = AsyncMock(side_effect=self._update)
+        self.get_data = AsyncMock(side_effect=self._get)
+        self.get_state = AsyncMock(return_value="state")
+
+    async def _get(self) -> dict:
+        return self._data
+
+    async def _update(self, **kwargs) -> None:
+        self._data.update(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_handle_household_answer_skips_processed_code(monkeypatch) -> None:
+    """Duplicate callbacks should not reapply DB updates."""
+
+    db_stub = SimpleNamespace(apply_household_payment_answer=MagicMock(return_value=True))
+    monkeypatch.setattr("Bot.handlers.household_payments.get_db", lambda: db_stub)
+
+    message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    callback = SimpleNamespace(
+        data="hh_pay:yes:q1",
+        from_user=SimpleNamespace(id=1),
+        message=message,
+        bot=SimpleNamespace(edit_message_text=AsyncMock(return_value=None)),
+        answer=AsyncMock(return_value=None),
+    )
+
+    state = SimpleNamespace(
+        get_data=AsyncMock(
+            return_value={
+                "hh_month": "2025-01",
+                "hh_questions": [
+                    {"code": "q1", "text": "Q1", "amount": 10},
+                    {"code": "q2", "text": "Q2", "amount": 5},
+                ],
+                "current_step_index": 0,
+                "hh_index": 0,
+                "hh_answers": {},
+                "hh_ui_message_id": 10,
+                "processed_steps": [],
+            }
+        ),
+        update_data=AsyncMock(return_value=None),
+        get_state=AsyncMock(return_value="state"),
+    )
+
+    await handle_household_answer(callback, state)
+    assert db_stub.apply_household_payment_answer.call_count == 1
+
+    state.get_data = AsyncMock(
+        return_value={
+            "hh_month": "2025-01",
+            "hh_questions": [
+                {"code": "q1", "text": "Q1", "amount": 10},
+                {"code": "q2", "text": "Q2", "amount": 5},
+            ],
+            "current_step_index": 0,
+            "hh_index": 0,
+            "hh_answers": {"q1": "yes"},
+            "hh_ui_message_id": 10,
+            "processed_steps": ["q1"],
+        }
+    )
+
+    await handle_household_answer(callback, state)
+    assert db_stub.apply_household_payment_answer.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_handle_household_answer_no_updates_ui_on_unchanged_db(
+    monkeypatch,
+) -> None:
+    """No answers should still update UI when DB reports no change."""
+
+    db_stub = SimpleNamespace(apply_household_payment_answer=MagicMock(return_value=False))
+    monkeypatch.setattr("Bot.handlers.household_payments.get_db", lambda: db_stub)
+
+    message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    callback = SimpleNamespace(
+        data="hh_pay:no:q1",
+        from_user=SimpleNamespace(id=1),
+        message=message,
+        bot=SimpleNamespace(edit_message_text=AsyncMock(return_value=None)),
+        answer=AsyncMock(return_value=None),
+    )
+
+    state = DummyState(
+        {
+            "hh_month": "2025-01",
+            "hh_questions": [
+                {"code": "q1", "text": "Q1", "amount": 10},
+                {"code": "q2", "text": "Q2", "amount": 5},
+            ],
+            "current_step_index": 0,
+            "hh_index": 0,
+            "hh_answers": {},
+            "hh_ui_message_id": 10,
+            "processed_steps": [],
+        }
+    )
+
+    await handle_household_answer(callback, state)
+
+    assert db_stub.apply_household_payment_answer.call_count == 1
+    kwargs = state.update_data.await_args.kwargs
+    assert kwargs["hh_answers"]["q1"] == "no"
+    assert "q1" in kwargs["processed_steps"]
+    assert kwargs["current_step_index"] == 1
+    callback.bot.edit_message_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_household_answer_no_double_tap_is_idempotent(
+    monkeypatch,
+) -> None:
+    """Duplicate no answers should not reapply DB or UI updates."""
+
+    db_stub = SimpleNamespace(apply_household_payment_answer=MagicMock(return_value=False))
+    monkeypatch.setattr("Bot.handlers.household_payments.get_db", lambda: db_stub)
+
+    message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    callback = SimpleNamespace(
+        data="hh_pay:no:q1",
+        from_user=SimpleNamespace(id=1),
+        message=message,
+        bot=SimpleNamespace(edit_message_text=AsyncMock(return_value=None)),
+        answer=AsyncMock(return_value=None),
+    )
+
+    state = DummyState(
+        {
+            "hh_month": "2025-01",
+            "hh_questions": [
+                {"code": "q1", "text": "Q1", "amount": 10},
+                {"code": "q2", "text": "Q2", "amount": 5},
+            ],
+            "current_step_index": 0,
+            "hh_index": 0,
+            "hh_answers": {},
+            "hh_ui_message_id": 10,
+            "processed_steps": [],
+        }
+    )
+
+    await handle_household_answer(callback, state)
+    await handle_household_answer(callback, state)
+
+    assert db_stub.apply_household_payment_answer.call_count == 1
+    callback.bot.edit_message_text.assert_awaited_once()
+
+===== tests/unit/test_household_payments.py =====
+
+"""Tests for household payments workflow."""
+from datetime import datetime
+
+import pytest
+
+from Bot.config import settings
+from Bot.database.crud import FinanceDatabase, TABLES
+from Bot.handlers.household_payments import reset_household_cycle_if_needed
+from Bot.utils.datetime_utils import current_month_str
+
+
+@pytest.mark.asyncio
+async def test_reset_cycle_creates_statuses_after_threshold() -> None:
+    """Statuses should appear after threshold date only once."""
+
+    db = FinanceDatabase()
+    user_id = 99991
+    month = "2025-01"
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    before_threshold = datetime(2025, 1, 5, 10, 0, tzinfo=settings.TIMEZONE)
+    await reset_household_cycle_if_needed(user_id, db, now=before_threshold)
+    assert not await db.household_status_exists(user_id, month)
+
+    after_threshold = datetime(2025, 1, 6, 12, 0, tzinfo=settings.TIMEZONE)
+    await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
+    assert await db.has_unpaid_household_questions(user_id, month)
+
+    await reset_household_cycle_if_needed(user_id, db, now=after_threshold)
+    cursor = db.connection.execute(
+        f"SELECT COUNT(*) FROM {TABLES.household_payments} WHERE user_id = ? AND month = ?",
+        (user_id, month),
+    )
+    assert cursor.fetchone()[0] == len(items)
+
+
+@pytest.mark.asyncio
+async def test_mark_and_check_unpaid_questions() -> None:
+    """Marking paid questions should update unpaid check."""
+
+    db = FinanceDatabase()
+    user_id = 99992
+    month = current_month_str(datetime(2025, 2, 6, 12, 0, tzinfo=settings.TIMEZONE))
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    await db.init_household_questions_for_month(user_id, month)
+    assert await db.has_unpaid_household_questions(user_id, month)
+
+    for item in items:
+        await db.mark_household_question_paid(user_id, month, str(item.get("code")))
+    assert not await db.has_unpaid_household_questions(user_id, month)
+
+
+@pytest.mark.asyncio
+async def test_question_flow_and_savings_update() -> None:
+    """Yes/No answers adjust savings and skip paid questions."""
+
+    db = FinanceDatabase()
+    user_id = 99993
+    month = current_month_str(datetime(2025, 3, 6, 12, 0, tzinfo=settings.TIMEZONE))
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payments} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.savings} WHERE user_id = ? AND category = 'быт'",
+        (user_id,),
+    )
+    db.connection.execute(
+        f"DELETE FROM {TABLES.household_payment_items} WHERE user_id = ?",
+        (user_id,),
+    )
+    db.connection.commit()
+    db.ensure_household_items_seeded(user_id)
+    items = db.list_active_household_items(user_id)
+
+    db.update_saving(user_id, "быт", 5000)
+    await db.init_household_questions_for_month(user_id, month)
+
+    unpaid = await db.get_unpaid_household_questions(user_id, month)
+    assert unpaid
+    first_code = str(unpaid[0])
+    first_item = next(item for item in items if str(item.get("code")) == first_code)
+    amount = float(first_item.get("amount") or 0)
+
+    changed = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="yes",
+        debit_category="быт",
+    )
+    assert changed is True
+
+    savings_map = db.get_user_savings_map(user_id)
+    assert savings_map.get("быт") == 5000 - amount
+
+    changed_again = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="yes",
+        debit_category="быт",
+    )
+    assert changed_again is False
+
+    changed_back = db.apply_household_payment_answer(
+        user_id=user_id,
+        month=month,
+        question_code=first_code,
+        amount=amount,
+        answer="no",
+        debit_category="быт",
+    )
+    assert changed_back is True
+    savings_map = db.get_user_savings_map(user_id)
+    assert savings_map.get("быт") == 5000
+
+===== tests/unit/test_household_renderers.py =====
+
+"""Tests for household renderers."""
+
+from Bot.renderers.household import format_household_items, render_household_questions_text
+
+
+def test_render_questions_text_marks_answers() -> None:
+    questions = [
+        {"code": "q1", "text": "Оплатил интернет?", "amount": 100},
+        {"code": "q2", "text": "Оплатил свет?", "amount": 200},
+    ]
+    answers = {"q1": "yes", "q2": "no"}
+    text = render_household_questions_text("2025-02", questions, answers, current_index=1)
+    assert "✅" in text
+    assert "❌" in text
+    assert "2025-02" in text
+
+
+def test_format_household_items() -> None:
+    items = [
+        {"code": "q1", "text": "Интернет?", "amount": 100},
+        {"code": "q2", "text": "Свет?", "amount": 200},
+    ]
+    text = format_household_items(items, unpaid_set={"q2"})
+    assert "✅" in text
+    assert "❌" in text
+    assert "Интернет" in text
+
+===== tests/unit/test_household_services.py =====
+
+"""Tests for household services."""
+
+from Bot.services.household import (
+    build_household_questions,
+    get_current_question,
+    get_next_index,
+    get_previous_index,
+    should_ignore_answer,
+    update_flow_state,
+)
+
+
+def test_flow_state_and_navigation() -> None:
+    questions = build_household_questions(
+        [
+            {"code": "q1", "text": "Первый?", "amount": 100},
+            {"code": "q2", "text": "Второй?", "amount": 200},
+        ]
+    )
+    flow = update_flow_state(
+        month="2025-01",
+        questions=questions,
+        current_step_index=0,
+        answers={},
+        processed_steps=[],
+    )
+    assert flow.current_question_code == "q1"
+    assert get_current_question(questions, 1)["code"] == "q2"
+    assert get_next_index(0, questions) == 1
+    assert get_next_index(1, questions) == 2
+    assert get_previous_index(0) == 0
+    assert get_previous_index(1) == 0
+
+
+def test_idempotency_check() -> None:
+    answers = {"q1": "yes"}
+    processed_steps = {"q1"}
+    assert should_ignore_answer(answers, processed_steps, "q1", "yes") is True
+    assert should_ignore_answer(answers, processed_steps, "q1", "no") is False
+    assert should_ignore_answer(answers, processed_steps, "q2", "yes") is False
+
+===== tests/unit/test_imports.py =====
+
+"""Basic import tests."""
+
+
+def test_import_main() -> None:
+    """Ensure main module is importable."""
+
+    import Bot.main  # noqa: F401
+
+
+def test_import_handlers() -> None:
+    """Ensure handlers modules are importable."""
+
+    import Bot.handlers.start  # noqa: F401
+    import Bot.handlers.finances  # noqa: F401
+    import Bot.handlers.household_payments  # noqa: F401
+    import Bot.handlers.wishlist  # noqa: F401
+    import Bot.handlers.callbacks  # noqa: F401
+    import Bot.handlers.common  # noqa: F401
+
+
+def test_register_routers_smoke() -> None:
+    """Ensure register_routers includes key routers."""
+
+    from aiogram import Dispatcher
+
+    from Bot.handlers import household_payments, settings, start, wishlist
+    from Bot.main import register_routers
+
+    dp = Dispatcher()
+    register_routers(dp)
+    routers = list(getattr(dp, "sub_routers", []))
+
+    assert start.router in routers
+    assert household_payments.router in routers
+    assert settings.router in routers
+    assert wishlist.router in routers
+
+===== tests/unit/test_income_categories.py =====
+
+"""Tests for income category seeding and flow guards."""
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+from Bot.database import crud
+
+
+def test_income_categories_not_seeded(tmp_path, monkeypatch) -> None:
+    """Income categories should start empty for a new user."""
+
+    db_path = tmp_path / "finance.db"
+    monkeypatch.setattr(crud, "DB_PATH", db_path)
+    crud.FinanceDatabase._instance = None
+
+    db = crud.FinanceDatabase()
+    try:
+        assert db.list_active_income_categories(12345) == []
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_start_income_flow_with_empty_categories(monkeypatch) -> None:
+    """Handler should stop flow when no income categories exist."""
+
+    pytest.importorskip("aiogram")
+
+    from Bot.handlers import finances  # noqa: WPS433
+
+    db_stub = SimpleNamespace(list_active_income_categories=MagicMock(return_value=[]))
+    monkeypatch.setattr("Bot.handlers.finances.get_db", lambda: db_stub)
+    monkeypatch.setattr(
+        "Bot.handlers.finances.build_main_menu_for_user",
+        AsyncMock(return_value="menu"),
+    )
+    monkeypatch.setattr("Bot.handlers.finances.ui_register_message", AsyncMock())
+    monkeypatch.setattr("Bot.handlers.finances.safe_delete_message", AsyncMock())
+
+    sent_message = SimpleNamespace(message_id=10, chat=SimpleNamespace(id=20))
+    message = SimpleNamespace(
+        from_user=SimpleNamespace(id=1),
+        chat=SimpleNamespace(id=20),
+        message_id=5,
+        bot=SimpleNamespace(),
+        answer=AsyncMock(return_value=sent_message),
+    )
+    state = SimpleNamespace(clear=AsyncMock(), set_state=AsyncMock(), update_data=AsyncMock())
+
+    async def _run() -> None:
+        await finances.start_income_flow(message, state)
+
+    asyncio.run(_run())
+
+    assert db_stub.list_active_income_categories.call_count == 1
+    state.set_state.assert_not_awaited()
+    message.answer.assert_awaited_once()
+    assert "Категории дохода не настроены" in message.answer.await_args.args[0]
+
+===== tests/unit/test_number_input.py =====
+
+"""Tests for numeric input parsing."""
+
+from Bot.utils.number_input import parse_int_choice, parse_positive_int
+
+
+def test_parse_int_choice_basic() -> None:
+    assert parse_int_choice("2") == 2
+    assert parse_int_choice("  2 ") == 2
+    assert parse_int_choice("+2") == 2
+
+
+def test_parse_int_choice_invalid() -> None:
+    assert parse_int_choice("ab") is None
+
+
+def test_parse_positive_int_basic() -> None:
+    assert parse_positive_int("2") == 2
+    assert parse_positive_int(" +3 ") == 3
+
+
+def test_parse_positive_int_invalid() -> None:
+    assert parse_positive_int("0") is None
+    assert parse_positive_int("-1") is None
+
+===== tests/unit/test_telegram_safe.py =====
+
+"""Tests for telegram_safe utilities."""
+from unittest.mock import AsyncMock
+
+import pytest
+
+pytest.importorskip("aiogram")
+
+from aiogram.exceptions import TelegramNetworkError  # noqa: E402
+
+from Bot.utils.telegram_safe import safe_edit_message_text  # noqa: E402
+
+
+@pytest.mark.asyncio
+async def test_safe_edit_message_text_retries_network_error() -> None:
+    """Network errors should trigger retries for edit operations."""
+
+    bot = AsyncMock()
+    bot.edit_message_text = AsyncMock(
+        side_effect=[TelegramNetworkError("fail"), None]
+    )
+
+    result = await safe_edit_message_text(
+        bot,
+        chat_id=123,
+        message_id=456,
+        text="hello",
+    )
+
+    assert result is True
+    assert bot.edit_message_text.call_count == 2
+
+===== tests/unit/test_telegram_safe_delete.py =====
+
+"""Tests for safe_delete_message."""
+
+from unittest.mock import AsyncMock
+import sys
+import types
+from pathlib import Path
+
+import asyncio
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+if "aiogram" not in sys.modules:
+    aiogram = types.ModuleType("aiogram")
+    exceptions = types.ModuleType("aiogram.exceptions")
+    types_mod = types.ModuleType("aiogram.types")
+    filters = types.ModuleType("aiogram.filters")
+    fsm = types.ModuleType("aiogram.fsm")
+    fsm_context = types.ModuleType("aiogram.fsm.context")
+
+    class TelegramBadRequest(Exception):
+        pass
+
+    class TelegramNetworkError(Exception):
+        pass
+
+    exceptions.TelegramBadRequest = TelegramBadRequest
+    exceptions.TelegramNetworkError = TelegramNetworkError
+
+    class ReplyKeyboardMarkup:
+        pass
+
+    class ReplyKeyboardRemove:
+        pass
+
+    class Message:
+        pass
+
+    class InlineKeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class InlineKeyboardMarkup:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class KeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class DummyRouter:
+        def message(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class Bot:
+        pass
+
+    class DummyF:
+        class _Field:
+            def __eq__(self, other):
+                return ("eq", other)
+
+        text = _Field()
+
+    class FSMContext:
+        pass
+
+    class Command:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
+    types_mod.ReplyKeyboardRemove = ReplyKeyboardRemove
+    types_mod.Message = Message
+    types_mod.InlineKeyboardButton = InlineKeyboardButton
+    types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
+    types_mod.KeyboardButton = KeyboardButton
+    aiogram.exceptions = exceptions
+    aiogram.types = types_mod
+    aiogram.Router = DummyRouter
+    aiogram.F = DummyF()
+    aiogram.Bot = Bot
+    fsm_context.FSMContext = FSMContext
+    fsm.context = fsm_context
+    aiogram.fsm = fsm
+    aiogram.filters = filters
+    filters.Command = Command
+    sys.modules["aiogram"] = aiogram
+    sys.modules["aiogram.exceptions"] = exceptions
+    sys.modules["aiogram.types"] = types_mod
+    sys.modules["aiogram.filters"] = filters
+    sys.modules["aiogram.fsm"] = fsm
+    sys.modules["aiogram.fsm.context"] = fsm_context
+
+if "aiohttp" not in sys.modules:
+    aiohttp = types.ModuleType("aiohttp")
+
+    class ClientConnectionError(Exception):
+        pass
+
+    class ClientOSError(Exception):
+        pass
+
+    aiohttp.ClientConnectionError = ClientConnectionError
+    aiohttp.ClientOSError = ClientOSError
+    sys.modules["aiohttp"] = aiohttp
+
+from aiogram.exceptions import TelegramBadRequest  # noqa: E402
+
+from Bot.utils.telegram_safe import safe_delete_message  # noqa: E402
+
+
+def test_safe_delete_message_not_found() -> None:
+    async def run() -> None:
+        bot = AsyncMock()
+        bot.delete_message = AsyncMock(
+            side_effect=TelegramBadRequest("message to delete not found")
+        )
+
+        result = await safe_delete_message(bot, chat_id=1, message_id=2)
+
+        assert result is False
+        assert bot.delete_message.call_count == 1
+
+    asyncio.run(run())
+
+===== tests/unit/test_text_sanitizer.py =====
+
+"""Tests for income text sanitizer."""
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from Bot.utils.text_sanitizer import sanitize_income_title  # noqa: E402
+
+
+def test_sanitize_income_title_removes_bank_suffixes() -> None:
+    text = "бытовые расходы на тиньк (озон)"
+    assert sanitize_income_title(text) == "бытовые расходы"
+
+
+def test_sanitize_income_title_trims_separators() -> None:
+    text = "Инвестиции — на Альфу"
+    assert sanitize_income_title(text) == "Инвестиции"
+
+
+def test_sanitize_income_title_removes_tinkoff_suffix() -> None:
+    text = "убил боль — на тиньк"
+    assert sanitize_income_title(text) == "убил боль"
+
+
+def test_sanitize_income_title_removes_ozon_suffix() -> None:
+    text = "что-то (озон)"
+    assert sanitize_income_title(text) == "что-то"
+
+===== tests/unit/test_time_input.py =====
+
+"""Tests for time input normalization."""
+
+from Bot.utils.time_input import normalize_time_partial
+
+
+def test_normalize_time_partial_hour_only() -> None:
+    assert normalize_time_partial("12") == ("12:", False)
+    assert normalize_time_partial("00") == ("00:", False)
+    assert normalize_time_partial("23") == ("23:", False)
+
+
+def test_normalize_time_partial_invalid_hour() -> None:
+    assert normalize_time_partial("24") == ("", False)
+
+
+def test_normalize_time_partial_compact_time() -> None:
+    assert normalize_time_partial("1230") == ("12:30", True)
+
+
+def test_normalize_time_partial_colon_time() -> None:
+    assert normalize_time_partial("12:30") == ("12:30", True)
+
+
+def test_normalize_time_partial_hour_with_colon() -> None:
+    assert normalize_time_partial("12:") == ("12:", False)
+
+
+def test_normalize_time_partial_invalid_minutes() -> None:
+    assert normalize_time_partial("1260") == ("", False)
+
+
+def test_normalize_time_partial_invalid_text() -> None:
+    assert normalize_time_partial("ab") == ("", False)
+
+===== tests/unit/test_ui_cleanup.py =====
+
+"""Tests for UI cleanup utilities."""
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+import asyncio
+import sys
+import types
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+if "aiogram" not in sys.modules:
+    aiogram = types.ModuleType("aiogram")
+
+    class DummyRouter:
+        def message(self, *args, **kwargs):
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class DummyF:
+        class _Field:
+            def __eq__(self, other):
+                return ("eq", other)
+
+        text = _Field()
+
+    class Bot:
+        pass
+
+    aiogram.F = DummyF()
+    aiogram.Router = DummyRouter
+    aiogram.Bot = Bot
+
+    exceptions = types.ModuleType("aiogram.exceptions")
+
+    class TelegramBadRequest(Exception):
+        pass
+
+    exceptions.TelegramBadRequest = TelegramBadRequest
+    aiogram.exceptions = exceptions
+
+    filters = types.ModuleType("aiogram.filters")
+
+    class Command:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    filters.Command = Command
+    aiogram.filters = filters
+
+    fsm = types.ModuleType("aiogram.fsm")
+    fsm_context = types.ModuleType("aiogram.fsm.context")
+
+    class FSMContext:
+        pass
+
+    fsm_context.FSMContext = FSMContext
+    fsm.context = fsm_context
+    aiogram.fsm = fsm
+
+    types_mod = types.ModuleType("aiogram.types")
+
+    class Message:
+        pass
+
+    class ReplyKeyboardMarkup:
+        pass
+
+    class ReplyKeyboardRemove:
+        pass
+
+    class InlineKeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class InlineKeyboardMarkup:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    class KeyboardButton:
+        def __init__(self, *args, **kwargs):
+            return None
+
+    types_mod.Message = Message
+    types_mod.ReplyKeyboardMarkup = ReplyKeyboardMarkup
+    types_mod.ReplyKeyboardRemove = ReplyKeyboardRemove
+    types_mod.InlineKeyboardButton = InlineKeyboardButton
+    types_mod.InlineKeyboardMarkup = InlineKeyboardMarkup
+    types_mod.KeyboardButton = KeyboardButton
+    aiogram.types = types_mod
+
+    sys.modules["aiogram"] = aiogram
+    sys.modules["aiogram.exceptions"] = exceptions
+    sys.modules["aiogram.filters"] = filters
+    sys.modules["aiogram.fsm"] = fsm
+    sys.modules["aiogram.fsm.context"] = fsm_context
+    sys.modules["aiogram.types"] = types_mod
+
+from Bot.handlers.start import back_to_main
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_to_context,
+    ui_register_protected_message,
+    ui_set_welcome_message,
+    ui_track_message,
+)
+
+
+class DummyState:
+    """Minimal FSMContext stand-in for unit tests."""
+
+    def __init__(self, initial=None) -> None:
+        self.data = dict(initial or {})
+
+    async def get_data(self) -> dict:
+        return dict(self.data)
+
+    async def update_data(self, **kwargs) -> None:
+        self.data.update(kwargs)
+
+
+class DummyBot:
+    """Minimal bot mock with async delete_message."""
+
+    def __init__(self) -> None:
+        self.delete_message = AsyncMock()
+        self.edit_message_text = AsyncMock()
+        self.send_message = AsyncMock()
+
+
+def test_ui_track_deduplicates() -> None:
+    """Tracking avoids duplicate message ids."""
+
+    async def run_test() -> None:
+        state = DummyState()
+        await ui_track_message(state, 1, 10)
+        await ui_track_message(state, 1, 10)
+        data = await state.get_data()
+        assert data["ui_tracked_message_ids"] == [10]
+
+    asyncio.run(run_test())
+
+
+def test_ui_cleanup_keeps_welcome() -> None:
+    """Cleanup removes tracked messages while keeping welcome."""
+
+    async def run_test() -> None:
+        state = DummyState(
+            {
+                "ui_welcome_message_id": 111,
+                "ui_tracked_message_ids": [111, 222, 333],
+            }

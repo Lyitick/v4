@@ -1,19 +1,82 @@
-    state: FSMContext,
-    message: Message,
-    db,
-    user_id: int,
-    error_message: str | None = None,
-) -> list[dict]:
-    categories = db.list_byt_reminder_categories(user_id)
-    chat_id, message_id = await _get_settings_message_ids(state, message)
-    await _edit_settings_page(
-        bot=message.bot,
-        state=state,
-        chat_id=chat_id,
-        message_id=message_id,
-        text=_format_byt_timer_menu_text(categories, error_message),
-        reply_markup=byt_timer_categories_inline_keyboard(
-            categories, "byt:timer_category"
+    if message is None:
+        return
+
+    if user_id is None:
+        user_id = message.from_user.id if message.from_user else None
+
+    if user_id is None:
+        return
+
+    db = db or get_db()
+    savings_map = db.get_user_savings_map(user_id)
+    wishes = db.get_wishes_by_user(user_id)
+    debit_category = db.get_wishlist_debit_category(user_id)
+    if not debit_category:
+        return
+    if not db.get_income_category_by_code(user_id, debit_category):
+        return
+
+    affordable: List[Dict[str, Any]] = []
+    for wish in wishes:
+        if wish.get("is_purchased"):
+            continue
+
+        wishlist_category = humanize_wishlist_category(wish.get("category", ""))
+        price = _to_float(wish.get("price"))
+        available = _to_float(savings_map.get(debit_category))
+        if price <= 0 or available < price:
+            continue
+
+        wish_copy: Dict[str, Any] = dict(wish)
+        wish_copy["price"] = price
+        wish_copy["wishlist_category"] = wishlist_category
+        affordable.append(wish_copy)
+
+    if not affordable:
+        return
+
+    lines = ["Ты уже можешь купить:"]
+    for wish in affordable:
+        lines.append(
+            f"• {wish['name']} — {wish['price']:.2f} ₽ (категория: {wish['wishlist_category']})"
+        )
+    lines.append("Нажми на кнопку под нужным товаром, если купил.")
+
+    keyboard = _build_affordable_wishes_keyboard(affordable)
+    await message.answer("\n".join(lines), reply_markup=keyboard)
+
+
+async def suggest_available_wish(message: Message) -> None:
+    """Backward-compatible wrapper to show affordable wishes."""
+
+    await show_affordable_wishes(message=message, user_id=message.from_user.id if message.from_user else None)
+
+
+@router.message(MoneyState.waiting_for_purchase_confirmation, F.text.in_({"✅ Купил", "🔄 Продолжить копить"}))
+async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
+    """Handle decision after reaching savings goal."""
+
+    data = await state.get_data()
+    category = data.get("category")
+    goal_amount = data.get("goal", 0)
+    db = get_db()
+
+    if message.text == "✅ Купил" and category:
+        db.update_saving(message.from_user.id, category, -goal_amount)
+        db.set_goal(message.from_user.id, category, 0, "")
+        sent = await message.answer(
+            f"Поздравляю с покупкой по категории {category}! Сумма {goal_amount:.2f} списана.",
+            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+        )
+        await ui_register_message(state, sent.chat.id, sent.message_id)
+        savings = db.get_user_savings(message.from_user.id)
+        categories_map = db.get_income_categories_map(message.from_user.id)
+        summary = _format_savings_summary(savings, categories_map)
+        await message.answer(f"Обновлённые накопления:\n{summary}")
+    else:
+        sent = await message.answer(
+            "Продолжаем копить!",
+            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
         )
         if categories
         else InlineKeyboardMarkup(
@@ -946,16 +1009,59 @@ async def open_byt_timer_menu_reply(message: Message, state: FSMContext) -> None
         )
 
 
-@router.message(F.text == "⚙ Условия")
-async def open_byt_rules_reply(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    if data.get("settings_current_screen") not in {
-        "st:byt_rules",
-        "byt:timer_menu",
-        "byt:timer_category",
-        "bt:del_time_menu",
-    }:
-        return
+from Bot.constants.ui_labels import (
+    WISHLIST_DEBIT_CATEGORY_BACK,
+    WISHLIST_DEBIT_CATEGORY_BUTTON,
+    WISHLIST_DEBIT_CATEGORY_NONE,
+    WISHLIST_BYT_CATEGORY_BUTTON,
+)
+from Bot.database.get_db import get_db
+from Bot.handlers.common import build_main_menu_for_user
+from Bot.keyboards.main import back_only_keyboard
+from Bot.keyboards.settings import (
+    byt_category_toggle_keyboard,
+    byt_rules_reply_keyboard,
+    byt_timer_categories_inline_keyboard,
+    byt_timer_inline_keyboard,
+    byt_timer_times_select_keyboard,
+    household_debit_category_select_reply_keyboard,
+    household_payments_remove_reply_keyboard,
+    household_settings_reply_keyboard,
+    income_categories_select_reply_keyboard,
+    income_settings_reply_keyboard,
+    settings_back_reply_keyboard,
+    settings_home_reply_keyboard,
+    wishlist_categories_select_reply_keyboard,
+    wishlist_debit_category_select_reply_keyboard,
+    wishlist_purchased_mode_reply_keyboard,
+    wishlist_settings_reply_keyboard,
+)
+from Bot.utils.byt_render import format_byt_categories_status_text
+from Bot.keyboards.calculator import income_calculator_keyboard
+from Bot.states.money_states import HouseholdSettingsState, IncomeSettingsState
+from Bot.states.wishlist_states import (
+    BytSettingsState,
+    BytTimerState,
+    WishlistSettingsState,
+)
+from Bot.utils.datetime_utils import current_month_str
+from Bot.utils.messages import ERR_INVALID_INPUT, HINT_TIME_FORMAT
+from Bot.utils.number_input import parse_int_choice, parse_positive_int
+from Bot.utils.time_input import normalize_time_partial
+from Bot.utils.savings import format_savings_summary
+from Bot.utils.telegram_safe import (
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
+from Bot.utils.ui_cleanup import (
+    ui_cleanup_messages,
+    ui_cleanup_to_context,
+    ui_register_message,
+    ui_render_screen,
+    ui_set_screen_message,
+    ui_track_message,
+)
 
     await _register_user_message(state, message)
     await _delete_user_message(message)
@@ -1053,31 +1159,23 @@ async def toggle_byt_defer(callback: CallbackQuery, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(F.data.startswith("byt:category_toggle:"))
-async def toggle_byt_category(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    db = get_db()
-    parts = callback.data.split(":")
-    if len(parts) < 4:
-        return
-    try:
-        category_id = int(parts[2])
-        target_state = int(parts[3])
-    except ValueError:
-        return
-    current = db.get_byt_reminder_category_enabled(callback.from_user.id, category_id)
-    if int(current) == target_state:
-        return
-    enabled = db.toggle_byt_reminder_category(callback.from_user.id, category_id)
-    LOGGER.info(
-        "USER=%s ACTION=BYT_CATEGORY_TOGGLE META=category=%s enabled=%s",
-        callback.from_user.id,
-        category_id,
-        enabled,
-    )
-    await render_settings_screen(
-        "wl:byt_category_menu", message=callback.message, state=state
-    )
+async def _cleanup_input_ui(
+    bot,
+    data: dict,
+    *,
+    display_chat_key: str | None = None,
+    display_message_key: str | None = None,
+    prompt_chat_key: str | None = None,
+    prompt_message_key: str | None = None,
+) -> None:
+    if display_chat_key and display_message_key:
+        await _delete_message_safely(
+            bot, data.get(display_chat_key), data.get(display_message_key)
+        )
+    if prompt_chat_key and prompt_message_key:
+        await _delete_message_safely(
+            bot, data.get(prompt_chat_key), data.get(prompt_message_key)
+        )
 
 
 @router.callback_query(F.data == "byt:edit_max_defer_days")
@@ -1862,138 +1960,7 @@ async def household_payment_title(message: Message, state: FSMContext) -> None:
         state=state,
         chat_id=chat_id,
         message_id=message_id,
-        text=f'Сколько платить за "{title}"?',
-        reply_markup=None,
-    )
-    prompt = await _send_and_register(
-        message=message,
-        state=state,
-        text=": 0",
-        reply_markup=income_calculator_keyboard(),
-    )
-    await state.update_data(
-        hp_amount_display_chat_id=prompt.chat.id,
-        hp_amount_display_message_id=prompt.message_id,
-    )
-
-
-@router.message(
-    HouseholdSettingsState.waiting_for_amount, F.text.in_(PERCENT_INPUT_BUTTONS)
-)
-async def household_payment_amount(message: Message, state: FSMContext) -> None:
-    data = await state.get_data()
-    text = (message.text or "").strip()
-    await _register_user_message(state, message)
-    await _delete_user_message(message)
-    amount_str = data.get("hp_amount_str", "0")
-    display_chat_id = data.get("hp_amount_display_chat_id", message.chat.id)
-    display_message_id = data.get("hp_amount_display_message_id")
-
-    if text in PERCENT_DIGITS:
-        amount_str = amount_str.lstrip("0") if amount_str != "0" else ""
-        amount_str = f"{amount_str}{text}" or "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=f": {amount_str}",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=f": {amount_str}",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            hp_amount_str=amount_str,
-            hp_amount_display_chat_id=display_chat_id,
-            hp_amount_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "Очистить":
-        amount_str = "0"
-        try:
-            await _safe_edit(
-                message.bot,
-                chat_id=display_chat_id,
-                message_id=int(display_message_id),
-                text=": 0",
-            )
-        except Exception:
-            fallback = await safe_send_message(
-                message.bot,
-                chat_id=display_chat_id,
-                text=": 0",
-            )
-            if fallback:
-                display_message_id = fallback.message_id
-                await ui_register_message(state, display_chat_id, display_message_id)
-        await state.update_data(
-            hp_amount_str=amount_str,
-            hp_amount_display_chat_id=display_chat_id,
-            hp_amount_display_message_id=display_message_id,
-        )
-        return
-
-    if text == "✅ Газ":
-        error_message = None
-        try:
-            amount = int(amount_str or "0")
-        except ValueError:
-            error_message = ERR_INVALID_INPUT
-            amount = 0
-        else:
-            if amount <= 0:
-                error_message = "Сумма должна быть больше нуля."
-
-        title = (data.get("hp_new_title") or "").strip()
-        db = get_db()
-
-        if not title:
-            error_message = error_message or "Название платежа не задано."
-
-        if error_message is None:
-            position = db.get_next_household_position(message.from_user.id)
-            code = f"custom_{time.time_ns()}"
-            text_value = f"{title} {amount}р?"
-            db.add_household_payment_item(
-                message.from_user.id, code, text_value, amount, position
-            )
-            await db.init_household_questions_for_month(
-                message.from_user.id, current_month_str(now_for_user(db, message.from_user.id, DEFAULT_TZ))
-            )
-            LOGGER.info(
-                "Added household payment item (user_id=%s, code=%s, amount=%s, title=%s)",
-                message.from_user.id,
-                code,
-                amount,
-                title,
-            )
-
-        await _cleanup_input_ui(
-            message.bot,
-            data,
-            display_chat_key="hp_amount_display_chat_id",
-            display_message_key="hp_amount_display_message_id",
-        )
-        await _remove_calculator_keyboard(message)
-        await state.set_state(None)
-        previous_screen = await _pop_previous_screen(state) or "st:household_payments"
-        await render_settings_screen(
-            previous_screen,
-            message=message,
-            state=state,
-            error_message=error_message,
-        )
-
-
-@router.callback_query(F.data == "inc:del_menu")
-async def category_delete_menu(callback: CallbackQuery, state: FSMContext) -> None:
-    await callback.answer()
-    await state.set_state(None)
-    await _navigate_to_screen("inc:del_menu", message=callback.message, state=state)
+        text="Что удалить?" if times else "Времена пока не заданы.",
+        reply_markup=byt_timer_times_select_keyboard(times, "bt:del_time")
+        if times
+        else byt_timer_inline_keyboard(),

@@ -9,9 +9,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 from Bot.config.settings import get_settings
-from Bot.utils.datetime_utils import add_one_month, now_tz
+from Bot.utils.datetime_utils import add_one_month
+from Bot.utils.time import get_user_timezone, now_for_user
 from Bot.utils.text_sanitizer import sanitize_income_title
 
 
@@ -126,6 +128,12 @@ def _assert_no_legacy_table_names(cursor: sqlite3.Cursor) -> None:
                 )
 
 
+def _table_has_column(cursor, table_name: str, column_name: str) -> bool:
+    cursor.execute(f'PRAGMA table_info("{table_name}")')
+    cols = [row[1] for row in cursor.fetchall()]  # row[1] = name
+    return column_name in cols
+
+
 def migrate_schema(connection: sqlite3.Connection) -> None:
     cursor = connection.cursor()
     current_version = _get_user_version(cursor)
@@ -186,6 +194,7 @@ class FinanceDatabase:
         DB_PATH.touch(exist_ok=True)
         self.connection = sqlite3.connect(DB_PATH, check_same_thread=False)
         self.connection.row_factory = sqlite3.Row
+        self.tables = TABLES
         migrate_schema(self.connection)
         self.init_db()
         LOGGER.info("Database initialized at %s", DB_PATH)
@@ -336,13 +345,16 @@ class FinanceDatabase:
             f"""
             CREATE TABLE IF NOT EXISTS "{TABLES.user_settings}" (
                 user_id INTEGER PRIMARY KEY,
+                timezone TEXT NOT NULL,
                 purchased_keep_days INTEGER NOT NULL DEFAULT 30,
                 byt_reminders_enabled INTEGER NOT NULL DEFAULT 1,
                 byt_defer_enabled INTEGER NOT NULL DEFAULT 1,
                 byt_defer_max_days INTEGER NOT NULL DEFAULT 365,
                 household_debit_category TEXT,
                 wishlist_debit_category_id TEXT,
-                byt_wishlist_category_id TEXT
+                byt_wishlist_category_id TEXT,
+                created_at TEXT,
+                updated_at TEXT
             )
             """
         )
@@ -393,7 +405,17 @@ class FinanceDatabase:
         self._add_column_if_missing(
             cursor, TABLES.user_settings, "byt_wishlist_category_id", "TEXT"
         )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "timezone", "TEXT"
+        )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "created_at", "TEXT"
+        )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "updated_at", "TEXT"
+        )
         self._add_column_if_missing(cursor, TABLES.wishes, "debited_at", "TEXT")
+        self._ensure_indexes(cursor)
         self.connection.commit()
         self.sanitize_income_category_titles()
 
@@ -471,12 +493,20 @@ class FinanceDatabase:
             return 1
 
     def add_household_payment_item(
-        self, user_id: int, code: str, text: str, amount: int, position: int
+        self,
+        user_id: int,
+        code: str,
+        text: str,
+        amount: int,
+        position: int,
+        created_at: Optional[datetime] = None,
     ) -> None:
         """Add new household payment item."""
 
         try:
             cursor = self.connection.cursor()
+            default_tz = settings.TIMEZONE.key if hasattr(settings.TIMEZONE, "key") else str(settings.TIMEZONE)
+            created_value = created_at or now_for_user(self, user_id, default_tz)
             cursor.execute(
                 f"""
                 INSERT INTO {TABLES.household_payment_items} (
@@ -484,7 +514,7 @@ class FinanceDatabase:
                 )
                 VALUES (?, ?, ?, ?, ?, 1, ?)
                 """,
-                (user_id, code, text, amount, position, now_tz().isoformat()),
+                (user_id, code, text, amount, position, created_value.isoformat()),
             )
             self.connection.commit()
             LOGGER.info("Added household payment item %s for user %s", code, user_id)
@@ -660,21 +690,26 @@ class FinanceDatabase:
             if cursor.fetchone():
                 return
 
+            default_tz = settings.TIMEZONE.key if hasattr(settings.TIMEZONE, "key") else str(settings.TIMEZONE)
+            now_iso = datetime.now(tz=ZoneInfo(default_tz)).isoformat()
             cursor.execute(
                 f"""
                 INSERT OR IGNORE INTO {TABLES.user_settings} (
                     user_id,
+                    timezone,
                     purchased_keep_days,
                     byt_reminders_enabled,
                     byt_defer_enabled,
                     byt_defer_max_days,
                     household_debit_category,
                     wishlist_debit_category_id,
-                    byt_wishlist_category_id
+                    byt_wishlist_category_id,
+                    created_at,
+                    updated_at
                 )
-                VALUES (?, 30, 1, 1, 365, NULL, NULL, NULL)
+                VALUES (?, ?, 30, 1, 1, 365, NULL, NULL, NULL, ?, ?)
                 """,
-                (user_id,),
+                (user_id, default_tz, now_iso, now_iso),
             )
             self.connection.commit()
         except sqlite3.Error as error:
@@ -1318,13 +1353,16 @@ class FinanceDatabase:
                 f"""
                 SELECT
                     user_id,
+                    timezone,
                     purchased_keep_days,
                     byt_reminders_enabled,
                     byt_defer_enabled,
                     byt_defer_max_days,
                     household_debit_category,
                     wishlist_debit_category_id,
-                    byt_wishlist_category_id
+                    byt_wishlist_category_id,
+                    created_at,
+                    updated_at
                 FROM {TABLES.user_settings}
                 WHERE user_id = ?
                 LIMIT 1
@@ -1705,6 +1743,72 @@ class FinanceDatabase:
         if not self._column_exists(cursor, table, column):
             cursor.execute(f'ALTER TABLE "{table}" ADD COLUMN {column} {definition}')
 
+    def _ensure_indexes(self, cursor: sqlite3.Cursor) -> None:
+        """Create required indexes and unique constraints."""
+
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_savings_user_id ON "{TABLES.savings}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_wishes_user_id ON "{TABLES.wishes}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_wishes_user_category ON "{TABLES.wishes}" (user_id, category)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_purchases_user_id ON "{TABLES.purchases}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_household_payments_user_id ON "{TABLES.household_payments}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_household_items_user_id ON "{TABLES.household_payment_items}" (user_id)'
+        )
+        if _table_has_column(cursor, TABLES.ui_pins, "user_id"):
+            cursor.execute(
+                f'CREATE INDEX IF NOT EXISTS idx_ui_pins_user_id ON "{TABLES.ui_pins}" (user_id)'
+            )
+        else:
+            LOGGER.warning(
+                "ui_pins has no column user_id, skipping idx_ui_pins_user_id"
+            )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_income_categories_user_id ON "{TABLES.income_categories}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_expense_categories_user_id ON "{TABLES.expense_categories}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_wishlist_categories_user_id ON "{TABLES.wishlist_categories}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_byt_timer_times_user_id ON "{TABLES.byt_timer_times}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_byt_reminder_categories_user_id ON "{TABLES.byt_reminder_categories}" (user_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_byt_reminder_times_user_id ON "{TABLES.byt_reminder_times}" (user_id)'
+        )
+
+        cursor.execute(
+            f"""
+            SELECT user_id, hour, minute, COUNT(*) as cnt
+            FROM "{TABLES.byt_timer_times}"
+            GROUP BY user_id, hour, minute
+            HAVING cnt > 1
+            LIMIT 1
+            """
+        )
+        has_duplicates = cursor.fetchone() is not None
+        if not has_duplicates:
+            cursor.execute(
+                f"""
+                CREATE UNIQUE INDEX IF NOT EXISTS uniq_byt_timer_times_user_time
+                ON "{TABLES.byt_timer_times}" (user_id, hour, minute)
+                """
+            )
+
     def get_user_savings(self, user_id: int) -> Dict[str, Dict[str, Any]]:
         """Get all savings for a user.
 
@@ -2031,7 +2135,10 @@ class FinanceDatabase:
 
         try:
             cursor = self.connection.cursor()
-            purchased_value = (purchased_at or now_tz()).isoformat()
+            purchased_value = (
+                purchased_at
+                or datetime.now(tz=settings.TIMEZONE)
+            ).isoformat()
             cursor.execute(
                 f"""
                 UPDATE {TABLES.wishes}
@@ -2046,7 +2153,11 @@ class FinanceDatabase:
             LOGGER.error("Failed to mark wish %s as purchased: %s", wish_id, error)
 
     def purchase_wish(
-        self, user_id: int, wish_id: int, debit_category: str | None
+        self,
+        user_id: int,
+        wish_id: int,
+        debit_category: str | None,
+        purchased_at: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """Purchase wish with debit in a single transaction."""
 
@@ -2073,7 +2184,9 @@ class FinanceDatabase:
 
             price = self._to_float(row["price"])
             if price <= 0 or debit_category is None:
-                purchased_value = now_tz().isoformat()
+                purchased_value = (
+                    purchased_at or datetime.now(tz=settings.TIMEZONE)
+                ).isoformat()
                 cursor.execute(
                     f"""
                     UPDATE {TABLES.wishes}
@@ -2112,7 +2225,9 @@ class FinanceDatabase:
                 }
 
             self._update_saving_in_transaction(cursor, user_id, debit_category, -price)
-            purchased_value = now_tz().isoformat()
+            purchased_value = (
+                purchased_at or datetime.now(tz=settings.TIMEZONE)
+            ).isoformat()
             cursor.execute(
                 f"""
                 UPDATE {TABLES.wishes}
@@ -2153,7 +2268,9 @@ class FinanceDatabase:
 
         try:
             cursor = self.connection.cursor()
-            purchased_value = (purchased_at or now_tz()).isoformat()
+            purchased_value = (
+                purchased_at or datetime.now(tz=settings.TIMEZONE)
+            ).isoformat()
             cursor.execute(
                 f"INSERT INTO {TABLES.purchases} (user_id, wish_name, price, category, purchased_at) VALUES (?, ?, ?, ?, ?)",
                 (user_id, wish_name, price, category, purchased_value),
@@ -2516,7 +2633,9 @@ class FinanceDatabase:
             LOGGER.info("Fetched purchases for user %s", user_id)
             purchases = [dict(row) for row in rows]
             filtered: list[Dict[str, Any]] = []
-            current_time = now_tz()
+            default_tz = settings.TIMEZONE.key if hasattr(settings.TIMEZONE, "key") else str(settings.TIMEZONE)
+            user_tz = get_user_timezone(self, user_id, default_tz)
+            current_time = now_for_user(self, user_id, default_tz)
             settings_row = self.get_user_settings(user_id)
             default_days = int(settings_row.get("purchased_keep_days", 30) or 30)
             categories = self.list_active_wishlist_categories(user_id)
@@ -2541,7 +2660,7 @@ class FinanceDatabase:
                     try:
                         purchase_dt = datetime.fromisoformat(str(timestamp))
                         if purchase_dt.tzinfo is None:
-                            purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
+                            purchase_dt = purchase_dt.replace(tzinfo=ZoneInfo(user_tz))
                     except ValueError:
                         continue
                     if purchase_dt + keep_delta <= current_time:
@@ -2692,7 +2811,9 @@ class FinanceDatabase:
 
         if not category_title:
             return
-        current_time = now or now_tz()
+        default_tz = settings.TIMEZONE.key if hasattr(settings.TIMEZONE, "key") else str(settings.TIMEZONE)
+        current_time = now or now_for_user(self, user_id, default_tz)
+        user_tz = get_user_timezone(self, user_id, default_tz)
         try:
             cursor = self.connection.cursor()
             category_sql = "lower(trim(category)) = lower(trim(?))"
@@ -2718,7 +2839,7 @@ class FinanceDatabase:
                 try:
                     purchase_dt = datetime.fromisoformat(timestamp)
                     if purchase_dt.tzinfo is None:
-                        purchase_dt = purchase_dt.replace(tzinfo=settings.TIMEZONE)
+                        purchase_dt = purchase_dt.replace(tzinfo=ZoneInfo(user_tz))
                 except ValueError:
                     continue
                 if add_one_month(purchase_dt) <= current_time:
@@ -2754,7 +2875,7 @@ class FinanceDatabase:
                 try:
                     wish_dt = datetime.fromisoformat(purchased_at)
                     if wish_dt.tzinfo is None:
-                        wish_dt = wish_dt.replace(tzinfo=settings.TIMEZONE)
+                        wish_dt = wish_dt.replace(tzinfo=ZoneInfo(user_tz))
                 except ValueError:
                     continue
                 if add_one_month(wish_dt) <= current_time:

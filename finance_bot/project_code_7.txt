@@ -1,3 +1,408 @@
+                "Safe edit unexpected error (chat_id=%s, message_id=%s): %s",
+                chat_id,
+                message_id,
+                exc,
+            )
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe edit unexpected error details", exc_info=True)
+            return False, False
+    return False, False
+
+
+async def safe_send_message(
+    bot,
+    chat_id: int,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+):
+    """Safely send a message using bot.send_message without raising exceptions."""
+
+    log = _get_logger(logger)
+    normalized = "" if text is None else str(text)
+    if not normalized.strip():
+        normalized = "."
+    for attempt in range(retries + 1):
+        try:
+            return await bot.send_message(
+                chat_id=chat_id,
+                text=normalized,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+        except TelegramBadRequest as exc:
+            log.warning("Safe send failed: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe send failure details", exc_info=True)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "send_message", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return None
+            log.warning("Safe send unexpected error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe send unexpected error details", exc_info=True)
+            return None
+    return None
+
+
+async def safe_answer(
+    message_or_callback,
+    text: str,
+    reply_markup=None,
+    *,
+    parse_mode: str | None = None,
+    retries: int = 2,
+    base_delay: float = 0.3,
+    logger: logging.Logger | None = None,
+    request_timeout: int | None = DEFAULT_REQUEST_TIMEOUT,
+) -> int | None:
+    """Safely send a message using .answer without raising exceptions."""
+
+    log = _get_logger(logger)
+    for attempt in range(retries + 1):
+        try:
+            sent = await message_or_callback.answer(
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                request_timeout=request_timeout,
+            )
+            return int(sent.message_id)
+        except TelegramBadRequest as exc:
+            log.warning("Safe answer failed: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe answer failure details", exc_info=True)
+            return None
+        except Exception as exc:  # noqa: BLE001
+            if _is_network_error(exc):
+                _log_network_error(log, "answer", exc, attempt + 1, retries)
+                if attempt < retries:
+                    await asyncio.sleep(base_delay * 2**attempt)
+                    continue
+                return None
+            log.warning("Safe answer unexpected error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe answer unexpected error details", exc_info=True)
+            return None
+    return None
+
+
+async def safe_callback_answer(
+    callback,
+    text: str | None = None,
+    *,
+    show_alert: bool | None = None,
+    logger: logging.Logger | None = None,
+) -> None:
+    """Safely answer a callback query without raising exceptions."""
+
+    log = _get_logger(logger)
+    try:
+        await callback.answer(text=text, show_alert=show_alert)
+    except Exception as exc:  # noqa: BLE001
+        if _is_network_error(exc):
+            log.warning("Safe callback answer failed due to network error: %s", exc)
+            if log.isEnabledFor(logging.DEBUG):
+                log.debug("Safe callback answer network details", exc_info=True)
+            return
+        log.warning("Safe callback answer unexpected error: %s", exc)
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug("Safe callback answer unexpected error details", exc_info=True)
+
+===== Bot/utils/text_sanitizer.py =====
+
+"""Text sanitizers for user-facing labels."""
+from __future__ import annotations
+
+import re
+
+
+_TAIL_PATTERNS = [
+    r"на\s+тиньк",
+    r"на\s+альфу",
+    r"на\s+сбер",
+    r"на\s+яндекс",
+]
+
+
+def sanitize_income_title(text: str) -> str:
+    value = str(text or "")
+    for pattern in _TAIL_PATTERNS:
+        value = re.sub(rf"\s*(?:—|-|:)?\s*{pattern}", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\s*\(\s*озон\s*\)", "", value, flags=re.IGNORECASE)
+    value = re.sub(r"\(\s*\)", "", value)
+    value = re.sub(r"\s{2,}", " ", value)
+    return value.strip(" -—:\t\n")
+
+===== Bot/utils/time_input.py =====
+
+"""Utilities for normalizing time input."""
+
+from __future__ import annotations
+
+import re
+
+
+def _is_valid_time(hour: int, minute: int) -> bool:
+    return 0 <= hour <= 23 and 0 <= minute <= 59
+
+
+def normalize_time_partial(text: str) -> tuple[str, bool]:
+    """Normalize partial time input into HH:, HH:MM, or empty string.
+
+    Returns a tuple of (normalized, is_complete).
+    """
+
+    value = (text or "").replace(" ", "")
+    if not value:
+        return "", False
+
+    if re.fullmatch(r"\d{2}$", value):
+        hour = int(value)
+        if 0 <= hour <= 23:
+            return f"{hour:02d}:", False
+        return "", False
+
+    if re.fullmatch(r"\d{2}:$", value):
+        hour = int(value[:2])
+        if 0 <= hour <= 23:
+            return f"{hour:02d}:", False
+        return "", False
+
+    if re.fullmatch(r"\d{4}$", value):
+        hour = int(value[:2])
+        minute = int(value[2:])
+        if _is_valid_time(hour, minute):
+            return f"{hour:02d}:{minute:02d}", True
+        return "", False
+
+    if re.fullmatch(r"\d{2}:\d{2}$", value):
+        hour = int(value[:2])
+        minute = int(value[3:])
+        if _is_valid_time(hour, minute):
+            return f"{hour:02d}:{minute:02d}", True
+        return "", False
+
+    return "", False
+
+===== Bot/utils/ui_cleanup.py =====
+
+import logging
+from typing import List
+
+from aiogram import Bot
+from aiogram.types import ReplyKeyboardMarkup, ReplyKeyboardRemove
+from aiogram.fsm.context import FSMContext
+
+from Bot.database.get_db import get_db
+from Bot.utils.telegram_safe import (
+    safe_delete_message,
+    safe_edit_message_text,
+    safe_send_message,
+)
+
+LOGGER = logging.getLogger(__name__)
+
+
+async def ui_register_message(state: FSMContext, chat_id: int, message_id: int) -> None:
+    """Track a UI message id for later cleanup."""
+
+    data = await state.get_data()
+    ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    if message_id not in ids:
+        ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
+    current_chat_id = data.get("ui_chat_id")
+    await state.update_data(
+        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
+        ui_tracked_message_ids=ids,
+    )
+
+
+async def ui_register_protected_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    """Track a UI message id that should never be deleted."""
+
+    data = await state.get_data()
+    ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    if message_id not in ids:
+        ids.append(int(message_id))
+    if len(ids) > 300:
+        ids = ids[-300:]
+    current_chat_id = data.get("ui_chat_id")
+    await state.update_data(
+        ui_chat_id=current_chat_id if current_chat_id is not None else chat_id,
+        ui_protected_message_ids=ids,
+    )
+
+
+async def ui_register_user_message(state: FSMContext, chat_id: int, message_id: int) -> None:
+    """Do not track user messages for later cleanup."""
+
+    data = await state.get_data()
+    if data.get("ui_chat_id") is None:
+        await state.update_data(ui_chat_id=chat_id)
+
+
+async def ui_safe_delete_message(
+    bot: Bot,
+    chat_id: int,
+    message_id: int,
+    log_context: str | None = None,
+    state: FSMContext | None = None,
+) -> bool:
+    if state is not None:
+        protected_ids = await ui_get_protected_ids(state)
+        if int(message_id) in protected_ids:
+            LOGGER.info("SKIP_DELETE_PROTECTED message_id=%s", message_id)
+            return False
+    return await safe_delete_message(
+        bot,
+        chat_id=chat_id,
+        message_id=message_id,
+        logger=LOGGER,
+    )
+
+
+async def ui_get_welcome_id(state: FSMContext) -> int | None:
+    data = await state.get_data()
+    welcome_id = data.get("ui_welcome_message_id")
+    return int(welcome_id) if welcome_id is not None else None
+
+
+async def ui_get_protected_ids(state: FSMContext) -> set[int]:
+    welcome_id = await ui_get_welcome_id(state)
+    if welcome_id is None:
+        return set()
+    return {int(welcome_id)}
+
+
+async def ui_set_welcome_id(
+    state: FSMContext, message_id: int, chat_id: int | None = None
+) -> None:
+    update = {"ui_welcome_message_id": int(message_id)}
+    if chat_id is not None:
+        update["ui_chat_id"] = int(chat_id)
+    await state.update_data(**update)
+
+
+async def ui_set_welcome_message(
+    bot: Bot, state: FSMContext, chat_id: int, text: str
+) -> int:
+    welcome_id = await ui_get_welcome_id(state)
+    if welcome_id is not None:
+        edited = await safe_edit_message_text(
+            bot,
+            chat_id=chat_id,
+            message_id=int(welcome_id),
+            text=text,
+            logger=LOGGER,
+        )
+        if edited:
+            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, welcome_id)
+            return int(welcome_id)
+
+    if welcome_id is None:
+        db = get_db()
+        persisted = db.get_welcome_message_id(chat_id)
+        if persisted is not None:
+            await ui_set_welcome_id(state, int(persisted), chat_id=chat_id)
+            LOGGER.info("WELCOME reused (chat_id=%s, message_id=%s)", chat_id, persisted)
+            return int(persisted)
+
+    sent = await safe_send_message(bot, chat_id=chat_id, text=text, logger=LOGGER)
+    if sent:
+        await ui_set_welcome_id(state, int(sent.message_id), chat_id=chat_id)
+        get_db().set_welcome_message_id(chat_id, int(sent.message_id))
+        LOGGER.info("WELCOME created (chat_id=%s, message_id=%s)", chat_id, sent.message_id)
+        return int(sent.message_id)
+    return 0
+
+
+async def ui_set_settings_mode_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_set_screen_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+    await state.update_data(ui_screen_message_id=int(message_id), ui_chat_id=chat_id)
+
+
+async def ui_track_message(
+    state: FSMContext, chat_id: int, message_id: int
+) -> None:
+    await ui_register_message(state, chat_id, message_id)
+
+
+async def ui_cleanup_to_context(
+    bot: Bot,
+    state: FSMContext,
+    chat_id: int,
+    context_name: str,
+    keep_ids: List[int] | None = None,
+) -> None:
+    data = await state.get_data()
+    tracked_ids: List[int] = list(data.get("ui_tracked_message_ids") or [])
+    protected_ids = await ui_get_protected_ids(state)
+    extra_protected_ids: List[int] = list(data.get("ui_protected_message_ids") or [])
+    keep_id_set = {int(item) for item in (keep_ids or []) if item is not None}
+    for protected_id in extra_protected_ids:
+        protected_ids.add(int(protected_id))
+    keep_id_set.update(protected_ids)
+    delete_ids = []
+    for mid in tracked_ids:
+        mid_int = int(mid)
+        if mid_int in keep_id_set:
+            continue
+        delete_ids.append(mid_int)
+    kept_ids = {mid for mid in (int(item) for item in tracked_ids) if mid in keep_id_set}
+    deleted_count = 0
+    for message_id in delete_ids:
+        deleted = await ui_safe_delete_message(
+            bot,
+            chat_id=chat_id,
+            message_id=message_id,
+            log_context=f"context={context_name}",
+            state=state,
+        )
+        if deleted:
+            deleted_count += 1
+
+    LOGGER.info(
+        "UI_CLEANUP context=%s deleted=%s kept=%s welcome_id=%s",
+        context_name,
+        deleted_count,
+        len(kept_ids),
+        await ui_get_welcome_id(state),
+    )
+    await state.update_data(
+        ui_tracked_message_ids=list(
+            {
+                int(item)
+                for item in (keep_ids or [])
+                if item is not None
+                and int(item) not in protected_ids
+            }
+        ),
+    )
+
+
 async def ui_cleanup_messages(bot: Bot, state: FSMContext, *args, **kwargs) -> None:
     data = await state.get_data()
     chat_id = kwargs.get("chat_id") or data.get("ui_chat_id")
@@ -166,6 +571,67 @@ pytest
 
 ===== tests/integration/__init__.py =====
 
+
+===== tests/integration/test_db_startup_indexes.py =====
+
+"""Integration tests for startup indexes."""
+import sqlite3
+
+from Bot.database.crud import TABLES, FinanceDatabase
+
+
+def _create_min_schema(cursor: sqlite3.Cursor) -> None:
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.savings}" (user_id INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.wishes}" (user_id INTEGER, category TEXT)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.purchases}" (user_id INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.household_payments}" (user_id INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.household_payment_items}" (user_id INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.ui_pins}" (chat_id INTEGER PRIMARY KEY, welcome_message_id INTEGER, updated_at TEXT)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.income_categories}" (user_id INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.expense_categories}" (user_id INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.wishlist_categories}" (user_id INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.byt_timer_times}" (user_id INTEGER, hour INTEGER, minute INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.byt_reminder_categories}" (user_id INTEGER)'
+    )
+    cursor.execute(
+        f'CREATE TABLE "{TABLES.byt_reminder_times}" (user_id INTEGER)'
+    )
+
+
+def test_ensure_indexes_skips_missing_ui_pins_user_id() -> None:
+    """Ensure ui_pins user_id index is skipped when the column is missing."""
+
+    connection = sqlite3.connect(":memory:")
+    cursor = connection.cursor()
+    _create_min_schema(cursor)
+
+    db = FinanceDatabase.__new__(FinanceDatabase)
+    db._ensure_indexes(cursor)
+
+    cursor.execute(f'PRAGMA index_list("{TABLES.ui_pins}")')
+    index_names = [row[1] for row in cursor.fetchall()]
+    assert "idx_ui_pins_user_id" not in index_names
 
 ===== tests/integration/test_database.py =====
 
@@ -371,6 +837,7 @@ if __name__ == "__main__":
 
 from Bot.utils.byt_manual_check import (
     build_byt_times_sorted,
+    parse_byt_manual_cursor_index,
     select_next_byt_manual_time,
 )
 
@@ -406,6 +873,18 @@ def test_select_next_byt_manual_time_cycles() -> None:
     assert selected == "12:00"
     assert index == 0
     assert notice == "Сегодня все времена уже проверены — начинаю заново."
+
+
+def test_parse_byt_manual_cursor_index_zero_is_valid() -> None:
+    assert parse_byt_manual_cursor_index(0) == 0
+    assert parse_byt_manual_cursor_index("0") == 0
+
+
+def test_parse_byt_manual_cursor_index_invalid_returns_minus_one() -> None:
+    assert parse_byt_manual_cursor_index(None) == -1
+    assert parse_byt_manual_cursor_index("") == -1
+    assert parse_byt_manual_cursor_index("   ") == -1
+    assert parse_byt_manual_cursor_index("abc") == -1
 
 ===== tests/unit/test_byt_reminder_schedule.py =====
 
@@ -1161,6 +1640,32 @@ def test_start_income_flow_with_empty_categories(monkeypatch) -> None:
     message.answer.assert_awaited_once()
     assert "Категории дохода не настроены" in message.answer.await_args.args[0]
 
+===== tests/unit/test_number_input.py =====
+
+"""Tests for numeric input parsing."""
+
+from Bot.utils.number_input import parse_int_choice, parse_positive_int
+
+
+def test_parse_int_choice_basic() -> None:
+    assert parse_int_choice("2") == 2
+    assert parse_int_choice("  2 ") == 2
+    assert parse_int_choice("+2") == 2
+
+
+def test_parse_int_choice_invalid() -> None:
+    assert parse_int_choice("ab") is None
+
+
+def test_parse_positive_int_basic() -> None:
+    assert parse_positive_int("2") == 2
+    assert parse_positive_int(" +3 ") == 3
+
+
+def test_parse_positive_int_invalid() -> None:
+    assert parse_positive_int("0") is None
+    assert parse_positive_int("-1") is None
+
 ===== tests/unit/test_telegram_safe.py =====
 
 """Tests for telegram_safe utilities."""
@@ -1360,6 +1865,42 @@ def test_sanitize_income_title_removes_ozon_suffix() -> None:
     text = "что-то (озон)"
     assert sanitize_income_title(text) == "что-то"
 
+===== tests/unit/test_time_input.py =====
+
+"""Tests for time input normalization."""
+
+from Bot.utils.time_input import normalize_time_partial
+
+
+def test_normalize_time_partial_hour_only() -> None:
+    assert normalize_time_partial("12") == ("12:", False)
+    assert normalize_time_partial("00") == ("00:", False)
+    assert normalize_time_partial("23") == ("23:", False)
+
+
+def test_normalize_time_partial_invalid_hour() -> None:
+    assert normalize_time_partial("24") == ("", False)
+
+
+def test_normalize_time_partial_compact_time() -> None:
+    assert normalize_time_partial("1230") == ("12:30", True)
+
+
+def test_normalize_time_partial_colon_time() -> None:
+    assert normalize_time_partial("12:30") == ("12:30", True)
+
+
+def test_normalize_time_partial_hour_with_colon() -> None:
+    assert normalize_time_partial("12:") == ("12:", False)
+
+
+def test_normalize_time_partial_invalid_minutes() -> None:
+    assert normalize_time_partial("1260") == ("", False)
+
+
+def test_normalize_time_partial_invalid_text() -> None:
+    assert normalize_time_partial("ab") == ("", False)
+
 ===== tests/unit/test_ui_cleanup.py =====
 
 """Tests for UI cleanup utilities."""
@@ -1518,224 +2059,3 @@ def test_ui_cleanup_keeps_welcome() -> None:
                 "ui_welcome_message_id": 111,
                 "ui_tracked_message_ids": [111, 222, 333],
             }
-        )
-
-        bot = DummyBot()
-        await ui_cleanup_to_context(bot, state, 1, "MAIN_MENU")
-
-        deleted_ids = {
-            call.kwargs["message_id"] for call in bot.delete_message.call_args_list
-        }
-        assert deleted_ids == {222, 333}
-        data = await state.get_data()
-        assert data["ui_tracked_message_ids"] == []
-
-    asyncio.run(run_test())
-
-
-def test_ui_register_protected_not_tracked() -> None:
-    """Protected messages are stored separately from tracked list."""
-
-    async def run_test() -> None:
-        state = DummyState()
-        await ui_register_protected_message(state, 1, 55)
-        data = await state.get_data()
-        assert data.get("ui_protected_message_ids") == [55]
-        assert data.get("ui_tracked_message_ids") in (None, [])
-
-    asyncio.run(run_test())
-
-
-def test_back_to_main_deletes_and_cleans(monkeypatch) -> None:
-    """back_to_main deletes user message, cleans UI, and renders menu."""
-
-    async def run_test() -> None:
-        state = DummyState({"ui_welcome_message_id": 55})
-        cleanup_mock = AsyncMock()
-        render_mock = AsyncMock()
-        build_menu_mock = AsyncMock(return_value=MagicMock())
-        safe_delete_mock = AsyncMock(return_value=True)
-
-        monkeypatch.setattr("Bot.handlers.start.ui_cleanup_to_context", cleanup_mock)
-        monkeypatch.setattr("Bot.handlers.start.ui_render_screen", render_mock)
-        monkeypatch.setattr(
-            "Bot.handlers.start.build_main_menu_for_user", build_menu_mock
-        )
-        monkeypatch.setattr("Bot.handlers.start.ui_safe_delete_message", safe_delete_mock)
-
-        message = SimpleNamespace(
-            chat=SimpleNamespace(id=1),
-            from_user=SimpleNamespace(id=2),
-            message_id=10,
-            bot=SimpleNamespace(),
-        )
-
-        await back_to_main(message, state)
-
-        safe_delete_mock.assert_awaited_once()
-        cleanup_mock.assert_awaited_once()
-        _, kwargs = cleanup_mock.await_args
-        assert kwargs.get("keep_ids") is None
-        build_menu_mock.assert_awaited_once_with(2)
-        render_mock.assert_awaited_once()
-
-    asyncio.run(run_test())
-
-
-def test_welcome_reused_on_start() -> None:
-    """Welcome message is reused when id exists."""
-
-    async def run_test() -> None:
-        state = DummyState({"ui_welcome_message_id": 77})
-        bot = DummyBot()
-        bot.send_message.return_value = SimpleNamespace(message_id=88)
-
-        welcome_id = await ui_set_welcome_message(bot, state, 1, "Hello")
-
-        assert welcome_id == 77
-        bot.edit_message_text.assert_awaited_once()
-        bot.send_message.assert_not_called()
-
-    asyncio.run(run_test())
-
-===== tests/unit/test_utils.py =====
-
-"""Utility tests."""
-from datetime import datetime, time
-from zoneinfo import ZoneInfo
-
-from Bot.utils.datetime_utils import get_next_byt_run_dt, resolve_deferred_until
-from Bot.utils.logging import init_logging
-
-
-def test_init_logging_returns_logger() -> None:
-    """init_logging should return a logger instance."""
-
-    logger = init_logging()
-    assert logger.name == "Bot.utils.logging"
-
-
-def test_get_next_byt_run_dt_before_slot() -> None:
-    """Return today's slot when current time is before it."""
-
-    tz = ZoneInfo("UTC")
-    now = datetime(2024, 1, 1, 10, 0, tzinfo=tz)
-    result = get_next_byt_run_dt(now, [time(12, 0)])
-    assert result == datetime(2024, 1, 1, 12, 0, tzinfo=tz)
-
-
-def test_get_next_byt_run_dt_after_slot() -> None:
-    """Return next day's slot when current time is after it."""
-
-    tz = ZoneInfo("UTC")
-    now = datetime(2024, 1, 1, 13, 0, tzinfo=tz)
-    result = get_next_byt_run_dt(now, [time(12, 0)])
-    assert result == datetime(2024, 1, 2, 12, 0, tzinfo=tz)
-
-
-def test_get_next_byt_run_dt_multiple_slots() -> None:
-    """Pick closest upcoming slot from multiple options."""
-
-    tz = ZoneInfo("UTC")
-    now = datetime(2024, 1, 1, 12, 0, tzinfo=tz)
-    result = get_next_byt_run_dt(now, [time(9, 0), time(18, 0)])
-    assert result == datetime(2024, 1, 1, 18, 0, tzinfo=tz)
-
-
-def test_resolve_deferred_until_keeps_later() -> None:
-    """Do not shorten existing deferred_until value."""
-
-    tz = ZoneInfo("UTC")
-    existing = datetime(2024, 1, 3, 12, 0, tzinfo=tz)
-    candidate = datetime(2024, 1, 2, 12, 0, tzinfo=tz)
-    result = resolve_deferred_until(existing, candidate)
-    assert result == existing
-
-===== tests/unit/test_wishlist_debit_category.py =====
-
-"""Tests for wishlist debit category settings."""
-from Bot.database import crud
-
-
-def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
-    db_path = tmp_path / "finance.db"
-    monkeypatch.setattr(crud, "DB_PATH", db_path)
-    crud.FinanceDatabase._instance = None
-    return crud.FinanceDatabase()
-
-
-def test_set_and_get_wishlist_debit_category(tmp_path, monkeypatch) -> None:
-    """Wishlist debit category should persist in user settings."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        db.set_wishlist_debit_category(1, "alpha")
-        assert db.get_wishlist_debit_category(1) == "alpha"
-        db.set_wishlist_debit_category(1, None)
-        assert db.get_wishlist_debit_category(1) is None
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-===== tests/unit/test_wishlist_purchase.py =====
-
-"""Tests for wishlist purchase flow."""
-from Bot.database import crud
-
-
-def _fresh_db(tmp_path, monkeypatch) -> crud.FinanceDatabase:
-    db_path = tmp_path / "finance.db"
-    monkeypatch.setattr(crud, "DB_PATH", db_path)
-    crud.FinanceDatabase._instance = None
-    return crud.FinanceDatabase()
-
-
-def test_purchase_wishlist_without_debit(tmp_path, monkeypatch) -> None:
-    """Purchase without debit should not change savings."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        wish_id = db.add_wish(1, "Laptop", 100.0, None, "Work")
-        result = db.purchase_wish(1, wish_id, None)
-        assert result.get("status") == "no_debit"
-        wish = db.get_wish(wish_id)
-        assert wish is not None
-        assert wish.get("is_purchased") == 1
-        assert wish.get("debited_at") is None
-        savings_map = db.get_user_savings_map(1)
-        assert "alpha" not in savings_map
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-
-def test_purchase_wishlist_debit_idempotent(tmp_path, monkeypatch) -> None:
-    """Purchase should debit once and be idempotent."""
-
-    db = _fresh_db(tmp_path, monkeypatch)
-    try:
-        wish_id = db.add_wish(2, "Phone", 50.0, None, "Fun")
-        db.update_saving(2, "alpha", 100.0)
-        result = db.purchase_wish(2, wish_id, "alpha")
-        assert result.get("status") == "debited"
-        savings_map = db.get_user_savings_map(2)
-        assert savings_map.get("alpha") == 50.0
-        result_again = db.purchase_wish(2, wish_id, "alpha")
-        assert result_again.get("status") == "already"
-        savings_map_again = db.get_user_savings_map(2)
-        assert savings_map_again.get("alpha") == 50.0
-        wish = db.get_wish(wish_id)
-        assert wish is not None
-        assert wish.get("debited_at") is not None
-    finally:
-        db.close()
-        crud.FinanceDatabase._instance = None
-
-===== utils/__init__.py =====
-
-from Bot.utils import *  # noqa: F401,F403
-
-===== utils/logging.py =====
-
-from Bot.utils.logging import *  # noqa: F401,F403
-

@@ -8,14 +8,11 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message, ReplyKeyboardRemove
 
-from Bot.config import settings
+from Bot.config.settings import get_settings
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.handlers.wishlist import _build_byt_items_keyboard
-from Bot.utils.byt_render import (
-    format_byt_category_checklist_text,
-    get_byt_category_items,
-)
+from Bot.utils.byt_render import format_byt_category_checklist_text
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.keyboards.settings import (
     household_remove_keyboard,
@@ -27,6 +24,7 @@ from Bot.renderers.household import (
     format_household_items,
     render_household_questions_text,
 )
+from Bot.services.byt_service import build_manual_check_summary
 from Bot.services.household import (
     build_answers_from_status,
     build_household_questions,
@@ -38,12 +36,16 @@ from Bot.services.household import (
     should_ignore_answer,
     update_flow_state,
 )
+from Bot.services.household_service import ensure_household_month
 from Bot.states.money_states import HouseholdPaymentsState, HouseholdSettingsState
 from Bot.utils.byt_manual_check import (
     build_byt_times_sorted,
+    parse_byt_manual_cursor_index,
     select_next_byt_manual_time,
 )
-from Bot.utils.datetime_utils import current_month_str, now_tz
+from Bot.utils.datetime_utils import current_month_str
+from Bot.utils.messages import ERR_GENERIC
+from Bot.utils.time import now_for_user
 from Bot.utils.savings import format_savings_summary
 from Bot.utils.telegram_safe import (
     safe_answer,
@@ -63,6 +65,11 @@ from Bot.utils.ui_cleanup import (
 LOGGER = logging.getLogger(__name__)
 
 router = Router(name="household_payments")
+DEFAULT_TZ = (
+    get_settings().timezone.key
+    if hasattr(get_settings().timezone, "key")
+    else str(get_settings().timezone)
+)
 
 
 def _format_meta(meta: dict) -> str:
@@ -192,12 +199,15 @@ async def reset_household_cycle_if_needed(
 ) -> None:
     """Lazily reset household payments cycle after 6th of month at noon."""
 
-    current = now or datetime.now(tz=settings.TIMEZONE)
+    current = now or now_for_user(db, user_id, DEFAULT_TZ)
     month = current_month_str(current)
 
-    threshold = datetime(current.year, current.month, 6, 12, 0, tzinfo=settings.TIMEZONE)
+    threshold = datetime(current.year, current.month, 6, 12, 0, tzinfo=current.tzinfo)
     if current >= threshold:
-        await db.init_household_questions_for_month(user_id, month)
+        clock = lambda uid: now_for_user(db, uid, DEFAULT_TZ)
+        await ensure_household_month(
+            db=db, clock=clock, logger=LOGGER, user_id=user_id, month=month
+        )
 
 
 def _format_household_items(
@@ -211,7 +221,7 @@ async def _send_household_settings_overview(
     message: Message, db, user_id: int
 ) -> None:
     items = db.list_active_household_items(user_id)
-    month = current_month_str()
+    month = current_month_str(now_for_user(db, user_id, DEFAULT_TZ))
     unpaid_codes = await db.get_unpaid_household_questions(user_id, month)
     unpaid_set: set[str] = set(unpaid_codes)
     _log_event(
@@ -491,8 +501,11 @@ async def start_household_payments(message: Message, state: FSMContext) -> None:
         )
         return
 
-    month = current_month_str()
-    await db.init_household_questions_for_month(user_id, month)
+    month = current_month_str(now_for_user(db, user_id, DEFAULT_TZ))
+    clock = lambda uid: now_for_user(db, uid, DEFAULT_TZ)
+    await ensure_household_month(
+        db=db, clock=clock, logger=LOGGER, user_id=user_id, month=month
+    )
     status_map = await db.get_household_payment_status_map(user_id, month)
     questions = build_household_questions(items)
     answers = build_answers_from_status(status_map)
@@ -615,7 +628,7 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
             await ui_register_message(state, message.chat.id, sent_id)
         return
 
-    now_dt = now_tz()
+    now_dt = now_for_user(db, user_id, DEFAULT_TZ)
     category_times: dict[int, list[str]] = {}
     enabled_category_ids: list[int] = []
     for category in categories:
@@ -656,7 +669,7 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
     data = await state.get_data()
     current_date = now_dt.date().isoformat()
     saved_date = data.get("byt_manual_cursor_date")
-    index = int(data.get("byt_manual_cursor_index") or -1)
+    index = parse_byt_manual_cursor_index(data.get("byt_manual_cursor_index"))
     LOGGER.info(
         "USER=%s ACTION=BYT_MANUAL_CURSOR META=before date=%s index=%s",
         user_id,
@@ -731,20 +744,32 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
 
     settings_row = db.get_user_settings(user_id)
     allow_defer = bool(settings_row.get("byt_defer_enabled", 1))
-    total_count = 0
-    due_count = 0
-    deferred_count = 0
-    for category in target_categories:
-        category_id = int(category.get("id") or 0)
-        category_title = str(category.get("title", ""))
-        db.cleanup_old_byt_purchases(user_id, category_title, trigger_dt)
-        due_items, deferred_items = get_byt_category_items(
-            db, user_id, category_title, trigger_dt
+    clock = lambda uid: now_for_user(db, uid, DEFAULT_TZ)
+    summary_result = build_manual_check_summary(
+        db=db,
+        clock=clock,
+        logger=LOGGER,
+        user_id=user_id,
+        time_str=selected_time,
+        category_ids=[int(category.get("id") or 0) for category in target_categories],
+    )
+    if isinstance(summary_result, dict):
+        summary = summary_result.get("summary")
+        category_data = summary_result.get("categories", [])
+    else:
+        await safe_answer(
+            message,
+            ERR_GENERIC,
+            reply_markup=await build_main_menu_for_user(user_id),
+            logger=LOGGER,
         )
-        total_items = len(due_items) + len(deferred_items)
-        total_count += total_items
-        due_count += len(due_items)
-        deferred_count += len(deferred_items)
+        return
+
+    for category_info in category_data:
+        category_id = int(category_info.get("category_id") or 0)
+        category_title = str(category_info.get("category_title", ""))
+        due_items = category_info.get("due_items") or []
+        deferred_items = category_info.get("deferred_items") or []
         text = format_byt_category_checklist_text(
             category_title, due_items, deferred_items
         )
@@ -764,15 +789,16 @@ async def trigger_household_notifications(message: Message, state: FSMContext) -
         )
         if sent:
             await ui_register_message(state, sent.chat.id, sent.message_id)
-    LOGGER.info(
-        "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=%s categories=%s total=%s due=%s deferred=%s",
-        user_id,
-        selected_time,
-        categories_meta,
-        total_count,
-        due_count,
-        deferred_count,
-    )
+    if summary:
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MANUAL_CHECK_RESULT META=time=%s categories=%s total=%s due=%s deferred=%s",
+            user_id,
+            selected_time,
+            categories_meta,
+            summary.total,
+            summary.due,
+            summary.deferred,
+        )
     await state.update_data(
         byt_manual_cursor_date=current_date,
         byt_manual_cursor_index=next_index,

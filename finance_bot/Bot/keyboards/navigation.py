@@ -4,6 +4,18 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from Bot.constants.ui_labels import NAV_BACK, NAV_HOME
 
 
+def nav_back(back_cb: str) -> InlineKeyboardMarkup:
+    """Inline keyboard with Back button."""
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text=NAV_BACK, callback_data=back_cb),
+            ]
+        ]
+    )
+
+
 def nav_back_home(back_cb: str, home_cb: str) -> InlineKeyboardMarkup:
     """Inline keyboard with Back and Home buttons."""
 

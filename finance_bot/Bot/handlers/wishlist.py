@@ -332,7 +332,7 @@ async def add_wish_price_manual(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.message(WishlistState.waiting_for_url, F.text != "⬅️ Назад")
+@router.message(WishlistState.waiting_for_url, ~F.text.in_({NAV_BACK, "⬅️ Назад"}))
 async def add_wish_url(message: Message, state: FSMContext) -> None:
     """Save URL and request category selection."""
 

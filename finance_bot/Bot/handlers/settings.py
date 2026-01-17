@@ -17,7 +17,6 @@ from aiogram.types import (
 
 from Bot.constants.ui_labels import (
     NAV_BACK,
-    NAV_HOME,
     WISHLIST_DEBIT_CATEGORY_BACK,
     WISHLIST_DEBIT_CATEGORY_BUTTON,
     WISHLIST_DEBIT_CATEGORY_NONE,
@@ -27,6 +26,7 @@ from Bot.config.settings import get_settings
 from Bot.database.get_db import get_db
 from Bot.handlers.common import build_main_menu_for_user
 from Bot.keyboards.main import back_only_keyboard
+from Bot.keyboards.navigation import nav_back
 from Bot.keyboards.settings import (
     byt_category_toggle_keyboard,
     byt_rules_reply_keyboard,
@@ -55,7 +55,7 @@ from Bot.states.wishlist_states import (
     WishlistSettingsState,
 )
 from Bot.utils.datetime_utils import current_month_str
-from Bot.utils.messages import ERR_INVALID_INPUT, HINT_TIME_FORMAT
+from Bot.utils.messages import ERR_INVALID_INPUT, HINT_TIME_FORMAT, HINT_USE_BUTTONS
 from Bot.utils.number_input import parse_int_choice, parse_positive_int
 from Bot.utils.time_input import normalize_time_partial
 from Bot.utils.savings import format_savings_summary
@@ -328,6 +328,7 @@ async def _render_reply_settings_page(
 
 
 async def _render_settings_home(message: Message, state: FSMContext) -> None:
+    await state.update_data(in_settings=True, settings_current_screen="st:home")
     await _render_reply_settings_page(
         message=message,
         state=state,
@@ -752,14 +753,7 @@ async def _render_byt_timer_settings(
             categories, "byt:timer_category"
         )
         if categories
-        else InlineKeyboardMarkup(
-            inline_keyboard=[
-                [
-                    InlineKeyboardButton(text=NAV_BACK, callback_data="st:byt_rules"),
-                    InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home"),
-                ]
-            ]
-        ),
+        else nav_back("st:byt_rules"),
     )
     return categories
 
@@ -951,6 +945,7 @@ async def render_settings_screen(
     error_message: str | None = None,
     force_new: bool = False,
 ) -> None:
+    await state.update_data(in_settings=True, settings_current_screen=screen_id)
     db = get_db()
     data = await state.get_data()
     user_id = message.from_user.id
@@ -1246,6 +1241,13 @@ async def open_timezone_settings(callback: CallbackQuery, state: FSMContext) -> 
 async def open_timezone_settings_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
+        await _register_user_message(state, message)
+        await _delete_user_message(message)
+        await _send_and_register(
+            message=message,
+            state=state,
+            text=f"{ERR_INVALID_INPUT}\n{HINT_USE_BUTTONS}",
+        )
         return
     await _register_user_message(state, message)
     await _delete_user_message(message)
@@ -1261,7 +1263,12 @@ async def update_timezone(callback: CallbackQuery, state: FSMContext) -> None:
     tz_value = callback.data.split("st:tz:", maxsplit=1)[-1]
     db = get_db()
     set_user_timezone(db, callback.from_user.id, tz_value, DEFAULT_TZ)
-    await render_settings_screen("st:timezone", message=callback.message, state=state)
+    await render_settings_screen(
+        "st:timezone",
+        message=callback.message,
+        state=state,
+        error_message=f"✅ Таймзона установлена: {tz_value}",
+    )
 
 
 @router.message(F.text.in_({NAV_BACK, "Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}))
@@ -2490,7 +2497,7 @@ async def income_new_category_percent(message: Message, state: FSMContext) -> No
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
+    if text in {NAV_BACK, "Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     percent_str = data.get("new_income_percent_str", "0")
@@ -2666,7 +2673,7 @@ async def household_payment_amount(message: Message, state: FSMContext) -> None:
     amount_str = data.get("hp_amount_str", "0")
     display_chat_id = data.get("hp_amount_display_chat_id", message.chat.id)
     display_message_id = data.get("hp_amount_display_message_id")
-    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
+    if text in {NAV_BACK, "Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     if text not in PERCENT_INPUT_BUTTONS:
@@ -3031,7 +3038,7 @@ async def income_percent_value(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
+    if text in {NAV_BACK, "Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     percent_str = data.get("percent_str", "0")
@@ -3201,7 +3208,7 @@ async def wishlist_purchased_days_value(message: Message, state: FSMContext) -> 
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
+    if text in {NAV_BACK, "Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     days_str = data.get("purchased_days_str", "0")
@@ -3349,7 +3356,7 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
     text = (message.text or "").strip()
     await _register_user_message(state, message)
     await _delete_user_message(message)
-    if text in {"Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
+    if text in {NAV_BACK, "Назад", "⬅ Назад", "⬅️ Назад", "⏪ Назад"}:
         return
 
     days_str = data.get("byt_max_days_str", "0")

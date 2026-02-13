@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Bot + WebApp" type="CompoundRunConfigurationType">
+    <toRun name="Finance Bot" type="PythonConfigurationType" />
+    <toRun name="WebApp Server" type="PythonConfigurationType" />
+    <method v="2" />
+  </configuration>
+</component>

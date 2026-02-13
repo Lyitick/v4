@@ -644,3 +644,169 @@ body {
   background: var(--tg-bg);
   color: var(--tg-hint);
 }
+
+/* ── Recurring page ────────────────────────────────── */
+.recurring-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+}
+
+.recurring-form__row {
+  display: flex;
+  gap: 8px;
+}
+
+.recurring-form__day {
+  max-width: 80px;
+}
+
+.recurring-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.recurring-card {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--tg-secondary-bg);
+  border-radius: 10px;
+  padding: 12px;
+}
+
+.recurring-card__info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.recurring-card__title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.recurring-card__meta {
+  font-size: 12px;
+  color: var(--tg-hint);
+}
+
+.recurring-card__right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.recurring-card__amount {
+  font-weight: 700;
+  color: var(--tg-btn);
+  white-space: nowrap;
+}
+
+.btn--sm {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+/* ── Reports page ──────────────────────────────────── */
+.report-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.report-nav__title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.report-summary {
+  display: flex;
+  gap: 8px;
+}
+
+.report-summary__item {
+  flex: 1;
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: center;
+}
+
+.report-summary__label {
+  font-size: 12px;
+  color: var(--tg-hint);
+}
+
+.report-summary__value {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.report-summary--income .report-summary__value {
+  color: #43a047;
+}
+
+.report-summary--expense .report-summary__value {
+  color: #e53935;
+}
+
+.report-summary--balance .report-summary__value {
+  color: var(--tg-btn);
+}
+
+.report-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.report-section h3 {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.report-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.report-bar__label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.report-bar__track {
+  height: 8px;
+  background: var(--tg-secondary-bg);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.report-bar__fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s;
+}
+
+.report-bar__fill--income {
+  background: #43a047;
+}
+
+.report-bar__fill--expense {
+  background: #e53935;
+}
+
+.report-actions {
+  margin-top: 8px;
+}

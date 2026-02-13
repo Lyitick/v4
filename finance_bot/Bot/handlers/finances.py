@@ -1,4 +1,6 @@
 """Handlers for income calculation and savings."""
+from __future__ import annotations
+
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -6,7 +8,6 @@ from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from Bot.database.crud import FinanceDatabase
 from Bot.database.get_db import get_db
 from Bot.keyboards.main import (
     back_to_main_keyboard,
@@ -22,24 +23,11 @@ from Bot.utils.telegram_safe import safe_delete_message, safe_edit_message_text
 from Bot.utils.ui_cleanup import ui_register_message
 from Bot.utils.messages import ERR_INVALID_INPUT
 from Bot.utils.number_input import parse_positive_int
+from Bot.utils.user_id import get_user_id_from_message, get_user_id_from_callback
 
 LOGGER = logging.getLogger(__name__)
 
 router = Router()
-
-
-def _message_user_id(message: Message) -> int:
-    """Extract user id from message."""
-
-    return message.from_user.id if message.from_user else message.chat.id
-
-
-def _callback_user_id(callback: CallbackQuery) -> int:
-    """Extract user id from callback."""
-
-    if callback.from_user:
-        return callback.from_user.id
-    return callback.message.chat.id
 
 
 async def delete_welcome_message_if_exists(message: Message, state: FSMContext) -> None:
@@ -52,8 +40,15 @@ INCOME_INPUT_BUTTONS = INCOME_DIGITS | {"Очистить"}
 
 
 def _build_allocations(categories: List[Dict[str, Any]], amount: float) -> List[Dict[str, Any]]:
-    """Build allocation list from income categories."""
+    """Build allocation list from income categories.
 
+    Args:
+        categories: List of income category dictionaries with 'percent', 'title', 'code'.
+        amount: Total income amount to allocate.
+
+    Returns:
+        List of allocation dictionaries with 'label', 'category', 'amount'.
+    """
     allocations: List[Dict[str, Any]] = []
     for category in categories:
         percent = float(category.get("percent", 0))
@@ -69,9 +64,14 @@ def _build_allocations(categories: List[Dict[str, Any]], amount: float) -> List[
 
 
 def _build_income_prompt(income_sum: str) -> str:
-    """Build income input prompt."""
+    """Build income input prompt.
 
-    # Отображаем сумму в формате ": <число>"
+    Args:
+        income_sum: Current income sum as string.
+
+    Returns:
+        Formatted prompt string in format ": <число>".
+    """
     return f": {income_sum}"
 
 
@@ -80,10 +80,16 @@ async def _refresh_income_message(
 ) -> int:
     """Update or create income prompt message with current sum.
 
-    Редактируем уже существующее сообщение с подсказкой по сумме.
-    Если id нет (например, первый запуск) — создаём новое.
-    При ошибке редактирования пытаемся удалить старое сообщение и создаём новое,
-    чтобы пользователь видел актуальную сумму.
+    Edits existing message with income prompt or creates new one if message_id is None.
+    On edit failure, deletes old message and creates new one to ensure user sees current sum.
+
+    Args:
+        message: Telegram message object.
+        income_message_id: ID of existing income prompt message, or None.
+        income_sum: Current income sum as string.
+
+    Returns:
+        Message ID of the displayed income prompt message.
     """
 
     text = _build_income_prompt(income_sum)
@@ -115,8 +121,14 @@ async def _refresh_income_message(
 
 
 def _to_float(value: Any) -> float:
-    """Safely convert value to float."""
+    """Safely convert value to float.
 
+    Args:
+        value: Value to convert (can be None, string, number, etc.).
+
+    Returns:
+        Converted float value, or 0.0 on conversion failure.
+    """
     try:
         return float(value) if value is not None else 0.0
     except (TypeError, ValueError):
@@ -127,16 +139,29 @@ def _format_savings_summary(
     savings: Dict[str, Dict[str, Any]],
     categories_map: Dict[str, str] | None = None,
 ) -> str:
-    """Format savings summary for user message."""
+    """Format savings summary for user message.
 
+    Args:
+        savings: Dictionary mapping category codes to savings data.
+        categories_map: Optional mapping from category codes to titles.
+
+    Returns:
+        Formatted string representation of savings summary.
+    """
     return format_savings_summary(savings, categories_map)
 
 
 def _find_reached_goal(
     savings: Dict[str, Dict[str, Any]]
 ) -> tuple[str, Dict[str, Any]] | tuple[None, None]:
-    """Find category where goal is reached."""
+    """Find category where goal is reached.
 
+    Args:
+        savings: Dictionary mapping category codes to savings data.
+
+    Returns:
+        Tuple of (category_code, goal_data) if goal reached, else (None, None).
+    """
     return find_reached_goal(savings)
 
 
@@ -174,16 +199,20 @@ async def _ask_allocation_confirmation(
 
 @router.message(F.text == "Рассчитать доход")
 async def start_income_flow(message: Message, state: FSMContext) -> None:
-    """Start income calculation workflow with calculator keyboard."""
+    """Start income calculation workflow with calculator keyboard.
 
+    Args:
+        message: Telegram message object.
+        state: FSM context.
+    """
     await delete_welcome_message_if_exists(message, state)
     await state.clear()
-    user_id = message.from_user.id
+    user_id = get_user_id_from_message(message)
     categories = get_db().list_active_income_categories(user_id)
     if not categories:
         sent = await message.answer(
             'Категории дохода не настроены. Открой "Настройки → Доход" и добавь хотя бы одну категорию.',
-            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+            reply_markup=await build_main_menu_for_user(get_user_id_from_message(message)),
         )
         await ui_register_message(state, sent.chat.id, sent.message_id)
         try:
@@ -217,18 +246,15 @@ async def start_income_flow(message: Message, state: FSMContext) -> None:
     # Удаляем сообщение пользователя "Рассчитать доход"
     try:
         await safe_delete_message(
-        message.bot,
-        chat_id=message.chat.id,
-        message_id=message.message_id,
-        logger=LOGGER,
-    )
+            message.bot,
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            logger=LOGGER,
+        )
     except Exception:  # noqa: BLE001
         LOGGER.warning("Failed to delete user command message", exc_info=True)
 
-    LOGGER.info(
-        "User %s started income calculation",
-        message.from_user.id if message.from_user else "unknown",
-    )
+    LOGGER.info("User %s started income calculation", user_id)
 
 
 async def _process_income_amount_value(
@@ -236,7 +262,13 @@ async def _process_income_amount_value(
     state: FSMContext,
     amount: float,
 ) -> None:
-    """Validate amount and start category confirmation workflow."""
+    """Validate amount and start category confirmation workflow.
+
+    Args:
+        message: Telegram message object.
+        state: FSM context.
+        amount: Validated income amount.
+    """
 
     # Базовая валидация суммы
     if amount <= 0 or amount > 10_000_000:
@@ -272,7 +304,7 @@ async def _process_income_amount_value(
     if total_percent != 100:
         sent = await message.answer(
             f"Сумма процентов должна быть 100%. Сейчас: {total_percent}%. Исправь настройки через ⚙️ → 📊 Доход.",
-            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+            reply_markup=await build_main_menu_for_user(get_user_id_from_message(message)),
         )
         await ui_register_message(state, sent.chat.id, sent.message_id)
         await state.clear()
@@ -283,7 +315,7 @@ async def _process_income_amount_value(
     if not allocations:
         sent = await message.answer(
             "Нет категорий для распределения.",
-            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+            reply_markup=await build_main_menu_for_user(get_user_id_from_message(message)),
         )
         await ui_register_message(state, sent.chat.id, sent.message_id)
         await state.clear()
@@ -481,7 +513,7 @@ async def handle_category_confirmation(query: CallbackQuery, state: FSMContext) 
     if not allocations or index >= len(allocations):
         sent = await query.message.answer(
             "Нет категорий для обработки.",
-            reply_markup=await build_main_menu_for_user(_callback_user_id(query)),
+            reply_markup=await build_main_menu_for_user(get_user_id_from_callback(query)),
         )
         await ui_register_message(state, sent.chat.id, sent.message_id)
         await state.clear()
@@ -674,7 +706,7 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
         db.set_goal(message.from_user.id, category, 0, "")
         sent = await message.answer(
             f"Поздравляю с покупкой по категории {category}! Сумма {goal_amount:.2f} списана.",
-            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+            reply_markup=await build_main_menu_for_user(get_user_id_from_message(message)),
         )
         await ui_register_message(state, sent.chat.id, sent.message_id)
         savings = db.get_user_savings(message.from_user.id)
@@ -684,7 +716,7 @@ async def handle_goal_purchase(message: Message, state: FSMContext) -> None:
     else:
         sent = await message.answer(
             "Продолжаем копить!",
-            reply_markup=await build_main_menu_for_user(_message_user_id(message)),
+            reply_markup=await build_main_menu_for_user(get_user_id_from_message(message)),
         )
         await ui_register_message(state, sent.chat.id, sent.message_id)
 

@@ -22,9 +22,11 @@ from Bot.handlers import (
     common,
     finances,
     household_payments,
+    quick_expense,
     reminders,
     settings,
     start,
+    voice_expense,
     wishlist,
 )
 from Bot.handlers.reminders import run_reminder_check, run_snooze_check
@@ -43,6 +45,8 @@ def register_routers(dispatcher: Dispatcher) -> None:
     dispatcher.include_router(reminders.router)
     dispatcher.include_router(wishlist.router)
     dispatcher.include_router(callbacks.router)
+    dispatcher.include_router(quick_expense.router)
+    dispatcher.include_router(voice_expense.router)
     dispatcher.include_router(common.router)
 
 

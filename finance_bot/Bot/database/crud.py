@@ -43,6 +43,9 @@ class TableNames:
     reminder_schedules: str = "расписания_напоминаний"
     reminder_events: str = "события_напоминаний"
     reminder_stats_daily: str = "статистика_напоминаний_по_дням"
+    recurring_payments: str = "повторяющиеся_платежи"
+    income_log: str = "журнал_доходов"
+    debts: str = "долги"
 
 
 TABLES = TableNames()
@@ -487,6 +490,59 @@ class FinanceDatabase:
             cursor, TABLES.user_settings, "updated_at", "TEXT"
         )
         self._add_column_if_missing(cursor, TABLES.wishes, "debited_at", "TEXT")
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.recurring_payments}" (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT,
+                frequency TEXT NOT NULL DEFAULT 'monthly',
+                day_of_month INTEGER NOT NULL DEFAULT 1,
+                next_due_date TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.income_log}" (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                category TEXT,
+                type TEXT NOT NULL DEFAULT 'income',
+                note TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.debts}" (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                person TEXT NOT NULL,
+                amount REAL NOT NULL,
+                direction TEXT NOT NULL,
+                description TEXT,
+                is_settled INTEGER NOT NULL DEFAULT 0,
+                settled_at TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "report_day", "INTEGER DEFAULT 1"
+        )
+        self._add_column_if_missing(
+            cursor, TABLES.expense_categories, "budget_limit", "REAL DEFAULT 0"
+        )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "google_sheets_id", "TEXT"
+        )
         self._ensure_indexes(cursor)
         self.connection.commit()
         self.sanitize_income_category_titles()
@@ -1089,7 +1145,8 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 f"""
-                SELECT id, code, title, percent, position
+                SELECT id, code, title, percent, position,
+                       COALESCE(budget_limit, 0) as budget_limit
                 FROM {TABLES.expense_categories}
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY position, id
@@ -1104,6 +1161,57 @@ class FinanceDatabase:
                 user_id,
                 error,
             )
+            return []
+
+    def set_budget_limit(self, user_id: int, category_id: int, limit_amount: float) -> bool:
+        """Set a budget limit for an expense category."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.expense_categories}
+                SET budget_limit = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (limit_amount, category_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to set budget limit for user %s: %s", user_id, error)
+            return False
+
+    def get_budget_status(self, user_id: int, year: int, month: int) -> List[Dict[str, Any]]:
+        """Return budget limit vs actual spending per category for a month."""
+        month_prefix = f"{year:04d}-{month:02d}"
+        try:
+            cursor = self.connection.cursor()
+            cats = self.list_active_expense_categories(user_id)
+            result = []
+            for cat in cats:
+                if cat["budget_limit"] <= 0:
+                    continue
+                cursor.execute(
+                    f"""
+                    SELECT COALESCE(SUM(amount), 0) as spent
+                    FROM {TABLES.income_log}
+                    WHERE user_id = ? AND type = 'expense' AND category = ? AND created_at LIKE ?
+                    """,
+                    (user_id, cat["title"], f"{month_prefix}%"),
+                )
+                row = cursor.fetchone()
+                spent = float(row["spent"]) if row else 0.0
+                result.append({
+                    "category_id": cat["id"],
+                    "category": cat["title"],
+                    "budget_limit": cat["budget_limit"],
+                    "spent": spent,
+                    "remaining": cat["budget_limit"] - spent,
+                    "percent_used": round((spent / cat["budget_limit"]) * 100) if cat["budget_limit"] > 0 else 0,
+                })
+            return result
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get budget status for user %s: %s", user_id, error)
             return []
 
     def list_active_wishlist_categories(self, user_id: int) -> List[Dict[str, Any]]:
@@ -1433,6 +1541,7 @@ class FinanceDatabase:
                     household_debit_category,
                     wishlist_debit_category_id,
                     byt_wishlist_category_id,
+                    google_sheets_id,
                     created_at,
                     updated_at
                 FROM {TABLES.user_settings}
@@ -3483,6 +3592,61 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error("Failed to log income for user %s: %s", user_id, error)
 
+    # ── Expense tracking ──────────────────────────────────
+
+    def add_expense(self, user_id: int, amount: float, category: str, note: str = "") -> int:
+        """Add an expense entry and return its id."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.income_log} (user_id, amount, category, type, note, created_at)
+                VALUES (?, ?, ?, 'expense', ?, ?)
+                """,
+                (user_id, amount, category, note, datetime.utcnow().isoformat()),
+            )
+            self.connection.commit()
+            return cursor.lastrowid or 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to add expense for user %s: %s", user_id, error)
+            return 0
+
+    def list_expenses(self, user_id: int, year: int, month: int) -> List[Dict[str, Any]]:
+        """Return expense entries for a given month ordered by date descending."""
+        month_prefix = f"{year:04d}-{month:02d}"
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, amount, category, note, created_at
+                FROM {TABLES.income_log}
+                WHERE user_id = ? AND type = 'expense' AND created_at LIKE ?
+                ORDER BY created_at DESC
+                """,
+                (user_id, f"{month_prefix}%"),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to list expenses for user %s: %s", user_id, error)
+            return []
+
+    def delete_expense(self, user_id: int, expense_id: int) -> bool:
+        """Delete an expense entry. Returns True if deleted."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                DELETE FROM {TABLES.income_log}
+                WHERE id = ? AND user_id = ? AND type = 'expense'
+                """,
+                (expense_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to delete expense %s for user %s: %s", expense_id, user_id, error)
+            return False
+
     def get_monthly_report_data(self, user_id: int, year: int, month: int) -> Dict[str, Any]:
         """Aggregate data for a monthly report."""
         month_prefix = f"{year:04d}-{month:02d}"
@@ -3608,6 +3772,145 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error("Failed to get savings list for user %s: %s", user_id, error)
             return []
+
+    # ── Debt tracking ──────────────────────────────────────
+
+    def add_debt(
+        self,
+        user_id: int,
+        person: str,
+        amount: float,
+        direction: str,
+        description: str = "",
+    ) -> int:
+        """Add a debt entry. direction = 'owe' (I owe) or 'owed' (owed to me)."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO "{TABLES.debts}" (user_id, person, amount, direction, description, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, person, amount, direction, description, datetime.utcnow().isoformat()),
+            )
+            self.connection.commit()
+            return cursor.lastrowid or 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to add debt for user %s: %s", user_id, error)
+            return 0
+
+    def list_debts(self, user_id: int, settled: bool = False) -> List[Dict[str, Any]]:
+        """Return debts for a user. If settled=False, only active debts."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, person, amount, direction, description, is_settled, settled_at, created_at
+                FROM "{TABLES.debts}"
+                WHERE user_id = ? AND is_settled = ?
+                ORDER BY created_at DESC
+                """,
+                (user_id, int(settled)),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to list debts for user %s: %s", user_id, error)
+            return []
+
+    def settle_debt(self, user_id: int, debt_id: int) -> bool:
+        """Mark a debt as settled."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE "{TABLES.debts}"
+                SET is_settled = 1, settled_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (datetime.utcnow().isoformat(), debt_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to settle debt %s for user %s: %s", debt_id, user_id, error)
+            return False
+
+    def delete_debt(self, user_id: int, debt_id: int) -> bool:
+        """Delete a debt entry."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                DELETE FROM "{TABLES.debts}"
+                WHERE id = ? AND user_id = ?
+                """,
+                (debt_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to delete debt %s for user %s: %s", debt_id, user_id, error)
+            return False
+
+    def get_debt_summary(self, user_id: int) -> Dict[str, float]:
+        """Return summary: total owed to me, total I owe, net balance."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT direction, SUM(amount) as total
+                FROM "{TABLES.debts}"
+                WHERE user_id = ? AND is_settled = 0
+                GROUP BY direction
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            owed_to_me = 0.0
+            i_owe = 0.0
+            for row in rows:
+                if row["direction"] == "owed":
+                    owed_to_me = row["total"]
+                elif row["direction"] == "owe":
+                    i_owe = row["total"]
+            return {
+                "owed_to_me": owed_to_me,
+                "i_owe": i_owe,
+                "net_balance": owed_to_me - i_owe,
+            }
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get debt summary for user %s: %s", user_id, error)
+            return {"owed_to_me": 0.0, "i_owe": 0.0, "net_balance": 0.0}
+
+    # ── Google Sheets settings ─────────────────────────────
+
+    def get_google_sheets_id(self, user_id: int) -> str | None:
+        """Return Google Sheets spreadsheet ID for user."""
+        self.ensure_user_settings(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT google_sheets_id FROM "{TABLES.user_settings}" WHERE user_id = ?',
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            return row["google_sheets_id"] if row and row["google_sheets_id"] else None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get google_sheets_id for user %s: %s", user_id, error)
+            return None
+
+    def set_google_sheets_id(self, user_id: int, sheets_id: str | None) -> None:
+        """Set Google Sheets spreadsheet ID for user."""
+        self.ensure_user_settings(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'UPDATE "{TABLES.user_settings}" SET google_sheets_id = ? WHERE user_id = ?',
+                (sheets_id, user_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to set google_sheets_id for user %s: %s", user_id, error)
 
     def close(self) -> None:
         """Close database connection."""

@@ -69,6 +69,16 @@ export function WishlistPage() {
     }
   };
 
+  const handleRestore = async (wishId: number) => {
+    try {
+      await wishlistApi.restoreWish(wishId);
+      tg?.HapticFeedback?.notificationOccurred("success");
+      loadWishes();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  };
+
   const handleAddWish = async (data: {
     name: string;
     price: number;
@@ -85,8 +95,9 @@ export function WishlistPage() {
     }
   };
 
-  const activeWishes = wishes.filter((w) => !w.is_purchased);
-  const purchasedWishes = wishes.filter((w) => w.is_purchased);
+  const activeWishes = wishes.filter((w) => !w.is_purchased && !w.deleted_at);
+  const purchasedWishes = wishes.filter((w) => w.is_purchased && !w.deleted_at);
+  const deletedWishes = wishes.filter((w) => !!w.deleted_at);
 
   return (
     <div className="page">
@@ -143,6 +154,21 @@ export function WishlistPage() {
                   wish={wish}
                   onPurchase={handlePurchase}
                   onDelete={handleDelete}
+                />
+              ))}
+            </div>
+          )}
+
+          {deletedWishes.length > 0 && (
+            <div className="wishes-section wishes-section--deleted">
+              <h2>Удалённые</h2>
+              {deletedWishes.map((wish) => (
+                <WishCard
+                  key={wish.id}
+                  wish={wish}
+                  onPurchase={handlePurchase}
+                  onDelete={handleDelete}
+                  onRestore={handleRestore}
                 />
               ))}
             </div>

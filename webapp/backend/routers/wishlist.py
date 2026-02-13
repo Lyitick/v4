@@ -22,7 +22,7 @@ DEFAULT_TZ = (
 )
 
 
-def _clock(db: FinanceDatabase, user_id: int):
+def _clock(db, user_id: int):
     return now_for_user(db, user_id, DEFAULT_TZ)
 
 
@@ -57,6 +57,7 @@ class WishOut(BaseModel):
     saved_amount: float
     purchased_at: Optional[str] = None
     deferred_until: Optional[str] = None
+    deleted_at: Optional[str] = None
 
 
 class PurchaseOut(BaseModel):
@@ -95,6 +96,10 @@ async def list_wishes(
     """List wishes for user, optionally filtered by category."""
     db = get_db()
     user_id = user["id"]
+
+    # Cleanup expired soft-deleted wishes (older than 24h)
+    db.cleanup_expired_deleted_wishes(user_id, _clock(db, user_id))
+
     all_wishes = db.get_wishes_by_user(user_id)
 
     result = []
@@ -112,6 +117,7 @@ async def list_wishes(
                 saved_amount=float(w.get("saved_amount", 0)),
                 purchased_at=w.get("purchased_at"),
                 deferred_until=w.get("deferred_until"),
+                deleted_at=w.get("deleted_at"),
             )
         )
     return result
@@ -196,15 +202,33 @@ async def defer_wish(
 
 @router.delete("/wishes/{wish_id}")
 async def delete_wish(wish_id: int, user: dict = Depends(get_current_user)):
-    """Delete a wish by marking it purchased (soft delete)."""
+    """Soft-delete a wish (recoverable for 24 hours)."""
     db = get_db()
     user_id = user["id"]
 
     wish = db.get_wish(wish_id)
     if not wish or wish.get("user_id") != user_id:
         raise HTTPException(status_code=404, detail="Wish not found")
+    if wish.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="Already deleted")
 
-    db.mark_wish_purchased(wish_id, purchased_at=_clock(db, user_id))
+    db.mark_wish_deleted(wish_id, deleted_at=_clock(db, user_id))
+    return {"ok": True}
+
+
+@router.post("/wishes/{wish_id}/restore")
+async def restore_wish(wish_id: int, user: dict = Depends(get_current_user)):
+    """Restore a soft-deleted wish."""
+    db = get_db()
+    user_id = user["id"]
+
+    wish = db.get_wish(wish_id)
+    if not wish or wish.get("user_id") != user_id:
+        raise HTTPException(status_code=404, detail="Wish not found")
+    if not wish.get("deleted_at"):
+        raise HTTPException(status_code=400, detail="Wish is not deleted")
+
+    db.restore_wish(wish_id)
     return {"ok": True}
 
 

@@ -261,6 +261,9 @@ class FinanceDatabase:
         self._add_column_if_missing(
             cursor, TABLES.wishes, "deferred_until", "TEXT"
         )
+        self._add_column_if_missing(
+            cursor, TABLES.wishes, "deleted_at", "TEXT"
+        )
         cursor.execute(
             f"""
             CREATE TABLE IF NOT EXISTS "{TABLES.household_payments}" (
@@ -2042,7 +2045,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 f"""
-                SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until
+                SELECT id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until, deleted_at
                 FROM {TABLES.wishes}
                 WHERE user_id = ?
                 """,
@@ -2062,7 +2065,7 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 f"""
-                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until
+                SELECT id, user_id, name, price, url, category, is_purchased, saved_amount, purchased_at, debited_at, deferred_until, deleted_at
                 FROM {TABLES.wishes}
                 WHERE id = ?
                 """,
@@ -2093,6 +2096,7 @@ class FinanceDatabase:
                 WHERE user_id = ?
                   AND {category_sql}
                   AND (is_purchased = 0 OR is_purchased IS NULL)
+                  AND deleted_at IS NULL
                 ORDER BY id
                 """,
                 params,
@@ -2124,6 +2128,7 @@ class FinanceDatabase:
                 WHERE user_id = ?
                   AND {category_sql}
                   AND (is_purchased = 0 OR is_purchased IS NULL)
+                  AND deleted_at IS NULL
                   AND (deferred_until IS NULL OR deferred_until <= ?)
                 ORDER BY id
                 """,
@@ -2189,6 +2194,73 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error("Failed to mark wish %s as purchased: %s", wish_id, error)
 
+    def mark_wish_deleted(self, wish_id: int, deleted_at: Optional[datetime] = None) -> None:
+        """Soft-delete a wish by setting deleted_at timestamp."""
+
+        try:
+            cursor = self.connection.cursor()
+            deleted_value = (
+                deleted_at or datetime.now(tz=settings.TIMEZONE)
+            ).isoformat()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.wishes}
+                SET deleted_at = ?
+                WHERE id = ?
+                """,
+                (deleted_value, wish_id),
+            )
+            self.connection.commit()
+            LOGGER.info("Marked wish %s as deleted", wish_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to mark wish %s as deleted: %s", wish_id, error)
+
+    def restore_wish(self, wish_id: int) -> None:
+        """Restore a soft-deleted wish by clearing deleted_at."""
+
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.wishes}
+                SET deleted_at = NULL
+                WHERE id = ?
+                """,
+                (wish_id,),
+            )
+            self.connection.commit()
+            LOGGER.info("Restored wish %s", wish_id)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to restore wish %s: %s", wish_id, error)
+
+    def cleanup_expired_deleted_wishes(self, user_id: int, now: datetime) -> int:
+        """Permanently delete wishes whose deleted_at is more than 24 hours ago."""
+
+        try:
+            cursor = self.connection.cursor()
+            cutoff = (now - timedelta(hours=24)).isoformat()
+            cursor.execute(
+                f"""
+                DELETE FROM {TABLES.wishes}
+                WHERE user_id = ? AND deleted_at IS NOT NULL AND deleted_at <= ?
+                """,
+                (user_id, cutoff),
+            )
+            deleted_count = cursor.rowcount
+            self.connection.commit()
+            if deleted_count:
+                LOGGER.info(
+                    "Cleaned up %d expired deleted wishes for user %s",
+                    deleted_count,
+                    user_id,
+                )
+            return deleted_count
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to cleanup deleted wishes for user %s: %s", user_id, error
+            )
+            return 0
+
     def purchase_wish(
         self,
         user_id: int,
@@ -2205,7 +2277,7 @@ class FinanceDatabase:
                 f"""
                 SELECT id, user_id, name, price, category, is_purchased, debited_at
                 FROM {TABLES.wishes}
-                WHERE id = ? AND user_id = ?
+                WHERE id = ? AND user_id = ? AND deleted_at IS NULL
                 LIMIT 1
                 """,
                 (wish_id, user_id),

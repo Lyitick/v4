@@ -810,3 +810,246 @@ body {
 .report-actions {
   margin-top: 8px;
 }
+
+/* ── Deleted wishes ────────────────────────────────── */
+.wishes-section--deleted {
+  opacity: 0.5;
+}
+
+.wish-card.deleted {
+  opacity: 0.7;
+  border-left: 3px solid #e53935;
+}
+
+.wish-card__deleted-info {
+  font-size: 12px;
+  color: #e53935;
+}
+
+/* ── Settings accordion sections ────────────────────── */
+.settings-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-section {
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.settings-section__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 12px;
+  background: var(--tg-secondary-bg);
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.settings-section__header::after {
+  content: "\25B8";
+  transition: transform 0.2s;
+  font-size: 12px;
+  color: var(--tg-hint);
+}
+
+.settings-section--open .settings-section__header::after {
+  transform: rotate(90deg);
+}
+
+.settings-section__content {
+  padding: var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--tg-bg);
+}
+
+/* ── Settings list items ───────────────────────────── */
+.settings-list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  background: var(--tg-secondary-bg);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.settings-list-item__title {
+  font-weight: 500;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-list-item__clickable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.settings-list-item__value {
+  color: var(--tg-hint);
+  margin-right: 8px;
+  white-space: nowrap;
+}
+
+.settings-list-item__actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.settings-list-item__unit {
+  font-size: 13px;
+  color: var(--tg-hint);
+}
+
+/* ── Inline input for settings ─────────────────────── */
+.settings-inline-input {
+  width: 60px;
+  padding: 4px 8px;
+  border: 1px solid var(--tg-hint);
+  border-radius: 6px;
+  font-size: 14px;
+  text-align: center;
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  outline: none;
+}
+
+.settings-inline-input:focus {
+  border-color: var(--tg-btn);
+}
+
+.settings-inline-select {
+  padding: 4px 8px;
+  border: 1px solid var(--tg-hint);
+  border-radius: 6px;
+  font-size: 13px;
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  outline: none;
+}
+
+/* ── Add row ───────────────────────────────────────── */
+.settings-add-row {
+  display: flex;
+  gap: 8px;
+  padding: 4px 0;
+  align-items: center;
+}
+
+.settings-add-row .input {
+  flex: 1;
+  padding: 8px 12px;
+  font-size: 14px;
+}
+
+.input--short {
+  max-width: 100px;
+  flex: 0 0 100px !important;
+}
+
+/* ── Select dropdown ───────────────────────────────── */
+.settings-select {
+  padding: 10px 12px;
+  border: 1px solid var(--tg-hint);
+  border-radius: 8px;
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  font-size: 14px;
+  width: 100%;
+  outline: none;
+}
+
+.settings-select:focus {
+  border-color: var(--tg-btn);
+}
+
+/* ── Subtitle ──────────────────────────────────────── */
+.settings-subtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tg-hint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-top: 8px;
+}
+
+/* ── Total line ────────────────────────────────────── */
+.settings-total {
+  font-size: 14px;
+  padding: 4px 12px;
+}
+
+.text-ok { color: #43a047; }
+.text-warn { color: #e53935; }
+
+/* ── Tags/chips (for reminder times) ───────────────── */
+.settings-times {
+  padding: 8px 12px;
+  background: var(--tg-bg);
+  border-radius: 0 0 8px 8px;
+}
+
+.settings-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.settings-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--tg-secondary-bg);
+  border-radius: 16px;
+  font-size: 13px;
+}
+
+.settings-tag__remove {
+  cursor: pointer;
+  color: #e53935;
+  font-size: 14px;
+  border: none;
+  background: none;
+  padding: 0 2px;
+  line-height: 1;
+}
+
+/* ── Settings button modifiers ─────────────────────── */
+.btn--icon {
+  padding: 4px;
+  background: none;
+  border: none;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.btn--danger-text {
+  color: #e53935;
+}
+
+.settings-item__editable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 3px;
+}
+
+.settings-reset-btn {
+  margin-top: 12px;
+  align-self: flex-start;
+}

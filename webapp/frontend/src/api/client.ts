@@ -48,6 +48,7 @@ export interface Wish {
   saved_amount: number;
   purchased_at?: string;
   deferred_until?: string;
+  deleted_at?: string;
 }
 
 export interface Purchase {
@@ -116,6 +117,41 @@ export interface UserSettings {
   byt_defer_max_days: number;
   household_debit_category?: string;
   wishlist_debit_category_id?: string;
+  byt_wishlist_category_id?: number;
+}
+
+export interface IncomeCategorySetting {
+  id: number;
+  code: string;
+  title: string;
+  percent: number;
+  position: number;
+}
+
+export interface WishlistCategorySetting {
+  id: number;
+  title: string;
+  position: number;
+  purchased_mode?: string;
+  purchased_days?: number;
+}
+
+export interface BytReminderCategory {
+  id: number;
+  title: string;
+  position: number;
+  enabled: number;
+}
+
+export interface BytReminderTime {
+  time_hhmm: string;
+}
+
+export interface HouseholdItemSetting {
+  code: string;
+  text: string;
+  amount: number;
+  position: number;
 }
 
 // ── Wishlist API ───────────────────────────────────────
@@ -152,6 +188,11 @@ export const wishlistApi = {
   deleteWish: (wishId: number) =>
     request<{ ok: boolean }>(`/wishlist/wishes/${wishId}`, {
       method: "DELETE",
+    }),
+
+  restoreWish: (wishId: number) =>
+    request<{ ok: boolean }>(`/wishlist/wishes/${wishId}/restore`, {
+      method: "POST",
     }),
 
   getPurchases: () => request<Purchase[]>("/wishlist/purchases"),
@@ -267,6 +308,129 @@ export const settingsApi = {
 
   toggleBytReminders: () =>
     request<{ ok: boolean; enabled: boolean }>("/settings/byt-reminders/toggle", {
+      method: "POST",
+    }),
+
+  // Income categories
+  getIncomeCategories: () =>
+    request<IncomeCategorySetting[]>("/settings/income-categories"),
+
+  addIncomeCategory: (title: string) =>
+    request<{ ok: boolean; id: number }>("/settings/income-categories", {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    }),
+
+  removeIncomeCategory: (id: number) =>
+    request<{ ok: boolean }>(`/settings/income-categories/${id}`, {
+      method: "DELETE",
+    }),
+
+  updateIncomeCategoryPercent: (id: number, percent: number) =>
+    request<{ ok: boolean }>(`/settings/income-categories/${id}/percent`, {
+      method: "POST",
+      body: JSON.stringify({ percent }),
+    }),
+
+  // Wishlist categories
+  getWishlistCategories: () =>
+    request<WishlistCategorySetting[]>("/settings/wishlist-categories"),
+
+  addWishlistCategory: (title: string) =>
+    request<{ ok: boolean; id: number }>("/settings/wishlist-categories", {
+      method: "POST",
+      body: JSON.stringify({ title }),
+    }),
+
+  removeWishlistCategory: (id: number) =>
+    request<{ ok: boolean }>(`/settings/wishlist-categories/${id}`, {
+      method: "DELETE",
+    }),
+
+  updatePurchasedMode: (id: number, mode: string) =>
+    request<{ ok: boolean }>(`/settings/wishlist-categories/${id}/purchased-mode`, {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
+
+  updatePurchasedDays: (id: number, days: number) =>
+    request<{ ok: boolean }>(`/settings/wishlist-categories/${id}/purchased-days`, {
+      method: "POST",
+      body: JSON.stringify({ days }),
+    }),
+
+  setWishlistDebitCategory: (categoryId: string | null) =>
+    request<{ ok: boolean }>("/settings/wishlist-debit-category", {
+      method: "POST",
+      body: JSON.stringify({ category_id: categoryId }),
+    }),
+
+  setBytWishlistCategory: (categoryId: number | null) =>
+    request<{ ok: boolean }>("/settings/byt-wishlist-category", {
+      method: "POST",
+      body: JSON.stringify({ category_id: categoryId }),
+    }),
+
+  // BYT reminders
+  toggleBytDefer: () =>
+    request<{ ok: boolean; enabled: boolean }>("/settings/byt-defer/toggle", {
+      method: "POST",
+    }),
+
+  updateMaxDeferDays: (days: number) =>
+    request<{ ok: boolean }>("/settings/byt-defer/max-days", {
+      method: "POST",
+      body: JSON.stringify({ days }),
+    }),
+
+  getBytReminderCategories: () =>
+    request<BytReminderCategory[]>("/settings/byt-reminder-categories"),
+
+  toggleBytReminderCategory: (categoryId: number) =>
+    request<{ ok: boolean; enabled: boolean }>(
+      `/settings/byt-reminder-categories/${categoryId}/toggle`,
+      { method: "POST" }
+    ),
+
+  getBytReminderTimes: (categoryId: number) =>
+    request<BytReminderTime[]>(`/settings/byt-reminder-times/${categoryId}`),
+
+  addBytReminderTime: (categoryId: number, timeHhmm: string) =>
+    request<{ ok: boolean }>(`/settings/byt-reminder-times/${categoryId}`, {
+      method: "POST",
+      body: JSON.stringify({ time_hhmm: timeHhmm }),
+    }),
+
+  removeBytReminderTime: (categoryId: number, timeHhmm: string) =>
+    request<{ ok: boolean }>(
+      `/settings/byt-reminder-times/${categoryId}/${encodeURIComponent(timeHhmm)}`,
+      { method: "DELETE" }
+    ),
+
+  // Household items
+  getHouseholdItems: () =>
+    request<HouseholdItemSetting[]>("/settings/household-items"),
+
+  addHouseholdItem: (text: string, amount: number) =>
+    request<{ ok: boolean; code: string }>("/settings/household-items", {
+      method: "POST",
+      body: JSON.stringify({ text, amount }),
+    }),
+
+  removeHouseholdItem: (code: string) =>
+    request<{ ok: boolean }>(
+      `/settings/household-items/${encodeURIComponent(code)}`,
+      { method: "DELETE" }
+    ),
+
+  setHouseholdDebitCategory: (category: string | null) =>
+    request<{ ok: boolean }>("/settings/household-debit-category", {
+      method: "POST",
+      body: JSON.stringify({ category }),
+    }),
+
+  resetHouseholdPayments: () =>
+    request<{ ok: boolean }>("/settings/household-reset", {
       method: "POST",
     }),
 };

@@ -430,6 +430,60 @@ def migrate_byt_to_reminders(db: Any, user_id: int) -> int:
     return created
 
 
+# ------------------------------------------------------------------ #
+#  Wishlist CRUD                                                       #
+# ------------------------------------------------------------------ #
+
+
+def create_wishlist_reminder(
+    db: Any,
+    user_id: int,
+    title: str,
+    times: list[str] | None = None,
+) -> dict | ServiceError:
+    """Create a wishlist reminder with optional schedule times."""
+    title = title.strip()
+    if not title:
+        return ServiceError(code="empty_title", message="Название не может быть пустым")
+    if len(title) > 100:
+        return ServiceError(code="title_too_long", message="Максимум 100 символов")
+
+    reminder_id = db.create_reminder(user_id, "wishlist", title)
+    if not reminder_id:
+        return ServiceError(code="db_error", message="Не удалось создать напоминание")
+
+    if times:
+        times_json = json.dumps(times)
+        db.set_reminder_schedule(reminder_id, "specific_times", times_json=times_json)
+
+    LOGGER.info(
+        "USER=%s ACTION=WISHLIST_REMINDER_CREATED META=reminder_id=%s title=%s",
+        user_id, reminder_id, title,
+    )
+    return {"id": reminder_id, "title": title}
+
+
+def list_wishlist_reminders(db: Any, user_id: int) -> list[dict]:
+    """List wishlist reminders for user."""
+    return db.list_reminders_by_category(user_id, "wishlist")
+
+
+def delete_wishlist_reminder(db: Any, user_id: int, reminder_id: int) -> bool | ServiceError:
+    """Delete a wishlist reminder."""
+    reminder = db.get_reminder(reminder_id)
+    if not reminder:
+        return ServiceError(code="not_found", message="Напоминание не найдено")
+    if reminder["user_id"] != user_id or reminder["category"] != "wishlist":
+        return ServiceError(code="not_found", message="Напоминание не найдено")
+
+    ok = db.delete_reminder(reminder_id, user_id)
+    if not ok:
+        return ServiceError(code="db_error", message="Не удалось удалить")
+
+    LOGGER.info("USER=%s ACTION=WISHLIST_REMINDER_DELETED META=reminder_id=%s", user_id, reminder_id)
+    return True
+
+
 def is_within_activity_window(
     schedule: dict, time_label: str
 ) -> bool:

@@ -12,6 +12,9 @@ from Bot.keyboards.reminders import (
     reminder_action_keyboard_motivation,
     reminder_categories_keyboard,
     snooze_duration_keyboard,
+    wishlist_delete_inline_keyboard,
+    wishlist_list_inline_keyboard,
+    wishlist_settings_keyboard,
 )
 
 
@@ -146,3 +149,41 @@ def test_motivation_schedule_inline_keyboard() -> None:
     assert "rem:motiv_sched:interval" in data_values
     assert "rem:motiv_sched:times" in data_values
     assert "rem:motiv_back" in data_values
+
+
+# ------------------------------------------------------------------ #
+#  Wishlist keyboard tests                                             #
+# ------------------------------------------------------------------ #
+
+
+def test_wishlist_settings_keyboard_has_buttons() -> None:
+    kb = wishlist_settings_keyboard()
+    texts = [btn.text for row in kb.keyboard for btn in row]
+    assert "➕ Добавить напоминание" in texts
+    assert "➖ Удалить напоминание" in texts
+    assert "📊 Статистика" in texts
+
+
+def test_wishlist_list_inline_keyboard() -> None:
+    items = [
+        {"id": 1, "title": "Покупки", "is_enabled": 1},
+        {"id": 2, "title": "Подарки", "is_enabled": 0},
+    ]
+    kb = wishlist_list_inline_keyboard(items)
+    assert len(kb.inline_keyboard) == 2
+    assert kb.inline_keyboard[0][0].callback_data == "rem:wish_toggle:1"
+    assert "✅" in kb.inline_keyboard[0][0].text
+    assert kb.inline_keyboard[1][0].callback_data == "rem:wish_toggle:2"
+    assert "❌" in kb.inline_keyboard[1][0].text
+
+
+def test_wishlist_delete_inline_keyboard() -> None:
+    items = [
+        {"id": 1, "title": "Покупки"},
+        {"id": 2, "title": "Подарки"},
+    ]
+    kb = wishlist_delete_inline_keyboard(items)
+    assert len(kb.inline_keyboard) == 3  # 2 items + back
+    assert kb.inline_keyboard[0][0].callback_data == "rem:wish_del:1"
+    assert kb.inline_keyboard[1][0].callback_data == "rem:wish_del:2"
+    assert kb.inline_keyboard[2][0].callback_data == "rem:wish_back"

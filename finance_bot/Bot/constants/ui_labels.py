@@ -35,3 +35,8 @@ REM_MOTIV_ADD = "➕ Добавить контент"
 REM_MOTIV_DELETE = "➖ Удалить контент"
 REM_MOTIV_SCHEDULE = "⏰ Расписание"
 REM_MOTIV_TOGGLE = "🔁 Вкл/Выкл"
+
+# Wishlist reminder settings buttons
+REM_WISH_ADD = "➕ Добавить напоминание"
+REM_WISH_DELETE = "➖ Удалить напоминание"
+REM_WISH_STATS = "📊 Статистика"

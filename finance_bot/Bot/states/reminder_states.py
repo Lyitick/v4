@@ -29,3 +29,10 @@ class FoodSettingsState(StatesGroup):
     waiting_for_supplement_title = State()
     waiting_for_supplement_time = State()
     waiting_for_supplement_removal = State()
+
+
+class WishlistSettingsState(StatesGroup):
+    """States for wishlist reminder settings (Phase 4)."""
+
+    waiting_for_title = State()
+    waiting_for_times = State()

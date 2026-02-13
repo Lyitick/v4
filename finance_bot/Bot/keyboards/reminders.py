@@ -24,6 +24,9 @@ from Bot.constants.ui_labels import (
     REM_MOTIV_DELETE,
     REM_MOTIV_SCHEDULE,
     REM_MOTIV_TOGGLE,
+    REM_WISH_ADD,
+    REM_WISH_DELETE,
+    REM_WISH_STATS,
 )
 
 
@@ -67,6 +70,16 @@ def habit_settings_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text=REM_HABIT_ADD), KeyboardButton(text=REM_HABIT_DELETE)],
         [KeyboardButton(text=REM_HABIT_STATS)],
+        [KeyboardButton(text=NAV_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def wishlist_settings_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for wishlist reminder settings screen."""
+    buttons = [
+        [KeyboardButton(text=REM_WISH_ADD), KeyboardButton(text=REM_WISH_DELETE)],
+        [KeyboardButton(text=REM_WISH_STATS)],
         [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -165,6 +178,40 @@ def food_delete_inline_keyboard(
             )
         ])
     rows.append([InlineKeyboardButton(text=NAV_BACK, callback_data="rem:food_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def wishlist_list_inline_keyboard(
+    items: list[dict], action_prefix: str = "rem:wish_toggle"
+) -> InlineKeyboardMarkup:
+    """Inline keyboard listing wishlist reminders for toggle."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        enabled = bool(item.get("is_enabled", 1))
+        icon = "✅" if enabled else "❌"
+        label = f"{icon} 📋 {item.get('title', '')}"
+        rows.append([
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"{action_prefix}:{item.get('id')}",
+            )
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def wishlist_delete_inline_keyboard(
+    items: list[dict],
+) -> InlineKeyboardMarkup:
+    """Inline keyboard listing wishlist reminders for deletion."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🗑 📋 {item.get('title', '')}",
+                callback_data=f"rem:wish_del:{item.get('id')}",
+            )
+        ])
+    rows.append([InlineKeyboardButton(text=NAV_BACK, callback_data="rem:wish_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

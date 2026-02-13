@@ -96,7 +96,7 @@ async def _run_reminder_scheduler(bot: Bot, db, default_tz: str) -> None:
             user_ids = db.get_users_with_active_reminders()
             for uid in user_ids:
                 now_dt = now_for_user(db, uid, default_tz)
-                for category in ("habits", "food", "motivation"):
+                for category in ("habits", "food", "motivation", "wishlist"):
                     await run_reminder_check(bot, db, uid, category, now_dt)
                 await run_snooze_check(bot, db, uid, now_dt)
         except Exception as exc:  # noqa: BLE001

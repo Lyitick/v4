@@ -8,15 +8,18 @@ from Bot.services.reminder_service import (
     create_food_reminder,
     create_habit,
     create_motivation_content,
+    create_wishlist_reminder,
     delete_food_reminder,
     delete_habit,
     delete_motivation_content,
+    delete_wishlist_reminder,
     ensure_motivation_schedule,
     get_motivation_schedule,
     is_within_activity_window,
     list_food_reminders,
     list_habits,
     list_motivation_content,
+    list_wishlist_reminders,
     migrate_byt_to_reminders,
     record_reminder_action,
     schedule_snooze,
@@ -434,6 +437,82 @@ def test_migrate_byt_to_reminders_idempotent(tmp_path, monkeypatch) -> None:
         db.create_reminder(1, "wishlist", "Быт")
         count = migrate_byt_to_reminders(db, 1)
         assert count == 0
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+# ------------------------------------------------------------------ #
+#  Wishlist CRUD tests                                                 #
+# ------------------------------------------------------------------ #
+
+
+def test_create_wishlist_reminder(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        result = create_wishlist_reminder(db, 1, "Покупка подарка")
+        assert isinstance(result, dict)
+        assert result["id"] is not None
+        assert result["title"] == "Покупка подарка"
+
+        items = list_wishlist_reminders(db, 1)
+        assert len(items) == 1
+        assert items[0]["title"] == "Покупка подарка"
+        assert items[0]["category"] == "wishlist"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_create_wishlist_reminder_with_times(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        result = create_wishlist_reminder(db, 1, "Проверить цены", times=["10:00", "18:00"])
+        assert isinstance(result, dict)
+        schedule = db.get_reminder_schedule(result["id"])
+        assert schedule is not None
+        assert schedule["schedule_type"] == "specific_times"
+        import json
+        times = json.loads(schedule["times_json"])
+        assert "10:00" in times
+        assert "18:00" in times
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_create_wishlist_reminder_empty_title(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        result = create_wishlist_reminder(db, 1, "")
+        assert isinstance(result, ServiceError)
+        assert result.code == "empty_title"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_delete_wishlist_reminder(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        result = create_wishlist_reminder(db, 1, "Купить книгу")
+        rid = result["id"]
+        ok = delete_wishlist_reminder(db, 1, rid)
+        assert ok is True
+        assert len(list_wishlist_reminders(db, 1)) == 0
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_delete_wishlist_wrong_category(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        # Create a habit, try to delete as wishlist
+        result = create_habit(db, 1, "Бег")
+        err = delete_wishlist_reminder(db, 1, result["id"])
+        assert isinstance(err, ServiceError)
+        assert err.code == "not_found"
     finally:
         db.close()
         crud.FinanceDatabase._instance = None

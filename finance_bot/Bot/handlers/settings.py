@@ -32,6 +32,9 @@ from Bot.constants.ui_labels import (
     REM_MOTIV_DELETE,
     REM_MOTIV_SCHEDULE,
     REM_MOTIV_TOGGLE,
+    REM_WISH_ADD,
+    REM_WISH_DELETE,
+    REM_WISH_STATS,
     WISHLIST_DEBIT_CATEGORY_BACK,
     WISHLIST_DEBIT_CATEGORY_BUTTON,
     WISHLIST_DEBIT_CATEGORY_NONE,
@@ -68,6 +71,7 @@ from Bot.services.types import ServiceError
 from Bot.states.reminder_states import FoodSettingsState as FoodSettState
 from Bot.states.reminder_states import HabitSettingsState as HabitSettState
 from Bot.states.reminder_states import MotivationSettingsState as MotivSettState
+from Bot.states.reminder_states import WishlistSettingsState as WishSettState
 from Bot.states.wishlist_states import (
     BytSettingsState,
     BytTimerState,
@@ -284,7 +288,7 @@ async def _edit_settings_page(
         data = await state.get_data()
         if data.get("settings_current_screen") in {
             "st:income", "st:wishlist", "st:byt_rules",
-            "st:reminders", "rem:habits", "rem:food", "rem:motivation",
+            "st:reminders", "rem:habits", "rem:food", "rem:motivation", "rem:wishlist",
         }:
             raise TelegramBadRequest(method="editMessageText", message="reply-only")
         await _safe_edit(
@@ -837,6 +841,31 @@ async def _render_motivation_settings(
     )
 
 
+async def _render_wishlist_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> None:
+    """Render wishlist reminders list + management screen."""
+    from Bot.keyboards.reminders import wishlist_list_inline_keyboard, wishlist_settings_keyboard
+    from Bot.renderers.reminder_render import format_wishlist_settings_text
+
+    items = db.list_reminders_by_category(user_id, "wishlist")
+    text = format_wishlist_settings_text(items)
+    if error_message:
+        text += f"\n\n⚠️ {error_message}"
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=text,
+        reply_markup=wishlist_settings_keyboard(),
+        screen_id="rem:wishlist",
+    )
+
+
 async def _render_byt_rules_settings(
     *,
     state: FSMContext,
@@ -1192,6 +1221,14 @@ async def render_settings_screen(
         )
     elif screen_id == "rem:motivation":
         await _render_motivation_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "rem:wishlist":
+        await _render_wishlist_settings(
             state=state,
             message=message,
             db=db,
@@ -3698,7 +3735,7 @@ async def open_wishlist_byt_reply(message: Message, state: FSMContext) -> None:
     await _delete_user_message(message)
     await state.set_state(None)
     LOGGER.info("USER=%s ACTION=REMINDER_TYPE_SELECT META=category=wishlist", message.from_user.id)
-    await _navigate_to_screen("st:byt_rules", message=message, state=state)
+    await _navigate_to_screen("rem:wishlist", message=message, state=state)
 
 
 @router.message(F.text == REM_CATEGORY_MOTIVATION)
@@ -4658,4 +4695,234 @@ async def habit_times_input(message: Message, state: FSMContext) -> None:
 
     await state.set_state(None)
     previous_screen = await _pop_previous_screen(state) or "rem:habits"
+    await render_settings_screen(previous_screen, message=message, state=state)
+
+
+# ------------------------------------------------------------------ #
+#  Wishlist reminder settings handlers                                #
+# ------------------------------------------------------------------ #
+
+
+@router.message(F.text == REM_WISH_ADD)
+async def wish_add_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "rem:wishlist":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await _push_current_screen(state, "rem:wish_add")
+    await state.set_state(WishSettState.waiting_for_title)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Напиши название напоминания для вишлиста:",
+        reply_markup=back_only_keyboard(),
+    )
+
+
+@router.message(F.text == REM_WISH_DELETE)
+async def wish_delete_menu_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "rem:wishlist":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    db = get_db()
+    items = db.list_reminders_by_category(message.from_user.id, "wishlist")
+    if not items:
+        await render_settings_screen(
+            "rem:wishlist", message=message, state=state,
+            error_message="Нет напоминаний для удаления",
+        )
+        return
+    from Bot.keyboards.reminders import wishlist_delete_inline_keyboard
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Что удалить?",
+        reply_markup=wishlist_delete_inline_keyboard(items),
+    )
+
+
+@router.message(F.text == REM_WISH_STATS)
+async def wish_stats_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "rem:wishlist":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    db = get_db()
+    user_id = message.from_user.id
+    from datetime import date as date_cls
+    from Bot.renderers.reminder_render import format_wishlist_stats_text
+    items = db.list_reminders_by_category(user_id, "wishlist")
+    today = date_cls.today().isoformat()
+    stats = db.get_reminder_stats(user_id, today, "wishlist")
+    text = format_wishlist_stats_text(items, stats, today)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
+        reply_markup=None,
+    )
+
+
+@router.callback_query(F.data.startswith("rem:wish_toggle:"))
+async def handle_wish_toggle(callback: CallbackQuery, state: FSMContext) -> None:
+    """Toggle a wishlist reminder on/off."""
+    from Bot.utils.telegram_safe import safe_callback_answer as _sca
+    await _sca(callback, logger=LOGGER)
+    try:
+        reminder_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        return
+    db = get_db()
+    new_val = db.toggle_reminder_enabled(reminder_id, callback.from_user.id)
+    if new_val is None:
+        return
+    await render_settings_screen("rem:wishlist", message=callback.message, state=state)
+
+
+@router.callback_query(F.data.startswith("rem:wish_del:"))
+async def handle_wish_delete(callback: CallbackQuery, state: FSMContext) -> None:
+    """Delete a wishlist reminder."""
+    from Bot.utils.telegram_safe import safe_callback_answer as _sca
+    from Bot.services.reminder_service import delete_wishlist_reminder
+    await _sca(callback, logger=LOGGER)
+    try:
+        reminder_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        return
+    db = get_db()
+    result = delete_wishlist_reminder(db, callback.from_user.id, reminder_id)
+    if isinstance(result, ServiceError):
+        await _sca(callback, result.message, show_alert=True, logger=LOGGER)
+        return
+    await render_settings_screen("rem:wishlist", message=callback.message, state=state)
+
+
+@router.callback_query(F.data == "rem:wish_back")
+async def handle_wish_inline_back(callback: CallbackQuery, state: FSMContext) -> None:
+    """Back button from inline wishlist sub-screens."""
+    await callback.answer()
+    await render_settings_screen("rem:wishlist", message=callback.message, state=state)
+
+
+# --- Wishlist title FSM input ---
+
+
+@router.message(WishSettState.waiting_for_title)
+async def wish_title_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+
+    title = (message.text or "").strip()
+    if not title:
+        return
+
+    if title == NAV_BACK:
+        await state.set_state(None)
+        await _render_previous_screen_or_exit(message, state)
+        return
+
+    from Bot.services.reminder_service import create_wishlist_reminder
+    db = get_db()
+    result = create_wishlist_reminder(db, message.from_user.id, title)
+    if isinstance(result, ServiceError):
+        chat_id, message_id = await _get_settings_message_ids(state, message)
+        await _edit_settings_page(
+            bot=message.bot,
+            state=state,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"⚠️ {result.message}\n\nНапиши название напоминания:",
+            reply_markup=back_only_keyboard(),
+        )
+        return
+
+    # Ask for times
+    await state.update_data(rem_new_wish_id=result["id"])
+    await state.set_state(WishSettState.waiting_for_times)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=(
+            f"Напоминание <b>{title}</b> создано!\n\n"
+            "Введи время напоминания (HH:MM).\n"
+            "Можно ввести несколько через запятую: 09:00, 21:00\n\n"
+            f"Или нажми {NAV_BACK} чтобы пропустить."
+        ),
+        reply_markup=back_only_keyboard(),
+    )
+
+
+@router.message(WishSettState.waiting_for_times)
+async def wish_times_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+
+    text = (message.text or "").strip()
+    if not text:
+        return
+
+    if text == NAV_BACK:
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "rem:wishlist"
+        await render_settings_screen(previous_screen, message=message, state=state)
+        return
+
+    reminder_id = data.get("rem_new_wish_id")
+    if not reminder_id:
+        await state.set_state(None)
+        await render_settings_screen("rem:wishlist", message=message, state=state)
+        return
+
+    # Parse times
+    import json as _json
+    raw_times = [t.strip() for t in text.replace(";", ",").split(",") if t.strip()]
+    valid_times = []
+    for raw in raw_times:
+        normalized, is_complete = normalize_time_partial(raw)
+        if normalized and is_complete:
+            valid_times.append(normalized)
+
+    if not valid_times:
+        chat_id, message_id = await _get_settings_message_ids(state, message)
+        await _edit_settings_page(
+            bot=message.bot,
+            state=state,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="⚠️ Не удалось распознать время.\nФормат: HH:MM (через запятую):",
+            reply_markup=back_only_keyboard(),
+        )
+        return
+
+    db = get_db()
+    db.set_reminder_schedule(
+        reminder_id,
+        "specific_times",
+        times_json=_json.dumps(valid_times),
+    )
+    LOGGER.info(
+        "USER=%s ACTION=WISHLIST_SCHEDULE_SET META=reminder_id=%s times=%s",
+        message.from_user.id, reminder_id, valid_times,
+    )
+
+    await state.set_state(None)
+    previous_screen = await _pop_previous_screen(state) or "rem:wishlist"
     await render_settings_screen(previous_screen, message=message, state=state)

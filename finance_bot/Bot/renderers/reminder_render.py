@@ -174,6 +174,49 @@ def format_food_stats_text(
     return "\n".join(lines)
 
 
+def format_wishlist_settings_text(items: list[dict]) -> str:
+    """Format the wishlist reminders settings screen."""
+    if not items:
+        return (
+            "📋 <b>ВИШЛИСТ (БЫТ)</b>\n\n"
+            "Напоминаний пока нет.\n"
+            "Нажми «➕ Добавить напоминание» чтобы создать."
+        )
+    lines = ["📋 <b>ВИШЛИСТ (БЫТ)</b>", ""]
+    for i, item in enumerate(items, 1):
+        enabled = bool(item.get("is_enabled", 1))
+        icon = "✅" if enabled else "❌"
+        lines.append(f"{i}. {icon} {item.get('title', '—')}")
+    lines.append("")
+    lines.append("Нажми на элемент чтобы вкл/выкл.")
+    return "\n".join(lines)
+
+
+def format_wishlist_stats_text(
+    items: list[dict], stats: list[dict], date_str: str
+) -> str:
+    """Format wishlist reminder statistics for a date."""
+    if not items:
+        return "📊 Нет напоминаний вишлиста для статистики."
+    stat_row = next(
+        (s for s in stats if s.get("category") == "wishlist"), None
+    )
+    shown = stat_row.get("shown_count", 0) if stat_row else 0
+    done = stat_row.get("done_count", 0) if stat_row else 0
+    skipped = stat_row.get("skip_count", 0) if stat_row else 0
+    snoozed = stat_row.get("snooze_count", 0) if stat_row else 0
+    lines = [
+        f"📊 <b>Статистика вишлиста</b> ({date_str})",
+        "",
+        f"Всего напоминаний: {len(items)}",
+        f"Показано: {shown}",
+        f"Выполнено: {done}",
+        f"Пропущено: {skipped}",
+        f"Отложено: {snoozed}",
+    ]
+    return "\n".join(lines)
+
+
 def format_reminder_done_text(reminder: dict) -> str:
     """Format confirmation after marking done."""
     title = reminder.get("title", "")

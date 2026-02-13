@@ -810,3 +810,43 @@ body {
 .report-actions {
   margin-top: 8px;
 }
+
+/* ── Expenses page ────────────────────────────────── */
+.expense-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+}
+
+.expense-categories-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+}
+
+.expense-cat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.expense-cat-row__title {
+  color: var(--tg-text);
+  font-weight: 500;
+}
+
+.expense-cat-row__amount {
+  color: var(--tg-hint);
+  font-weight: 600;
+}
+
+.expense-note {
+  font-weight: 400;
+  color: var(--tg-hint);
+}

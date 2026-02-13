@@ -3052,6 +3052,61 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error("Failed to log income for user %s: %s", user_id, error)
 
+    # ── Expense tracking ──────────────────────────────────
+
+    def add_expense(self, user_id: int, amount: float, category: str, note: str = "") -> int:
+        """Add an expense entry and return its id."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.income_log} (user_id, amount, category, type, note, created_at)
+                VALUES (?, ?, ?, 'expense', ?, ?)
+                """,
+                (user_id, amount, category, note, datetime.utcnow().isoformat()),
+            )
+            self.connection.commit()
+            return cursor.lastrowid or 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to add expense for user %s: %s", user_id, error)
+            return 0
+
+    def list_expenses(self, user_id: int, year: int, month: int) -> List[Dict[str, Any]]:
+        """Return expense entries for a given month ordered by date descending."""
+        month_prefix = f"{year:04d}-{month:02d}"
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, amount, category, note, created_at
+                FROM {TABLES.income_log}
+                WHERE user_id = ? AND type = 'expense' AND created_at LIKE ?
+                ORDER BY created_at DESC
+                """,
+                (user_id, f"{month_prefix}%"),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to list expenses for user %s: %s", user_id, error)
+            return []
+
+    def delete_expense(self, user_id: int, expense_id: int) -> bool:
+        """Delete an expense entry. Returns True if deleted."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                DELETE FROM {TABLES.income_log}
+                WHERE id = ? AND user_id = ? AND type = 'expense'
+                """,
+                (expense_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to delete expense %s for user %s: %s", expense_id, user_id, error)
+            return False
+
     def get_monthly_report_data(self, user_id: int, year: int, month: int) -> Dict[str, Any]:
         """Aggregate data for a monthly report."""
         month_prefix = f"{year:04d}-{month:02d}"

@@ -19,7 +19,7 @@ for p in (str(PROJECT_ROOT), str(FINANCE_BOT_ROOT)):
         sys.path.insert(0, p)
 
 from Bot.database.get_db import get_db
-from webapp.backend.routers import export, household, income, recurring, reports, savings, settings, wishlist
+from webapp.backend.routers import expenses, export, household, income, recurring, reports, savings, settings, wishlist
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +46,7 @@ app.add_middleware(
 )
 
 # Mount routers
+app.include_router(expenses.router, prefix="/api/expenses", tags=["expenses"])
 app.include_router(wishlist.router, prefix="/api/wishlist", tags=["wishlist"])
 app.include_router(income.router, prefix="/api/income", tags=["income"])
 app.include_router(household.router, prefix="/api/household", tags=["household"])

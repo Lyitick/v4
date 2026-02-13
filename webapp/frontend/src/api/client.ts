@@ -28,6 +28,22 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+// ── Expense Types ────────────────────────────────────
+
+export interface Expense {
+  id: number;
+  amount: number;
+  category: string;
+  note: string;
+  created_at: string;
+}
+
+export interface ExpenseCategory {
+  id: number;
+  code: string;
+  title: string;
+}
+
 // ── Wishlist Types ────────────────────────────────────
 
 export interface Category {
@@ -117,6 +133,31 @@ export interface UserSettings {
   household_debit_category?: string;
   wishlist_debit_category_id?: string;
 }
+
+// ── Expenses API ─────────────────────────────────────
+
+export const expensesApi = {
+  getCategories: () => request<ExpenseCategory[]>("/expenses/categories"),
+
+  list: (year?: number, month?: number) => {
+    const params = new URLSearchParams();
+    if (year) params.set("year", String(year));
+    if (month) params.set("month", String(month));
+    const qs = params.toString();
+    return request<Expense[]>(`/expenses/${qs ? `?${qs}` : ""}`);
+  },
+
+  create: (data: { amount: number; category: string; note?: string }) =>
+    request<Expense>("/expenses/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  remove: (id: number) =>
+    request<{ ok: boolean }>(`/expenses/${id}`, {
+      method: "DELETE",
+    }),
+};
 
 // ── Wishlist API ───────────────────────────────────────
 

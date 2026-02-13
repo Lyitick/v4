@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { IncomePage } from "./pages/IncomePage";
+import { ExpensesPage } from "./pages/ExpensesPage";
 import { WishlistPage } from "./pages/WishlistPage";
 import { HouseholdPage } from "./pages/HouseholdPage";
 import { SavingsPage } from "./pages/SavingsPage";
@@ -24,6 +25,8 @@ function App() {
     switch (activeTab) {
       case "income":
         return <IncomePage />;
+      case "expenses":
+        return <ExpensesPage />;
       case "wishlist":
         return <WishlistPage />;
       case "household":

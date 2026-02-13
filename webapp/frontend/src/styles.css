@@ -311,3 +311,336 @@ body {
   from { transform: translateY(100%); }
   to { transform: translateY(0); }
 }
+
+/* ── App layout with TabBar ─────────────────────────── */
+.app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.app__content {
+  flex: 1;
+  overflow-y: auto;
+  padding-bottom: 64px;
+}
+
+/* ── Tab Bar ────────────────────────────────────────── */
+.tab-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-around;
+  background: var(--tg-bg);
+  border-top: 1px solid var(--tg-secondary-bg);
+  padding: 4px 0 calc(4px + env(safe-area-inset-bottom, 0px));
+  z-index: 50;
+}
+
+.tab-bar__item {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 0;
+  background: none;
+  border: none;
+  color: var(--tg-hint);
+  font-size: 10px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.tab-bar__item.active {
+  color: var(--tg-btn);
+}
+
+.tab-bar__icon {
+  font-size: 20px;
+}
+
+.tab-bar__label {
+  font-weight: 500;
+}
+
+/* ── Income page ────────────────────────────────────── */
+.income-input-group {
+  display: flex;
+  gap: 8px;
+}
+
+.income-input {
+  flex: 1;
+}
+
+.allocations {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.allocations__header {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.percent-ok { color: #43a047; }
+.percent-warn { color: #e53935; }
+
+.allocation-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--tg-secondary-bg);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.allocation-row__info {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.allocation-row__title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.allocation-row__percent {
+  font-size: 12px;
+  color: var(--tg-hint);
+}
+
+.allocation-row__amount {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--tg-btn);
+}
+
+.btn--full {
+  width: 100%;
+  padding: 14px;
+  font-size: 16px;
+  margin-top: 4px;
+}
+
+.success-block {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+
+.success-icon {
+  width: 56px;
+  height: 56px;
+  background: #43a047;
+  color: #fff;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 28px;
+}
+
+/* ── Household page ─────────────────────────────────── */
+.household-summary {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14px;
+  color: var(--tg-hint);
+}
+
+.household-progress {
+  height: 6px;
+  background: var(--tg-secondary-bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.household-progress__bar {
+  height: 100%;
+  background: #43a047;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.household-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.household-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  background: var(--tg-secondary-bg);
+  border-radius: 10px;
+  padding: 12px;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.household-item.paid {
+  opacity: 0.55;
+}
+
+.household-item__check {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 2px solid var(--tg-hint);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.household-item.paid .household-item__check {
+  background: #43a047;
+  border-color: #43a047;
+  color: #fff;
+}
+
+.household-item__info {
+  flex: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.household-item__text {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.household-item__amount {
+  font-size: 14px;
+  color: var(--tg-hint);
+  white-space: nowrap;
+}
+
+/* ── Savings page ───────────────────────────────────── */
+.savings-total {
+  font-size: 20px;
+  font-weight: 700;
+  text-align: center;
+  padding: 8px;
+}
+
+.savings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.saving-card {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.saving-card__header {
+  display: flex;
+  justify-content: space-between;
+}
+
+.saving-card__category {
+  font-weight: 600;
+  font-size: 15px;
+}
+
+.saving-card__amount {
+  font-weight: 700;
+  color: var(--tg-btn);
+}
+
+.saving-card__goal {
+  font-size: 13px;
+  color: var(--tg-hint);
+}
+
+.saving-card__progress {
+  height: 6px;
+  background: var(--tg-bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.saving-card__progress-bar {
+  height: 100%;
+  background: var(--tg-btn);
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.saving-card__percent {
+  font-size: 12px;
+  color: var(--tg-hint);
+  text-align: right;
+}
+
+/* ── Settings page ──────────────────────────────────── */
+.settings-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 12px;
+  background: var(--tg-secondary-bg);
+  font-size: 14px;
+}
+
+.settings-item:first-child {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.settings-item:last-child {
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+
+.settings-item--toggle {
+  cursor: pointer;
+}
+
+.settings-item__label {
+  font-weight: 500;
+}
+
+.settings-item__value {
+  color: var(--tg-hint);
+}
+
+.settings-toggle {
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.settings-toggle.on {
+  background: #43a047;
+  color: #fff;
+}
+
+.settings-toggle.off {
+  background: var(--tg-bg);
+  color: var(--tg-hint);
+}

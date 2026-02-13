@@ -3358,6 +3358,252 @@ class FinanceDatabase:
             LOGGER.error("Failed to get users with active reminders: %s", error)
             return []
 
+    # ── Recurring payments ────────────────────────────────
+
+    def add_recurring_payment(
+        self,
+        user_id: int,
+        title: str,
+        amount: float,
+        category: str | None,
+        frequency: str,
+        day_of_month: int,
+    ) -> int | None:
+        """Add a recurring payment. Returns new row id."""
+        try:
+            cursor = self.connection.cursor()
+            now_iso = datetime.utcnow().isoformat()
+            # Calculate next due date
+            today = datetime.utcnow().date()
+            if today.day <= day_of_month:
+                next_due = today.replace(day=min(day_of_month, 28))
+            else:
+                next_due = add_one_month(today).replace(day=min(day_of_month, 28))
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.recurring_payments}
+                    (user_id, title, amount, category, frequency, day_of_month, next_due_date, is_active, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (user_id, title, amount, category, frequency, day_of_month, next_due.isoformat(), now_iso),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to add recurring payment for user %s: %s", user_id, error)
+            return None
+
+    def list_recurring_payments(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return active recurring payments."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, title, amount, category, frequency, day_of_month, next_due_date, created_at
+                FROM {TABLES.recurring_payments}
+                WHERE user_id = ? AND is_active = 1
+                ORDER BY day_of_month, id
+                """,
+                (user_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to list recurring payments for user %s: %s", user_id, error)
+            return []
+
+    def deactivate_recurring_payment(self, user_id: int, payment_id: int) -> None:
+        """Soft-delete a recurring payment."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"UPDATE {TABLES.recurring_payments} SET is_active = 0 WHERE user_id = ? AND id = ?",
+                (user_id, payment_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to deactivate recurring payment %s: %s", payment_id, error)
+
+    def get_due_recurring_payments(self, user_id: int, today_iso: str) -> List[Dict[str, Any]]:
+        """Return recurring payments due on or before today."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, title, amount, category, frequency, day_of_month, next_due_date
+                FROM {TABLES.recurring_payments}
+                WHERE user_id = ? AND is_active = 1 AND next_due_date <= ?
+                """,
+                (user_id, today_iso),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get due recurring payments for user %s: %s", user_id, error)
+            return []
+
+    def advance_recurring_payment(self, payment_id: int) -> None:
+        """Move next_due_date forward by one period."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT next_due_date, frequency FROM {TABLES.recurring_payments} WHERE id = ?",
+                (payment_id,),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return
+            current = datetime.fromisoformat(row["next_due_date"]).date()
+            new_due = add_one_month(current)
+            cursor.execute(
+                f"UPDATE {TABLES.recurring_payments} SET next_due_date = ? WHERE id = ?",
+                (new_due.isoformat(), payment_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to advance recurring payment %s: %s", payment_id, error)
+
+    # ── Income log (for reports) ──────────────────────────
+
+    def log_income(self, user_id: int, amount: float, category: str, entry_type: str = "income", note: str = "") -> None:
+        """Record an income/expense entry for reporting."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO {TABLES.income_log} (user_id, amount, category, type, note, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, amount, category, entry_type, note, datetime.utcnow().isoformat()),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to log income for user %s: %s", user_id, error)
+
+    def get_monthly_report_data(self, user_id: int, year: int, month: int) -> Dict[str, Any]:
+        """Aggregate data for a monthly report."""
+        month_prefix = f"{year:04d}-{month:02d}"
+        result: Dict[str, Any] = {
+            "month": month_prefix,
+            "total_income": 0.0,
+            "total_expense": 0.0,
+            "income_by_category": [],
+            "expense_by_category": [],
+            "household_paid": 0.0,
+            "household_total": 0.0,
+        }
+        try:
+            cursor = self.connection.cursor()
+            # Income from log
+            cursor.execute(
+                f"""
+                SELECT category, SUM(amount) as total
+                FROM {TABLES.income_log}
+                WHERE user_id = ? AND type = 'income' AND created_at LIKE ?
+                GROUP BY category
+                """,
+                (user_id, f"{month_prefix}%"),
+            )
+            for row in cursor.fetchall():
+                cat_total = float(row["total"])
+                result["income_by_category"].append({"category": row["category"], "amount": cat_total})
+                result["total_income"] += cat_total
+
+            # Expenses from log
+            cursor.execute(
+                f"""
+                SELECT category, SUM(amount) as total
+                FROM {TABLES.income_log}
+                WHERE user_id = ? AND type = 'expense' AND created_at LIKE ?
+                GROUP BY category
+                """,
+                (user_id, f"{month_prefix}%"),
+            )
+            for row in cursor.fetchall():
+                cat_total = float(row["total"])
+                result["expense_by_category"].append({"category": row["category"], "amount": cat_total})
+                result["total_expense"] += cat_total
+
+            # Household payments for the month
+            cursor.execute(
+                f"""
+                SELECT hp.is_paid, hpi.amount
+                FROM {TABLES.household_payments} hp
+                JOIN {TABLES.household_payment_items} hpi
+                  ON hp.user_id = hpi.user_id AND hp.question_code = hpi.code
+                WHERE hp.user_id = ? AND hp.month = ?
+                """,
+                (user_id, month_prefix),
+            )
+            for row in cursor.fetchall():
+                amt = float(row["amount"])
+                result["household_total"] += amt
+                if int(row["is_paid"]):
+                    result["household_paid"] += amt
+
+            # Purchases in the month
+            cursor.execute(
+                f"""
+                SELECT SUM(price) as total
+                FROM {TABLES.purchases}
+                WHERE user_id = ? AND purchased_at LIKE ?
+                """,
+                (user_id, f"{month_prefix}%"),
+            )
+            row = cursor.fetchone()
+            if row and row["total"]:
+                result["total_expense"] += float(row["total"])
+
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to generate report for user %s: %s", user_id, error)
+        return result
+
+    def get_report_day(self, user_id: int) -> int:
+        """Return the day of month for auto-reports (default 1)."""
+        self.ensure_user_settings(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"SELECT report_day FROM {TABLES.user_settings} WHERE user_id = ?",
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            return int(row["report_day"]) if row and row["report_day"] else 1
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get report day for user %s: %s", user_id, error)
+            return 1
+
+    def set_report_day(self, user_id: int, day: int) -> None:
+        """Set the day of month for auto-reports."""
+        self.ensure_user_settings(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'UPDATE "{TABLES.user_settings}" SET report_day = ? WHERE user_id = ?',
+                (day, user_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to set report day for user %s: %s", user_id, error)
+
+    # ── Savings snapshot for export ───────────────────────
+
+    def get_all_savings_list(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return all savings as list of dicts for export."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT category, current, goal, purpose
+                FROM {TABLES.savings}
+                WHERE user_id = ?
+                ORDER BY category
+                """,
+                (user_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get savings list for user %s: %s", user_id, error)
+            return []
+
     def close(self) -> None:
         """Close database connection."""
 

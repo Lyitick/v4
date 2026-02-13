@@ -13,6 +13,7 @@ if str(project_root) not in sys.path:
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramUnauthorizedError
+from aiogram.types import MenuButtonWebApp, WebAppInfo
 
 from Bot.config.settings import get_settings
 from Bot.database.get_db import get_db
@@ -144,6 +145,19 @@ async def main() -> None:
         return
 
     tz_str = settings.timezone.key if hasattr(settings.timezone, "key") else str(settings.timezone)
+
+    # Set the Mini App menu button (bottom-left of chat input)
+    if settings.webapp_url:
+        try:
+            await bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(
+                    text="Открыть",
+                    web_app=WebAppInfo(url=settings.webapp_url),
+                ),
+            )
+            logger.info("Menu button set to Mini App: %s", settings.webapp_url)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Failed to set menu button: %s", exc)
     reminder_task = asyncio.create_task(
         _run_byt_scheduler(bot, db, tz_str)
     )

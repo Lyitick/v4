@@ -4,10 +4,8 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
-    WebAppInfo,
 )
 
-from Bot.config.settings import get_settings
 from Bot.constants.ui_labels import NAV_BACK, NAV_HOME
 
 
@@ -19,10 +17,6 @@ def main_menu_keyboard(
     """Create main menu keyboard."""
 
     buttons = [[KeyboardButton(text="Рассчитать доход")], [KeyboardButton(text="📋 Вишлист")]]
-
-    webapp_url = get_settings().webapp_url
-    if webapp_url:
-        buttons.append([KeyboardButton(text="📱 Mini App", web_app=WebAppInfo(url=webapp_url))])
 
     if show_household:
         buttons.append([KeyboardButton(text="Бытовые платежи")])

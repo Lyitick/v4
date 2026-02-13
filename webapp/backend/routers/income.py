@@ -123,6 +123,7 @@ async def confirm_distribution(
             continue
         allocated = round(body.amount * pct / 100, 2)
         db.update_saving(user_id, cat["code"], allocated)
+        db.log_income(user_id, allocated, cat["code"], "income")
         applied.append({"code": cat["code"], "title": cat["title"], "amount": allocated})
 
     return {"ok": True, "applied": applied}

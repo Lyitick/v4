@@ -218,6 +218,36 @@ export const savingsApi = {
     }),
 };
 
+// ── Recurring Types ──────────────────────────────────
+
+export interface RecurringPayment {
+  id: number;
+  title: string;
+  amount: number;
+  category?: string;
+  frequency: string;
+  day_of_month: number;
+  next_due_date?: string;
+}
+
+// ── Report Types ────────────────────────────────────
+
+export interface CategoryAmount {
+  category: string;
+  amount: number;
+}
+
+export interface MonthlyReport {
+  month: string;
+  total_income: number;
+  total_expense: number;
+  balance: number;
+  income_by_category: CategoryAmount[];
+  expense_by_category: CategoryAmount[];
+  household_paid: number;
+  household_total: number;
+}
+
 // ── Settings API ──────────────────────────────────────
 
 export const settingsApi = {
@@ -239,4 +269,64 @@ export const settingsApi = {
     request<{ ok: boolean; enabled: boolean }>("/settings/byt-reminders/toggle", {
       method: "POST",
     }),
+};
+
+// ── Recurring API ────────────────────────────────────
+
+export const recurringApi = {
+  list: () => request<RecurringPayment[]>("/recurring/"),
+
+  create: (data: { title: string; amount: number; category?: string; frequency?: string; day_of_month: number }) =>
+    request<RecurringPayment>("/recurring/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  remove: (id: number) =>
+    request<{ ok: boolean }>(`/recurring/${id}`, {
+      method: "DELETE",
+    }),
+};
+
+// ── Reports API ──────────────────────────────────────
+
+export const reportsApi = {
+  monthly: (year?: number, month?: number) => {
+    const params = new URLSearchParams();
+    if (year) params.set("year", String(year));
+    if (month) params.set("month", String(month));
+    const qs = params.toString();
+    return request<MonthlyReport>(`/reports/monthly${qs ? `?${qs}` : ""}`);
+  },
+
+  getReportDay: () => request<{ day: number }>("/reports/report-day"),
+
+  setReportDay: (day: number) =>
+    request<{ ok: boolean; day: number }>("/reports/report-day", {
+      method: "POST",
+      body: JSON.stringify({ day }),
+    }),
+};
+
+// ── Export API ────────────────────────────────────────
+
+export const exportApi = {
+  downloadExcel: async (year?: number, month?: number) => {
+    const params = new URLSearchParams();
+    if (year) params.set("year", String(year));
+    if (month) params.set("month", String(month));
+    const qs = params.toString();
+    const initData = getInitData();
+    const res = await fetch(`${API_BASE}/export/excel${qs ? `?${qs}` : ""}`, {
+      headers: { Authorization: `tma ${initData}` },
+    });
+    if (!res.ok) throw new Error("Export failed");
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `finance_report.xlsx`;
+    a.click();
+    URL.revokeObjectURL(url);
+  },
 };

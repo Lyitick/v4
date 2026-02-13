@@ -4,6 +4,8 @@ import { WishlistPage } from "./pages/WishlistPage";
 import { HouseholdPage } from "./pages/HouseholdPage";
 import { SavingsPage } from "./pages/SavingsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { RecurringPage } from "./pages/RecurringPage";
+import { ReportsPage } from "./pages/ReportsPage";
 import { TabBar } from "./components/TabBar";
 import "./styles.css";
 
@@ -28,6 +30,10 @@ function App() {
         return <HouseholdPage />;
       case "savings":
         return <SavingsPage />;
+      case "recurring":
+        return <RecurringPage />;
+      case "reports":
+        return <ReportsPage />;
       case "settings":
         return <SettingsPage />;
       default:

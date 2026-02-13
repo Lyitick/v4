@@ -22,6 +22,7 @@ from Bot.handlers import (
     common,
     finances,
     household_payments,
+    quick_expense,
     settings,
     start,
     wishlist,
@@ -40,6 +41,7 @@ def register_routers(dispatcher: Dispatcher) -> None:
     dispatcher.include_router(settings.router)
     dispatcher.include_router(wishlist.router)
     dispatcher.include_router(callbacks.router)
+    dispatcher.include_router(quick_expense.router)
     dispatcher.include_router(common.router)
 
 

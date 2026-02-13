@@ -3,12 +3,11 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardBu
 
 from Bot.constants.ui_labels import (
     NAV_BACK,
-    NAV_HOME,
     WISHLIST_DEBIT_CATEGORY_BUTTON,
     WISHLIST_DEBIT_CATEGORY_NONE,
     WISHLIST_BYT_CATEGORY_BUTTON,
 )
-from Bot.keyboards.navigation import nav_back_home
+from Bot.keyboards.navigation import nav_back
 
 
 def settings_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -16,7 +15,6 @@ def settings_menu_keyboard() -> ReplyKeyboardMarkup:
 
     buttons = [
         [KeyboardButton(text="⚙️ Бытовые платежи ⚙️")],
-        [KeyboardButton(text=NAV_HOME)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -58,7 +56,7 @@ def household_settings_reply_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="➕ Добавить"), KeyboardButton(text="➖ Удалить")],
         [KeyboardButton(text="💰 Категория списания"), KeyboardButton(text="🧹 Обнулить")],
-        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+        [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -77,7 +75,7 @@ def household_debit_category_select_reply_keyboard(
             row = []
     if row:
         rows.append(row)
-    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    rows.append([KeyboardButton(text=NAV_BACK)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -98,7 +96,7 @@ def household_payments_remove_reply_keyboard(
             row = []
     if row:
         rows.append(row)
-    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    rows.append([KeyboardButton(text=NAV_BACK)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -143,7 +141,6 @@ def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="Напоминания", callback_data="st:byt_rules")],
         [InlineKeyboardButton(text="🧾 Бытовые платежи", callback_data="st:household_payments")],
         [InlineKeyboardButton(text="Таймзона", callback_data="st:timezone")],
-        [InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
@@ -155,7 +152,7 @@ def settings_home_reply_keyboard() -> ReplyKeyboardMarkup:
         [KeyboardButton(text="📊 Доход"), KeyboardButton(text="🧾 Вишлист")],
         [KeyboardButton(text="Напоминания"), KeyboardButton(text="🧾 Бытовые платежи")],
         [KeyboardButton(text="Таймзона")],
-        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+        [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -173,7 +170,7 @@ def wishlist_settings_inline_keyboard() -> InlineKeyboardMarkup:
         ],
         [InlineKeyboardButton(text="💰 Категория списания", callback_data="wl:debit_category_menu")],
     ]
-    inline_keyboard.extend(nav_back_home("st:wishlist", "nav:home").inline_keyboard)
+    inline_keyboard.extend(nav_back("st:wishlist").inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
@@ -187,7 +184,7 @@ def wishlist_settings_reply_keyboard() -> ReplyKeyboardMarkup:
         ],
         [KeyboardButton(text="🕒 Настроить купленное")],
         [KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_BUTTON)],
-        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+        [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -204,7 +201,7 @@ def wishlist_categories_select_reply_keyboard(categories: list[dict]) -> ReplyKe
             row = []
     if row:
         rows.append(row)
-    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    rows.append([KeyboardButton(text=NAV_BACK)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -214,7 +211,7 @@ def wishlist_purchased_mode_reply_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text="Всегда")],
         [KeyboardButton(text="Настроить дни")],
-        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+        [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -234,7 +231,7 @@ def wishlist_debit_category_select_reply_keyboard(
     if row:
         rows.append(row)
     rows.append([KeyboardButton(text=WISHLIST_DEBIT_CATEGORY_NONE)])
-    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    rows.append([KeyboardButton(text=NAV_BACK)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -252,7 +249,7 @@ def wishlist_byt_category_select_reply_keyboard(
             row = []
     if row:
         rows.append(row)
-    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    rows.append([KeyboardButton(text=NAV_BACK)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -276,12 +273,7 @@ def byt_category_toggle_keyboard(categories: list[dict]) -> InlineKeyboardMarkup
             row = []
     if row:
         inline_keyboard.append(row)
-    inline_keyboard.append(
-        [
-            InlineKeyboardButton(text=NAV_BACK, callback_data="st:byt_rules"),
-            InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home"),
-        ]
-    )
+    inline_keyboard.append([InlineKeyboardButton(text=NAV_BACK, callback_data="st:byt_rules")])
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
@@ -303,7 +295,7 @@ def wishlist_categories_select_keyboard(
             row = []
     if row:
         inline_keyboard.append(row)
-    inline_keyboard.extend(nav_back_home("st:byt_rules", "nav:home").inline_keyboard)
+    inline_keyboard.extend(nav_back("st:byt_rules").inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
@@ -328,12 +320,7 @@ def byt_timer_categories_inline_keyboard(
             row = []
     if row:
         inline_keyboard.append(row)
-    inline_keyboard.append(
-        [
-            InlineKeyboardButton(text=NAV_BACK, callback_data="st:byt_rules"),
-            InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home"),
-        ]
-    )
+    inline_keyboard.append([InlineKeyboardButton(text=NAV_BACK, callback_data="st:byt_rules")])
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
@@ -369,7 +356,7 @@ def byt_rules_inline_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⏰ Время напоминаний", callback_data="byt:timer_menu"),
         ],
     ]
-    inline_keyboard.extend(nav_back_home("st:home", "nav:home").inline_keyboard)
+    inline_keyboard.extend(nav_back("st:home").inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 
@@ -384,7 +371,7 @@ def byt_rules_reply_keyboard() -> ReplyKeyboardMarkup:
         ],
         [KeyboardButton(text="⏰ Время напоминаний")],
         [KeyboardButton(text="⏳ Макс. дни отложить")],
-        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+        [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -397,10 +384,7 @@ def byt_timer_inline_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="➕ Добавить время", callback_data="bt:add_time"),
             InlineKeyboardButton(text="🗑 Удалить время", callback_data="bt:del_time_menu"),
         ],
-        [
-            InlineKeyboardButton(text=NAV_BACK, callback_data="byt:timer_menu"),
-            InlineKeyboardButton(text=NAV_HOME, callback_data="nav:home"),
-        ],
+        [InlineKeyboardButton(text=NAV_BACK, callback_data="byt:timer_menu")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
@@ -413,7 +397,7 @@ def byt_timer_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="➕ Добавить время"),
             KeyboardButton(text="🗑 Удалить время"),
         ],
-        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+        [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -434,7 +418,7 @@ def byt_timer_times_select_reply_keyboard(times: list[dict]) -> ReplyKeyboardMar
             row = []
     if row:
         rows.append(row)
-    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    rows.append([KeyboardButton(text=NAV_BACK)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -464,7 +448,7 @@ def byt_timer_times_select_keyboard(times: list[dict], action_prefix: str) -> In
 def settings_back_reply_keyboard() -> ReplyKeyboardMarkup:
     """Reply keyboard with a single back button for settings mode."""
 
-    buttons = [[KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)]]
+    buttons = [[KeyboardButton(text=NAV_BACK)]]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 
@@ -492,7 +476,7 @@ def income_settings_reply_keyboard() -> ReplyKeyboardMarkup:
             KeyboardButton(text="➖ Удалить категорию дохода"),
         ],
         [KeyboardButton(text="⚙️ Проценты доходов")],
-        [KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)],
+        [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
@@ -513,7 +497,7 @@ def income_categories_select_reply_keyboard(
             row = []
     if row:
         rows.append(row)
-    rows.append([KeyboardButton(text=NAV_BACK), KeyboardButton(text=NAV_HOME)])
+    rows.append([KeyboardButton(text=NAV_BACK)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -552,7 +536,7 @@ def timezone_inline_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="UTC", callback_data="st:tz:UTC"),
         ],
     ]
-    inline_keyboard.extend(nav_back_home("st:home", "nav:home").inline_keyboard)
+    inline_keyboard.extend(nav_back("st:home").inline_keyboard)
     return InlineKeyboardMarkup(inline_keyboard=inline_keyboard)
 
 

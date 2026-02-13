@@ -38,6 +38,10 @@ BOT_TOKEN, BOT_TOKEN_SOURCE = _resolve_bot_token()
 ADMIN_ID: int = 838347504
 TIMEZONE = ZoneInfo("Europe/Moscow")
 
+_env_path = Path(__file__).resolve().parents[2] / ".env"
+_env_values = _load_env_file(_env_path)
+WEBAPP_URL: str = os.environ.get("WEBAPP_URL", _env_values.get("WEBAPP_URL", ""))
+
 
 @dataclass
 class Settings:
@@ -47,6 +51,7 @@ class Settings:
     bot_token_source: str = BOT_TOKEN_SOURCE
     admin_id: int = ADMIN_ID
     timezone: ZoneInfo = TIMEZONE
+    webapp_url: str = WEBAPP_URL
 
 
 def get_settings() -> Settings:

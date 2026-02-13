@@ -44,6 +44,9 @@ WEBAPP_URL: str = os.environ.get("WEBAPP_URL", _env_values.get("WEBAPP_URL", "")
 GOOGLE_SHEETS_CREDENTIALS: str = os.environ.get(
     "GOOGLE_SHEETS_CREDENTIALS", _env_values.get("GOOGLE_SHEETS_CREDENTIALS", "")
 )
+OPENAI_API_KEY: str = os.environ.get(
+    "OPENAI_API_KEY", _env_values.get("OPENAI_API_KEY", "")
+)
 
 
 @dataclass
@@ -56,6 +59,7 @@ class Settings:
     timezone: ZoneInfo = TIMEZONE
     webapp_url: str = WEBAPP_URL
     google_sheets_credentials: str = GOOGLE_SHEETS_CREDENTIALS
+    openai_api_key: str = OPENAI_API_KEY
 
 
 def get_settings() -> Settings:

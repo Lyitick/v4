@@ -17,6 +17,13 @@ from aiogram.types import (
 
 from Bot.constants.ui_labels import (
     NAV_BACK,
+    REM_CATEGORY_FOOD,
+    REM_CATEGORY_HABITS,
+    REM_CATEGORY_MOTIVATION,
+    REM_CATEGORY_WISHLIST,
+    REM_HABIT_ADD,
+    REM_HABIT_DELETE,
+    REM_HABIT_STATS,
     WISHLIST_DEBIT_CATEGORY_BACK,
     WISHLIST_DEBIT_CATEGORY_BUTTON,
     WISHLIST_DEBIT_CATEGORY_NONE,
@@ -49,6 +56,8 @@ from Bot.keyboards.settings import (
 from Bot.utils.byt_render import format_byt_categories_status_text
 from Bot.keyboards.calculator import income_calculator_keyboard
 from Bot.states.money_states import HouseholdSettingsState, IncomeSettingsState
+from Bot.services.types import ServiceError
+from Bot.states.reminder_states import HabitSettingsState as HabitSettState
 from Bot.states.wishlist_states import (
     BytSettingsState,
     BytTimerState,
@@ -263,7 +272,10 @@ async def _edit_settings_page(
 ) -> int:
     try:
         data = await state.get_data()
-        if data.get("settings_current_screen") in {"st:income", "st:wishlist", "st:byt_rules"}:
+        if data.get("settings_current_screen") in {
+            "st:income", "st:wishlist", "st:byt_rules",
+            "st:reminders", "rem:habits",
+        }:
             raise TelegramBadRequest(method="editMessageText", message="reply-only")
         await _safe_edit(
             bot,
@@ -711,6 +723,54 @@ async def _render_wishlist_settings(
     return categories
 
 
+async def _render_reminders_home(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> None:
+    """Render the reminders category selection screen."""
+    from Bot.keyboards.reminders import reminder_categories_keyboard
+
+    text = "🔔 <b>НАПОМИНАНИЯ</b>\n\nВыбери категорию:"
+    if error_message:
+        text += f"\n\n⚠️ {error_message}"
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=text,
+        reply_markup=reminder_categories_keyboard(),
+        screen_id="st:reminders",
+    )
+
+
+async def _render_habits_settings(
+    *,
+    state: FSMContext,
+    message: Message,
+    db,
+    user_id: int,
+    error_message: str | None = None,
+) -> None:
+    """Render habits list + management screen."""
+    from Bot.keyboards.reminders import habit_list_inline_keyboard, habit_settings_keyboard
+    from Bot.renderers.reminder_render import format_habits_settings_text
+
+    habits = db.list_reminders_by_category(user_id, "habits")
+    text = format_habits_settings_text(habits)
+    if error_message:
+        text += f"\n\n⚠️ {error_message}"
+    await _render_reply_settings_page(
+        message=message,
+        state=state,
+        text=text,
+        reply_markup=habit_settings_keyboard(),
+        screen_id="rem:habits",
+    )
+
+
 async def _render_byt_rules_settings(
     *,
     state: FSMContext,
@@ -1040,6 +1100,22 @@ async def render_settings_screen(
             user_id=user_id,
             error_message=error_message,
         )
+    elif screen_id == "st:reminders":
+        await _render_reminders_home(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
+    elif screen_id == "rem:habits":
+        await _render_habits_settings(
+            state=state,
+            message=message,
+            db=db,
+            user_id=user_id,
+            error_message=error_message,
+        )
     elif screen_id == "st:byt_rules":
         await _render_byt_rules_settings(
             state=state,
@@ -1320,14 +1396,15 @@ async def open_household_payments_reply(message: Message, state: FSMContext) -> 
 
 
 @router.message(F.text == "Напоминания")
-async def open_byt_rules_reply(message: Message, state: FSMContext) -> None:
+async def open_reminders_menu_reply(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     if not data.get("in_settings"):
         return
     await _register_user_message(state, message)
     await _delete_user_message(message)
     await state.set_state(None)
-    await _navigate_to_screen("st:byt_rules", message=message, state=state)
+    LOGGER.info("USER=%s ACTION=REMINDERS_SETTINGS_OPEN", message.from_user.id)
+    await _navigate_to_screen("st:reminders", message=message, state=state)
 
 
 @router.message(F.text == "➕ Добавить")
@@ -3504,3 +3581,298 @@ async def byt_max_defer_days_value(message: Message, state: FSMContext) -> None:
             message=message,
             state=state,
         )
+
+
+# ------------------------------------------------------------------ #
+#  Scheduled Reminders — settings navigation handlers                 #
+# ------------------------------------------------------------------ #
+
+
+@router.callback_query(F.data == "st:reminders")
+async def open_reminders_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    await callback.answer()
+    await state.set_state(None)
+    await _navigate_to_screen("st:reminders", message=callback.message, state=state)
+
+
+@router.message(F.text == REM_CATEGORY_HABITS)
+async def open_habits_settings_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "st:reminders":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    LOGGER.info("USER=%s ACTION=REMINDER_TYPE_SELECT META=category=habits", message.from_user.id)
+    await _navigate_to_screen("rem:habits", message=message, state=state)
+
+
+@router.message(F.text == REM_CATEGORY_WISHLIST)
+async def open_wishlist_byt_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "st:reminders":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await state.set_state(None)
+    LOGGER.info("USER=%s ACTION=REMINDER_TYPE_SELECT META=category=wishlist", message.from_user.id)
+    await _navigate_to_screen("st:byt_rules", message=message, state=state)
+
+
+@router.message(F.text == REM_CATEGORY_MOTIVATION)
+async def open_motivation_settings_stub(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "st:reminders":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    LOGGER.info("USER=%s ACTION=REMINDER_TYPE_SELECT META=category=motivation", message.from_user.id)
+    await render_settings_screen(
+        "st:reminders", message=message, state=state,
+        error_message="Мотивация — скоро!",
+    )
+
+
+@router.message(F.text == REM_CATEGORY_FOOD)
+async def open_food_settings_stub(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "st:reminders":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    LOGGER.info("USER=%s ACTION=REMINDER_TYPE_SELECT META=category=food", message.from_user.id)
+    await render_settings_screen(
+        "st:reminders", message=message, state=state,
+        error_message="Питание — скоро!",
+    )
+
+
+# ------------------------------------------------------------------ #
+#  Habits settings handlers                                           #
+# ------------------------------------------------------------------ #
+
+
+@router.message(F.text == REM_HABIT_ADD)
+async def habit_add_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "rem:habits":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    await _push_current_screen(state, "rem:habit_add")
+    await state.set_state(HabitSettState.waiting_for_habit_title)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Напиши название привычки:",
+        reply_markup=back_only_keyboard(),
+    )
+
+
+@router.message(F.text == REM_HABIT_DELETE)
+async def habit_delete_menu_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "rem:habits":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    db = get_db()
+    habits = db.list_reminders_by_category(message.from_user.id, "habits")
+    if not habits:
+        await render_settings_screen(
+            "rem:habits", message=message, state=state,
+            error_message="Нет привычек для удаления",
+        )
+        return
+    from Bot.keyboards.reminders import habit_delete_inline_keyboard
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text="Что удалить?",
+        reply_markup=habit_delete_inline_keyboard(habits),
+    )
+
+
+@router.message(F.text == REM_HABIT_STATS)
+async def habit_stats_reply(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data.get("settings_current_screen") != "rem:habits":
+        return
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+    db = get_db()
+    user_id = message.from_user.id
+    from datetime import date as date_cls
+    from Bot.renderers.reminder_render import format_habit_stats_text
+    habits = db.list_reminders_by_category(user_id, "habits")
+    today = date_cls.today().isoformat()
+    stats = db.get_reminder_stats(user_id, today, "habits")
+    text = format_habit_stats_text(habits, stats, today)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=text,
+        reply_markup=None,
+    )
+
+
+@router.callback_query(F.data.startswith("rem:habit_toggle:"))
+async def handle_habit_toggle(callback: CallbackQuery, state: FSMContext) -> None:
+    """Toggle a habit on/off."""
+    from Bot.utils.telegram_safe import safe_callback_answer as _sca
+    await _sca(callback, logger=LOGGER)
+    try:
+        reminder_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        return
+    db = get_db()
+    new_val = db.toggle_reminder_enabled(reminder_id, callback.from_user.id)
+    if new_val is None:
+        return
+    await render_settings_screen("rem:habits", message=callback.message, state=state)
+
+
+@router.callback_query(F.data.startswith("rem:habit_del:"))
+async def handle_habit_delete(callback: CallbackQuery, state: FSMContext) -> None:
+    """Delete a habit."""
+    from Bot.utils.telegram_safe import safe_callback_answer as _sca
+    from Bot.services.reminder_service import delete_habit
+    await _sca(callback, logger=LOGGER)
+    try:
+        reminder_id = int(callback.data.split(":")[2])
+    except (IndexError, ValueError):
+        return
+    db = get_db()
+    result = delete_habit(db, callback.from_user.id, reminder_id)
+    if isinstance(result, ServiceError):
+        await _sca(callback, result.message, show_alert=True, logger=LOGGER)
+        return
+    await render_settings_screen("rem:habits", message=callback.message, state=state)
+
+
+@router.callback_query(F.data == "rem:habits_back")
+async def handle_habits_inline_back(callback: CallbackQuery, state: FSMContext) -> None:
+    """Back button from inline habit sub-screens."""
+    await callback.answer()
+    await render_settings_screen("rem:habits", message=callback.message, state=state)
+
+
+# --- Habit title FSM input ---
+
+
+@router.message(HabitSettState.waiting_for_habit_title)
+async def habit_title_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+
+    title = (message.text or "").strip()
+    if not title:
+        return
+
+    if title == NAV_BACK:
+        await state.set_state(None)
+        await _render_previous_screen_or_exit(message, state)
+        return
+
+    # Create habit with no schedule initially
+    from Bot.services.reminder_service import create_habit
+    db = get_db()
+    result = create_habit(db, message.from_user.id, title)
+    if isinstance(result, ServiceError):
+        chat_id, message_id = await _get_settings_message_ids(state, message)
+        await _edit_settings_page(
+            bot=message.bot,
+            state=state,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=f"⚠️ {result.message}\n\nНапиши название привычки:",
+            reply_markup=back_only_keyboard(),
+        )
+        return
+
+    # Ask for times
+    await state.update_data(rem_new_habit_id=result["id"])
+    await state.set_state(HabitSettState.waiting_for_habit_times)
+    chat_id, message_id = await _get_settings_message_ids(state, message)
+    await _edit_settings_page(
+        bot=message.bot,
+        state=state,
+        chat_id=chat_id,
+        message_id=message_id,
+        text=(
+            f"Привычка <b>{title}</b> создана!\n\n"
+            "Введи время напоминания (HH:MM).\n"
+            "Можно ввести несколько через запятую: 09:00, 21:00\n\n"
+            f"Или нажми {NAV_BACK} чтобы пропустить."
+        ),
+        reply_markup=back_only_keyboard(),
+    )
+
+
+@router.message(HabitSettState.waiting_for_habit_times)
+async def habit_times_input(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    await _register_user_message(state, message)
+    await _delete_user_message(message)
+
+    text = (message.text or "").strip()
+    if not text:
+        return
+
+    if text == NAV_BACK:
+        await state.set_state(None)
+        previous_screen = await _pop_previous_screen(state) or "rem:habits"
+        await render_settings_screen(previous_screen, message=message, state=state)
+        return
+
+    reminder_id = data.get("rem_new_habit_id")
+    if not reminder_id:
+        await state.set_state(None)
+        await render_settings_screen("rem:habits", message=message, state=state)
+        return
+
+    # Parse times
+    import json as _json
+    raw_times = [t.strip() for t in text.replace(";", ",").split(",") if t.strip()]
+    valid_times = []
+    for raw in raw_times:
+        normalized, is_complete = normalize_time_partial(raw)
+        if normalized and is_complete:
+            valid_times.append(normalized)
+
+    if not valid_times:
+        chat_id, message_id = await _get_settings_message_ids(state, message)
+        await _edit_settings_page(
+            bot=message.bot,
+            state=state,
+            chat_id=chat_id,
+            message_id=message_id,
+            text="⚠️ Не удалось распознать время.\nФормат: HH:MM (через запятую):",
+            reply_markup=back_only_keyboard(),
+        )
+        return
+
+    db = get_db()
+    db.set_reminder_schedule(
+        reminder_id,
+        "specific_times",
+        times_json=_json.dumps(valid_times),
+    )
+    LOGGER.info(
+        "USER=%s ACTION=REMINDER_SCHEDULE_SET META=reminder_id=%s times=%s",
+        message.from_user.id, reminder_id, valid_times,
+    )
+
+    await state.set_state(None)
+    previous_screen = await _pop_previous_screen(state) or "rem:habits"
+    await render_settings_screen(previous_screen, message=message, state=state)

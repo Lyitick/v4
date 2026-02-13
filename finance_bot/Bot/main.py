@@ -21,10 +21,12 @@ from Bot.handlers import (
     common,
     finances,
     household_payments,
+    reminders,
     settings,
     start,
     wishlist,
 )
+from Bot.handlers.reminders import run_reminder_check, run_snooze_check
 from Bot.handlers.wishlist import run_byt_timer_check
 from Bot.utils.logging import init_logging
 from Bot.utils.time import now_for_user
@@ -37,6 +39,7 @@ def register_routers(dispatcher: Dispatcher) -> None:
     dispatcher.include_router(finances.router)
     dispatcher.include_router(household_payments.router)
     dispatcher.include_router(settings.router)
+    dispatcher.include_router(reminders.router)
     dispatcher.include_router(wishlist.router)
     dispatcher.include_router(callbacks.router)
     dispatcher.include_router(common.router)
@@ -84,6 +87,24 @@ async def _run_byt_scheduler(bot: Bot, db, default_tz: str) -> None:
         await asyncio.sleep(max(sleep_for, 1))
 
 
+async def _run_reminder_scheduler(bot: Bot, db, default_tz: str) -> None:
+    """Background scheduler for scheduled reminders (habits, food, motivation)."""
+
+    while True:
+        try:
+            user_ids = db.get_users_with_active_reminders()
+            for uid in user_ids:
+                now_dt = now_for_user(db, uid, default_tz)
+                for category in ("habits",):  # food, motivation added in later phases
+                    await run_reminder_check(bot, db, uid, category, now_dt)
+                await run_snooze_check(bot, db, uid, now_dt)
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).error("Reminder scheduler error: %s", exc)
+        reference = now_for_user(db, 0, default_tz)
+        sleep_for = 60 - reference.second - reference.microsecond / 1_000_000
+        await asyncio.sleep(max(sleep_for, 1))
+
+
 async def main() -> None:
     """Run bot polling."""
 
@@ -122,12 +143,12 @@ async def main() -> None:
         await bot.session.close()
         return
 
+    tz_str = settings.timezone.key if hasattr(settings.timezone, "key") else str(settings.timezone)
     reminder_task = asyncio.create_task(
-        _run_byt_scheduler(
-            bot,
-            db,
-            settings.timezone.key if hasattr(settings.timezone, "key") else str(settings.timezone),
-        )
+        _run_byt_scheduler(bot, db, tz_str)
+    )
+    general_reminder_task = asyncio.create_task(
+        _run_reminder_scheduler(bot, db, tz_str)
     )
     try:
         logger.info(
@@ -146,8 +167,11 @@ async def main() -> None:
         logger.exception("Bot stopped due to error: %s", error)
     finally:
         reminder_task.cancel()
+        general_reminder_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await reminder_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await general_reminder_task
         await bot.session.close()
         logger.info("Bot shutdown complete")
 

@@ -138,7 +138,7 @@ def settings_home_inline_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📊 Доход", callback_data="st:income"),
             InlineKeyboardButton(text="🧾 Вишлист", callback_data="st:wishlist"),
         ],
-        [InlineKeyboardButton(text="Напоминания", callback_data="st:byt_rules")],
+        [InlineKeyboardButton(text="Напоминания", callback_data="st:reminders")],
         [InlineKeyboardButton(text="🧾 Бытовые платежи", callback_data="st:household_payments")],
         [InlineKeyboardButton(text="Таймзона", callback_data="st:timezone")],
     ]

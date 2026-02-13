@@ -1,6 +1,7 @@
 """Database CRUD operations for finance bot."""
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 import time
@@ -37,6 +38,10 @@ class TableNames:
     byt_timer_times: str = "время_быт_таймера"
     byt_reminder_categories: str = "категории_быт_напоминаний"
     byt_reminder_times: str = "время_быт_напоминаний"
+    reminders: str = "напоминания"
+    reminder_schedules: str = "расписания_напоминаний"
+    reminder_events: str = "события_напоминаний"
+    reminder_stats_daily: str = "статистика_напоминаний_по_дням"
 
 
 TABLES = TableNames()
@@ -54,6 +59,10 @@ TABLE_RENAMES: dict[str, str] = {
     "byt_timer_times": TABLES.byt_timer_times,
     "byt_reminder_categories": TABLES.byt_reminder_categories,
     "byt_reminder_times": TABLES.byt_reminder_times,
+    "reminders": TABLES.reminders,
+    "reminder_schedules": TABLES.reminder_schedules,
+    "reminder_events": TABLES.reminder_events,
+    "reminder_stats_daily": TABLES.reminder_stats_daily,
 }
 LEGACY_TABLE_NAMES = tuple(TABLE_RENAMES.keys())
 
@@ -386,6 +395,68 @@ class FinanceDatabase:
                 category_id INTEGER NOT NULL,
                 time_hhmm TEXT NOT NULL,
                 PRIMARY KEY (user_id, category_id, time_hhmm)
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.reminders}" (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                category TEXT NOT NULL,
+                title TEXT NOT NULL,
+                text TEXT,
+                media_type TEXT,
+                media_ref TEXT,
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                position INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.reminder_schedules}" (
+                id INTEGER PRIMARY KEY,
+                reminder_id INTEGER NOT NULL,
+                schedule_type TEXT NOT NULL DEFAULT 'specific_times',
+                interval_minutes INTEGER,
+                times_json TEXT,
+                active_from TEXT,
+                active_to TEXT,
+                timezone TEXT,
+                FOREIGN KEY (reminder_id) REFERENCES "{TABLES.reminders}"(id)
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.reminder_events}" (
+                id INTEGER PRIMARY KEY,
+                reminder_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                event_type TEXT NOT NULL,
+                shown_at TEXT NOT NULL,
+                action_at TEXT,
+                snooze_until TEXT,
+                message_id INTEGER,
+                callback_hash TEXT UNIQUE,
+                FOREIGN KEY (reminder_id) REFERENCES "{TABLES.reminders}"(id)
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.reminder_stats_daily}" (
+                user_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                category TEXT NOT NULL,
+                shown_count INTEGER NOT NULL DEFAULT 0,
+                done_count INTEGER NOT NULL DEFAULT 0,
+                snooze_count INTEGER NOT NULL DEFAULT 0,
+                skip_count INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (user_id, date, category)
             )
             """
         )
@@ -1808,6 +1879,18 @@ class FinanceDatabase:
                 ON "{TABLES.byt_timer_times}" (user_id, hour, minute)
                 """
             )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_reminders_user_category'
+            f' ON "{TABLES.reminders}" (user_id, category, is_enabled)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_reminder_schedules_reminder'
+            f' ON "{TABLES.reminder_schedules}" (reminder_id)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_reminder_events_snooze'
+            f' ON "{TABLES.reminder_events}" (user_id, snooze_until)'
+        )
 
     def get_user_savings(self, user_id: int) -> Dict[str, Dict[str, Any]]:
         """Get all savings for a user.
@@ -2895,6 +2978,385 @@ class FinanceDatabase:
                 self.connection.commit()
         except sqlite3.Error as error:
             LOGGER.error("Failed to cleanup old BYT purchases: %s", error)
+
+    # ------------------------------------------------------------------ #
+    #  Scheduled Reminders CRUD                                           #
+    # ------------------------------------------------------------------ #
+
+    def create_reminder(
+        self,
+        user_id: int,
+        category: str,
+        title: str,
+        text: str | None = None,
+        media_type: str | None = None,
+        media_ref: str | None = None,
+    ) -> int | None:
+        """Create a reminder and return its id."""
+        now_iso = datetime.now().isoformat()
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO "{TABLES.reminders}"
+                    (user_id, category, title, text, media_type, media_ref,
+                     is_enabled, position, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?, ?)
+                """,
+                (user_id, category, title, text, media_type, media_ref,
+                 now_iso, now_iso),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to create reminder (user=%s, cat=%s): %s",
+                user_id, category, error,
+            )
+            return None
+
+    def update_reminder(
+        self, reminder_id: int, user_id: int, **fields: Any
+    ) -> bool:
+        """Update reminder fields."""
+        allowed = {
+            "title", "text", "media_type", "media_ref",
+            "is_enabled", "position",
+        }
+        to_set = {k: v for k, v in fields.items() if k in allowed}
+        if not to_set:
+            return False
+        to_set["updated_at"] = datetime.now().isoformat()
+        set_clause = ", ".join(f"{k} = ?" for k in to_set)
+        values = list(to_set.values()) + [reminder_id, user_id]
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'UPDATE "{TABLES.reminders}" SET {set_clause}'
+                f" WHERE id = ? AND user_id = ?",
+                values,
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to update reminder %s: %s", reminder_id, error)
+            return False
+
+    def delete_reminder(self, reminder_id: int, user_id: int) -> bool:
+        """Delete a reminder and its schedule."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute("BEGIN IMMEDIATE")
+            cursor.execute(
+                f'DELETE FROM "{TABLES.reminder_schedules}" WHERE reminder_id = ?',
+                (reminder_id,),
+            )
+            cursor.execute(
+                f'DELETE FROM "{TABLES.reminders}" WHERE id = ? AND user_id = ?',
+                (reminder_id, user_id),
+            )
+            deleted = cursor.rowcount > 0
+            cursor.execute("COMMIT")
+            return deleted
+        except sqlite3.Error as error:
+            with contextlib.suppress(sqlite3.Error):
+                self.connection.execute("ROLLBACK")
+            LOGGER.error("Failed to delete reminder %s: %s", reminder_id, error)
+            return False
+
+    def toggle_reminder_enabled(
+        self, reminder_id: int, user_id: int
+    ) -> bool | None:
+        """Toggle is_enabled for a reminder, return new value or None on error."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT is_enabled FROM "{TABLES.reminders}" WHERE id = ? AND user_id = ?',
+                (reminder_id, user_id),
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            new_val = 0 if row["is_enabled"] else 1
+            cursor.execute(
+                f'UPDATE "{TABLES.reminders}" SET is_enabled = ?, updated_at = ?'
+                f" WHERE id = ? AND user_id = ?",
+                (new_val, datetime.now().isoformat(), reminder_id, user_id),
+            )
+            self.connection.commit()
+            return bool(new_val)
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to toggle reminder %s: %s", reminder_id, error)
+            return None
+
+    def list_reminders_by_category(
+        self, user_id: int, category: str
+    ) -> list[dict[str, Any]]:
+        """List reminders for a user in a category."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT * FROM "{TABLES.reminders}"'
+                f" WHERE user_id = ? AND category = ?"
+                f" ORDER BY position, id",
+                (user_id, category),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to list reminders: %s", error)
+            return []
+
+    def get_reminder(self, reminder_id: int) -> dict[str, Any] | None:
+        """Get a single reminder by id."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT * FROM "{TABLES.reminders}" WHERE id = ?',
+                (reminder_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get reminder %s: %s", reminder_id, error)
+            return None
+
+    # --- Schedules ---
+
+    def set_reminder_schedule(
+        self,
+        reminder_id: int,
+        schedule_type: str = "specific_times",
+        interval_minutes: int | None = None,
+        times_json: str | None = None,
+        active_from: str | None = None,
+        active_to: str | None = None,
+        timezone: str | None = None,
+    ) -> int | None:
+        """Create or replace the schedule for a reminder."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'DELETE FROM "{TABLES.reminder_schedules}" WHERE reminder_id = ?',
+                (reminder_id,),
+            )
+            cursor.execute(
+                f"""
+                INSERT INTO "{TABLES.reminder_schedules}"
+                    (reminder_id, schedule_type, interval_minutes, times_json,
+                     active_from, active_to, timezone)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (reminder_id, schedule_type, interval_minutes, times_json,
+                 active_from, active_to, timezone),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.Error as error:
+            LOGGER.error(
+                "Failed to set schedule for reminder %s: %s",
+                reminder_id, error,
+            )
+            return None
+
+    def get_reminder_schedule(
+        self, reminder_id: int
+    ) -> dict[str, Any] | None:
+        """Get the schedule for a reminder."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT * FROM "{TABLES.reminder_schedules}" WHERE reminder_id = ?',
+                (reminder_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get schedule for %s: %s", reminder_id, error)
+            return None
+
+    def delete_reminder_schedule(self, reminder_id: int) -> bool:
+        """Delete the schedule for a reminder."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'DELETE FROM "{TABLES.reminder_schedules}" WHERE reminder_id = ?',
+                (reminder_id,),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to delete schedule for %s: %s", reminder_id, error)
+            return False
+
+    # --- Events ---
+
+    def record_reminder_event(
+        self,
+        reminder_id: int,
+        user_id: int,
+        event_type: str,
+        shown_at: str,
+        message_id: int | None = None,
+        callback_hash: str | None = None,
+    ) -> int | None:
+        """Record a reminder event. Returns id, or None if duplicate hash."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO "{TABLES.reminder_events}"
+                    (reminder_id, user_id, event_type, shown_at, message_id, callback_hash)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (reminder_id, user_id, event_type, shown_at, message_id,
+                 callback_hash),
+            )
+            self.connection.commit()
+            return cursor.lastrowid
+        except sqlite3.IntegrityError:
+            LOGGER.debug("Duplicate reminder event hash=%s", callback_hash)
+            return None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to record reminder event: %s", error)
+            return None
+
+    def get_reminder_event(self, event_id: int) -> dict[str, Any] | None:
+        """Get a reminder event by id."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT * FROM "{TABLES.reminder_events}" WHERE id = ?',
+                (event_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get event %s: %s", event_id, error)
+            return None
+
+    def get_reminder_event_by_hash(
+        self, callback_hash: str
+    ) -> dict[str, Any] | None:
+        """Get a reminder event by callback hash."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT * FROM "{TABLES.reminder_events}" WHERE callback_hash = ?',
+                (callback_hash,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get event by hash: %s", error)
+            return None
+
+    def update_reminder_event_action(
+        self,
+        event_id: int,
+        event_type: str,
+        action_at: str,
+        snooze_until: str | None = None,
+    ) -> bool:
+        """Set action on a reminder event. Returns False if already acted."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'UPDATE "{TABLES.reminder_events}"'
+                f" SET event_type = ?, action_at = ?, snooze_until = ?"
+                f" WHERE id = ? AND action_at IS NULL",
+                (event_type, action_at, snooze_until, event_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to update event %s: %s", event_id, error)
+            return False
+
+    def get_pending_snooze_events(
+        self, user_id: int, now_iso: str
+    ) -> list[dict[str, Any]]:
+        """Return events whose snooze_until has passed."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT e.*, r.category, r.title, r.text, r.is_enabled
+                FROM "{TABLES.reminder_events}" e
+                JOIN "{TABLES.reminders}" r ON r.id = e.reminder_id
+                WHERE e.user_id = ?
+                  AND e.event_type = 'snooze'
+                  AND e.snooze_until IS NOT NULL
+                  AND e.snooze_until <= ?
+                """,
+                (user_id, now_iso),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get snooze events: %s", error)
+            return []
+
+    # --- Stats ---
+
+    def increment_reminder_stat(
+        self, user_id: int, date_str: str, category: str, field: str
+    ) -> None:
+        """Increment a daily stat counter."""
+        allowed_fields = {"shown_count", "done_count", "snooze_count", "skip_count"}
+        if field not in allowed_fields:
+            return
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO "{TABLES.reminder_stats_daily}"
+                    (user_id, date, category, {field})
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(user_id, date, category)
+                DO UPDATE SET {field} = {field} + 1
+                """,
+                (user_id, date_str, category),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to increment reminder stat: %s", error)
+
+    def get_reminder_stats(
+        self, user_id: int, date_str: str, category: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Get daily reminder stats."""
+        try:
+            cursor = self.connection.cursor()
+            if category:
+                cursor.execute(
+                    f'SELECT * FROM "{TABLES.reminder_stats_daily}"'
+                    f" WHERE user_id = ? AND date = ? AND category = ?",
+                    (user_id, date_str, category),
+                )
+            else:
+                cursor.execute(
+                    f'SELECT * FROM "{TABLES.reminder_stats_daily}"'
+                    f" WHERE user_id = ? AND date = ?",
+                    (user_id, date_str),
+                )
+            return [dict(r) for r in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get reminder stats: %s", error)
+            return []
+
+    # --- Scheduler queries ---
+
+    def get_users_with_active_reminders(self) -> list[int]:
+        """Return user ids that have at least one enabled reminder."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT DISTINCT user_id FROM "{TABLES.reminders}"'
+                f" WHERE is_enabled = 1",
+            )
+            return [r["user_id"] for r in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get users with active reminders: %s", error)
+            return []
 
     def close(self) -> None:
         """Close database connection."""

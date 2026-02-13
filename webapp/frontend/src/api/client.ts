@@ -123,6 +123,25 @@ export interface PaymentStatus {
   is_paid: boolean;
 }
 
+// ── Debt Types ────────────────────────────────────────
+
+export interface Debt {
+  id: number;
+  person: string;
+  amount: number;
+  direction: "owe" | "owed";
+  description: string;
+  is_settled: boolean;
+  settled_at?: string;
+  created_at: string;
+}
+
+export interface DebtSummary {
+  owed_to_me: number;
+  i_owe: number;
+  net_balance: number;
+}
+
 // ── Savings Types ─────────────────────────────────────
 
 export interface Saving {
@@ -281,6 +300,31 @@ export const savingsApi = {
     request<{ ok: boolean }>("/savings/reset-goals", {
       method: "POST",
     }),
+};
+
+// ── Debts API ────────────────────────────────────────
+
+export const debtsApi = {
+  list: (settled = false) =>
+    request<Debt[]>(`/debts/?settled=${settled}`),
+
+  create: (data: { person: string; amount: number; direction: "owe" | "owed"; description?: string }) =>
+    request<Debt>("/debts/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  settle: (debtId: number) =>
+    request<{ ok: boolean }>(`/debts/${debtId}/settle`, {
+      method: "POST",
+    }),
+
+  remove: (debtId: number) =>
+    request<{ ok: boolean }>(`/debts/${debtId}`, {
+      method: "DELETE",
+    }),
+
+  summary: () => request<DebtSummary>("/debts/summary"),
 };
 
 // ── Recurring Types ──────────────────────────────────

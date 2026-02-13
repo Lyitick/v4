@@ -943,3 +943,94 @@ body {
   color: var(--tg-hint);
   font-weight: 400;
 }
+
+/* ── Debts ────────────────────────────────────────────── */
+
+.debt-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: var(--gap);
+}
+
+.debt-summary__card {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 10px 8px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.debt-summary__card--positive .debt-summary__amount {
+  color: #43a047;
+}
+
+.debt-summary__card--negative .debt-summary__amount {
+  color: #e53935;
+}
+
+.debt-summary__label {
+  font-size: 11px;
+  color: var(--tg-hint);
+}
+
+.debt-summary__amount {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.debt-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: var(--gap);
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+
+.debt-tab {
+  flex: 1;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 13px;
+  color: var(--tg-hint);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.debt-tab.active {
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.debt-direction-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+
+.debt-direction-btn {
+  flex: 1;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 13px;
+  color: var(--tg-hint);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.debt-direction-btn.active {
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+  font-weight: 600;
+}

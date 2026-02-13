@@ -39,6 +39,7 @@ class TableNames:
     byt_reminder_times: str = "время_быт_напоминаний"
     recurring_payments: str = "повторяющиеся_платежи"
     income_log: str = "журнал_доходов"
+    debts: str = "долги"
 
 
 TABLES = TableNames()
@@ -444,6 +445,21 @@ class FinanceDatabase:
                 category TEXT,
                 type TEXT NOT NULL DEFAULT 'income',
                 note TEXT,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        cursor.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS "{TABLES.debts}" (
+                id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                person TEXT NOT NULL,
+                amount REAL NOT NULL,
+                direction TEXT NOT NULL,
+                description TEXT,
+                is_settled INTEGER NOT NULL DEFAULT 0,
+                settled_at TEXT,
                 created_at TEXT NOT NULL
             )
             """
@@ -3287,6 +3303,115 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error("Failed to get savings list for user %s: %s", user_id, error)
             return []
+
+    # ── Debt tracking ──────────────────────────────────────
+
+    def add_debt(
+        self,
+        user_id: int,
+        person: str,
+        amount: float,
+        direction: str,
+        description: str = "",
+    ) -> int:
+        """Add a debt entry. direction = 'owe' (I owe) or 'owed' (owed to me)."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                INSERT INTO "{TABLES.debts}" (user_id, person, amount, direction, description, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (user_id, person, amount, direction, description, datetime.utcnow().isoformat()),
+            )
+            self.connection.commit()
+            return cursor.lastrowid or 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to add debt for user %s: %s", user_id, error)
+            return 0
+
+    def list_debts(self, user_id: int, settled: bool = False) -> List[Dict[str, Any]]:
+        """Return debts for a user. If settled=False, only active debts."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT id, person, amount, direction, description, is_settled, settled_at, created_at
+                FROM "{TABLES.debts}"
+                WHERE user_id = ? AND is_settled = ?
+                ORDER BY created_at DESC
+                """,
+                (user_id, int(settled)),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to list debts for user %s: %s", user_id, error)
+            return []
+
+    def settle_debt(self, user_id: int, debt_id: int) -> bool:
+        """Mark a debt as settled."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE "{TABLES.debts}"
+                SET is_settled = 1, settled_at = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (datetime.utcnow().isoformat(), debt_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to settle debt %s for user %s: %s", debt_id, user_id, error)
+            return False
+
+    def delete_debt(self, user_id: int, debt_id: int) -> bool:
+        """Delete a debt entry."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                DELETE FROM "{TABLES.debts}"
+                WHERE id = ? AND user_id = ?
+                """,
+                (debt_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to delete debt %s for user %s: %s", debt_id, user_id, error)
+            return False
+
+    def get_debt_summary(self, user_id: int) -> Dict[str, float]:
+        """Return summary: total owed to me, total I owe, net balance."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                SELECT direction, SUM(amount) as total
+                FROM "{TABLES.debts}"
+                WHERE user_id = ? AND is_settled = 0
+                GROUP BY direction
+                """,
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+            owed_to_me = 0.0
+            i_owe = 0.0
+            for row in rows:
+                if row["direction"] == "owed":
+                    owed_to_me = row["total"]
+                elif row["direction"] == "owe":
+                    i_owe = row["total"]
+            return {
+                "owed_to_me": owed_to_me,
+                "i_owe": i_owe,
+                "net_balance": owed_to_me - i_owe,
+            }
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get debt summary for user %s: %s", user_id, error)
+            return {"owed_to_me": 0.0, "i_owe": 0.0, "net_balance": 0.0}
 
     def close(self) -> None:
         """Close database connection."""

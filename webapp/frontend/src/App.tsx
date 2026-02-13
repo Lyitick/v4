@@ -5,6 +5,7 @@ import { WishlistPage } from "./pages/WishlistPage";
 import { HouseholdPage } from "./pages/HouseholdPage";
 import { SavingsPage } from "./pages/SavingsPage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { DebtsPage } from "./pages/DebtsPage";
 import { RecurringPage } from "./pages/RecurringPage";
 import { ReportsPage } from "./pages/ReportsPage";
 import { TabBar } from "./components/TabBar";
@@ -33,6 +34,8 @@ function App() {
         return <HouseholdPage />;
       case "savings":
         return <SavingsPage />;
+      case "debts":
+        return <DebtsPage />;
       case "recurring":
         return <RecurringPage />;
       case "reports":

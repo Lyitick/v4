@@ -10,6 +10,7 @@ const tabs: Tab[] = [
   { id: "wishlist", label: "Вишлист", icon: "📋" },
   { id: "household", label: "Платежи", icon: "🏠" },
   { id: "savings", label: "Копилка", icon: "🎯" },
+  { id: "debts", label: "Долги", icon: "🤝" },
   { id: "recurring", label: "Авто", icon: "🔄" },
   { id: "reports", label: "Отчёт", icon: "📊" },
   { id: "settings", label: "Ещё", icon: "⚙️" },

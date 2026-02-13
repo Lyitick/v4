@@ -1034,3 +1034,48 @@ body {
   color: var(--tg-btn-text);
   font-weight: 600;
 }
+
+/* ── Google Sheets / Settings sections ────────────────── */
+
+.settings-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+  color: var(--tg-text);
+}
+
+.gsheets-connected {
+  color: #43a047;
+  font-weight: 600;
+}
+
+.gsheets-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.gsheets-hint {
+  font-size: 13px;
+  color: var(--tg-hint);
+  padding: 8px 0;
+  line-height: 1.5;
+}
+
+.gsheets-email {
+  display: inline-block;
+  font-size: 12px;
+  background: var(--tg-secondary-bg);
+  padding: 4px 8px;
+  border-radius: 6px;
+  word-break: break-all;
+  margin-top: 4px;
+}
+
+.gsheets-connect {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}

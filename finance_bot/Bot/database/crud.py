@@ -470,6 +470,9 @@ class FinanceDatabase:
         self._add_column_if_missing(
             cursor, TABLES.expense_categories, "budget_limit", "REAL DEFAULT 0"
         )
+        self._add_column_if_missing(
+            cursor, TABLES.user_settings, "google_sheets_id", "TEXT"
+        )
         self._ensure_indexes(cursor)
         self.connection.commit()
         self.sanitize_income_category_titles()
@@ -1468,6 +1471,7 @@ class FinanceDatabase:
                     household_debit_category,
                     wishlist_debit_category_id,
                     byt_wishlist_category_id,
+                    google_sheets_id,
                     created_at,
                     updated_at
                 FROM {TABLES.user_settings}
@@ -3412,6 +3416,36 @@ class FinanceDatabase:
         except sqlite3.Error as error:
             LOGGER.error("Failed to get debt summary for user %s: %s", user_id, error)
             return {"owed_to_me": 0.0, "i_owe": 0.0, "net_balance": 0.0}
+
+    # ── Google Sheets settings ─────────────────────────────
+
+    def get_google_sheets_id(self, user_id: int) -> str | None:
+        """Return Google Sheets spreadsheet ID for user."""
+        self.ensure_user_settings(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'SELECT google_sheets_id FROM "{TABLES.user_settings}" WHERE user_id = ?',
+                (user_id,),
+            )
+            row = cursor.fetchone()
+            return row["google_sheets_id"] if row and row["google_sheets_id"] else None
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get google_sheets_id for user %s: %s", user_id, error)
+            return None
+
+    def set_google_sheets_id(self, user_id: int, sheets_id: str | None) -> None:
+        """Set Google Sheets spreadsheet ID for user."""
+        self.ensure_user_settings(user_id)
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f'UPDATE "{TABLES.user_settings}" SET google_sheets_id = ? WHERE user_id = ?',
+                (sheets_id, user_id),
+            )
+            self.connection.commit()
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to set google_sheets_id for user %s: %s", user_id, error)
 
     def close(self) -> None:
         """Close database connection."""

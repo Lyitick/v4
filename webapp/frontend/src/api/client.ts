@@ -151,6 +151,14 @@ export interface Saving {
   purpose: string;
 }
 
+// ── Google Sheets Types ──────────────────────────────
+
+export interface SheetsStatus {
+  connected: boolean;
+  spreadsheet_id?: string;
+  service_account_email?: string;
+}
+
 // ── Settings Types ────────────────────────────────────
 
 export interface UserSettings {
@@ -414,6 +422,28 @@ export const reportsApi = {
     request<{ ok: boolean; day: number }>("/reports/report-day", {
       method: "POST",
       body: JSON.stringify({ day }),
+    }),
+};
+
+// ── Google Sheets API ─────────────────────────────────
+
+export const gsheetsApi = {
+  status: () => request<SheetsStatus>("/gsheets/status"),
+
+  connect: (spreadsheetUrl: string) =>
+    request<{ ok: boolean; spreadsheet_id: string }>("/gsheets/connect", {
+      method: "POST",
+      body: JSON.stringify({ spreadsheet_url: spreadsheetUrl }),
+    }),
+
+  disconnect: () =>
+    request<{ ok: boolean }>("/gsheets/disconnect", {
+      method: "POST",
+    }),
+
+  sync: () =>
+    request<{ ok: boolean; sheets_updated?: number; error?: string }>("/gsheets/sync", {
+      method: "POST",
     }),
 };
 

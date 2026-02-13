@@ -41,6 +41,9 @@ TIMEZONE = ZoneInfo("Europe/Moscow")
 _env_path = Path(__file__).resolve().parents[2] / ".env"
 _env_values = _load_env_file(_env_path)
 WEBAPP_URL: str = os.environ.get("WEBAPP_URL", _env_values.get("WEBAPP_URL", ""))
+GOOGLE_SHEETS_CREDENTIALS: str = os.environ.get(
+    "GOOGLE_SHEETS_CREDENTIALS", _env_values.get("GOOGLE_SHEETS_CREDENTIALS", "")
+)
 
 
 @dataclass
@@ -52,6 +55,7 @@ class Settings:
     admin_id: int = ADMIN_ID
     timezone: ZoneInfo = TIMEZONE
     webapp_url: str = WEBAPP_URL
+    google_sheets_credentials: str = GOOGLE_SHEETS_CREDENTIALS
 
 
 def get_settings() -> Settings:

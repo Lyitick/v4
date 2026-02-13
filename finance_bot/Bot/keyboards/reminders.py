@@ -13,9 +13,17 @@ from Bot.constants.ui_labels import (
     REM_CATEGORY_HABITS,
     REM_CATEGORY_MOTIVATION,
     REM_CATEGORY_WISHLIST,
+    REM_FOOD_ADD_MEAL,
+    REM_FOOD_ADD_SUPP,
+    REM_FOOD_DELETE,
+    REM_FOOD_STATS,
     REM_HABIT_ADD,
     REM_HABIT_DELETE,
     REM_HABIT_STATS,
+    REM_MOTIV_ADD,
+    REM_MOTIV_DELETE,
+    REM_MOTIV_SCHEDULE,
+    REM_MOTIV_TOGGLE,
 )
 
 
@@ -29,6 +37,26 @@ def reminder_categories_keyboard() -> ReplyKeyboardMarkup:
     buttons = [
         [KeyboardButton(text=REM_CATEGORY_MOTIVATION), KeyboardButton(text=REM_CATEGORY_HABITS)],
         [KeyboardButton(text=REM_CATEGORY_FOOD), KeyboardButton(text=REM_CATEGORY_WISHLIST)],
+        [KeyboardButton(text=NAV_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def motivation_settings_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for motivation settings screen."""
+    buttons = [
+        [KeyboardButton(text=REM_MOTIV_ADD), KeyboardButton(text=REM_MOTIV_DELETE)],
+        [KeyboardButton(text=REM_MOTIV_SCHEDULE), KeyboardButton(text=REM_MOTIV_TOGGLE)],
+        [KeyboardButton(text=NAV_BACK)],
+    ]
+    return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def food_settings_keyboard() -> ReplyKeyboardMarkup:
+    """Reply keyboard for food & supplements settings screen."""
+    buttons = [
+        [KeyboardButton(text=REM_FOOD_ADD_MEAL), KeyboardButton(text=REM_FOOD_ADD_SUPP)],
+        [KeyboardButton(text=REM_FOOD_DELETE), KeyboardButton(text=REM_FOOD_STATS)],
         [KeyboardButton(text=NAV_BACK)],
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -100,6 +128,71 @@ def habit_times_inline_keyboard(
     ])
     rows.append([InlineKeyboardButton(text=NAV_BACK, callback_data="rem:habits_back")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def food_list_inline_keyboard(
+    items: list[dict], action_prefix: str = "rem:food_toggle"
+) -> InlineKeyboardMarkup:
+    """Inline keyboard listing food/supplement items for toggle/select."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        enabled = bool(item.get("is_enabled", 1))
+        icon = "✅" if enabled else "❌"
+        sub_type = item.get("text", "meal")
+        emoji = "🍽" if sub_type == "meal" else "💊"
+        label = f"{icon} {emoji} {item.get('title', '')}"
+        rows.append([
+            InlineKeyboardButton(
+                text=label,
+                callback_data=f"{action_prefix}:{item.get('id')}",
+            )
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def food_delete_inline_keyboard(
+    items: list[dict],
+) -> InlineKeyboardMarkup:
+    """Inline keyboard listing food/supplement items for deletion."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        sub_type = item.get("text", "meal")
+        emoji = "🍽" if sub_type == "meal" else "💊"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🗑 {emoji} {item.get('title', '')}",
+                callback_data=f"rem:food_del:{item.get('id')}",
+            )
+        ])
+    rows.append([InlineKeyboardButton(text=NAV_BACK, callback_data="rem:food_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def motivation_delete_inline_keyboard(
+    items: list[dict],
+) -> InlineKeyboardMarkup:
+    """Inline keyboard listing motivation content for deletion."""
+    rows: list[list[InlineKeyboardButton]] = []
+    for item in items:
+        media = item.get("media_type")
+        emoji = {"photo": "🖼", "video": "🎬", "animation": "🎞"}.get(media or "", "📝")
+        rows.append([
+            InlineKeyboardButton(
+                text=f"🗑 {emoji} {item.get('title', '')}",
+                callback_data=f"rem:motiv_del:{item.get('id')}",
+            )
+        ])
+    rows.append([InlineKeyboardButton(text=NAV_BACK, callback_data="rem:motiv_back")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def motivation_schedule_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline keyboard for motivation schedule type selection."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="⏱ Интервал (каждые N мин)", callback_data="rem:motiv_sched:interval")],
+        [InlineKeyboardButton(text="🕐 Конкретное время", callback_data="rem:motiv_sched:times")],
+        [InlineKeyboardButton(text=NAV_BACK, callback_data="rem:motiv_back")],
+    ])
 
 
 # ------------------------------------------------------------------ #

@@ -1,8 +1,13 @@
 """Tests for reminder keyboard builders."""
 
 from Bot.keyboards.reminders import (
+    food_delete_inline_keyboard,
+    food_settings_keyboard,
     habit_delete_inline_keyboard,
     habit_list_inline_keyboard,
+    motivation_delete_inline_keyboard,
+    motivation_schedule_inline_keyboard,
+    motivation_settings_keyboard,
     reminder_action_keyboard_habits,
     reminder_action_keyboard_motivation,
     reminder_categories_keyboard,
@@ -75,3 +80,69 @@ def test_habit_delete_inline_keyboard() -> None:
     assert len(kb.inline_keyboard) == 2  # 1 habit + back
     assert kb.inline_keyboard[0][0].callback_data == "rem:habit_del:1"
     assert kb.inline_keyboard[1][0].callback_data == "rem:habits_back"
+
+
+# ------------------------------------------------------------------ #
+#  Phase 2: Food keyboards                                            #
+# ------------------------------------------------------------------ #
+
+
+def test_food_settings_keyboard_has_buttons() -> None:
+    kb = food_settings_keyboard()
+    texts = [btn.text for row in kb.keyboard for btn in row]
+    assert "🍽 Добавить приём пищи" in texts
+    assert "💊 Добавить БАД" in texts
+    assert "➖ Удалить" in texts
+    assert "📊 Статистика питания" in texts
+
+
+def test_food_delete_inline_keyboard() -> None:
+    items = [
+        {"id": 1, "title": "Обед", "text": "meal"},
+        {"id": 2, "title": "Витамин D", "text": "supplement"},
+    ]
+    kb = food_delete_inline_keyboard(items)
+    assert len(kb.inline_keyboard) == 3  # 2 items + back
+    assert kb.inline_keyboard[0][0].callback_data == "rem:food_del:1"
+    assert "🍽" in kb.inline_keyboard[0][0].text
+    assert kb.inline_keyboard[1][0].callback_data == "rem:food_del:2"
+    assert "💊" in kb.inline_keyboard[1][0].text
+    assert kb.inline_keyboard[2][0].callback_data == "rem:food_back"
+
+
+# ------------------------------------------------------------------ #
+#  Phase 3: Motivation keyboards                                       #
+# ------------------------------------------------------------------ #
+
+
+def test_motivation_settings_keyboard_has_buttons() -> None:
+    kb = motivation_settings_keyboard()
+    texts = [btn.text for row in kb.keyboard for btn in row]
+    assert "➕ Добавить контент" in texts
+    assert "➖ Удалить контент" in texts
+    assert "⏰ Расписание" in texts
+    assert "🔁 Вкл/Выкл" in texts
+
+
+def test_motivation_delete_inline_keyboard() -> None:
+    items = [
+        {"id": 1, "title": "Верь!", "media_type": None},
+        {"id": 2, "title": "Фото", "media_type": "photo"},
+    ]
+    kb = motivation_delete_inline_keyboard(items)
+    assert len(kb.inline_keyboard) == 3  # 2 items + back
+    assert kb.inline_keyboard[0][0].callback_data == "rem:motiv_del:1"
+    assert "📝" in kb.inline_keyboard[0][0].text  # text emoji
+    assert kb.inline_keyboard[1][0].callback_data == "rem:motiv_del:2"
+    assert "🖼" in kb.inline_keyboard[1][0].text  # photo emoji
+    assert kb.inline_keyboard[2][0].callback_data == "rem:motiv_back"
+
+
+def test_motivation_schedule_inline_keyboard() -> None:
+    kb = motivation_schedule_inline_keyboard()
+    all_buttons = [b for row in kb.inline_keyboard for b in row]
+    assert len(all_buttons) == 3
+    data_values = [b.callback_data for b in all_buttons]
+    assert "rem:motiv_sched:interval" in data_values
+    assert "rem:motiv_sched:times" in data_values
+    assert "rem:motiv_back" in data_values

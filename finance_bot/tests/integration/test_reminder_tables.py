@@ -192,3 +192,126 @@ def test_pending_snooze_events(tmp_path, monkeypatch) -> None:
     finally:
         db.close()
         crud.FinanceDatabase._instance = None
+
+
+# ------------------------------------------------------------------ #
+#  Phase 2: Food & Supplements integration tests                       #
+# ------------------------------------------------------------------ #
+
+
+def test_create_food_reminders(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        rid1 = db.create_reminder(1, "food", "Обед", text="meal")
+        rid2 = db.create_reminder(1, "food", "Витамин D", text="supplement")
+        assert rid1 is not None
+        assert rid2 is not None
+
+        items = db.list_reminders_by_category(1, "food")
+        assert len(items) == 2
+        titles = [i["title"] for i in items]
+        assert "Обед" in titles
+        assert "Витамин D" in titles
+
+        # Check sub-type is stored in text field
+        meal = next(i for i in items if i["title"] == "Обед")
+        assert meal["text"] == "meal"
+        supp = next(i for i in items if i["title"] == "Витамин D")
+        assert supp["text"] == "supplement"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_food_stats(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.increment_reminder_stat(1, "2026-01-01", "food", "shown_count")
+        db.increment_reminder_stat(1, "2026-01-01", "food", "done_count")
+
+        stats = db.get_reminder_stats(1, "2026-01-01", "food")
+        assert len(stats) == 1
+        assert stats[0]["shown_count"] == 1
+        assert stats[0]["done_count"] == 1
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+# ------------------------------------------------------------------ #
+#  Phase 3: Motivation integration tests                               #
+# ------------------------------------------------------------------ #
+
+
+def test_create_motivation_with_media(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        rid = db.create_reminder(
+            1, "motivation", "Фото",
+            media_type="photo", media_ref="AgACtest123",
+        )
+        assert rid is not None
+
+        reminder = db.get_reminder(rid)
+        assert reminder["media_type"] == "photo"
+        assert reminder["media_ref"] == "AgACtest123"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_motivation_stats(tmp_path, monkeypatch) -> None:
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.increment_reminder_stat(1, "2026-01-01", "motivation", "shown_count")
+        db.increment_reminder_stat(1, "2026-01-01", "motivation", "done_count")
+
+        stats = db.get_reminder_stats(1, "2026-01-01", "motivation")
+        assert len(stats) == 1
+        assert stats[0]["shown_count"] == 1
+        assert stats[0]["done_count"] == 1
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+# ------------------------------------------------------------------ #
+#  Phase 4: Wishlist/BYT migration integration tests                   #
+# ------------------------------------------------------------------ #
+
+
+def test_create_wishlist_reminders(tmp_path, monkeypatch) -> None:
+    """Wishlist reminders can be created and listed."""
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        rid = db.create_reminder(1, "wishlist", "Быт", text="byt_category_id:5")
+        assert rid is not None
+
+        items = db.list_reminders_by_category(1, "wishlist")
+        assert len(items) == 1
+        assert items[0]["title"] == "Быт"
+        assert items[0]["text"] == "byt_category_id:5"
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None
+
+
+def test_all_four_categories_coexist(tmp_path, monkeypatch) -> None:
+    """All 4 reminder categories can coexist for the same user."""
+    db = _fresh_db(tmp_path, monkeypatch)
+    try:
+        db.create_reminder(1, "habits", "Бег")
+        db.create_reminder(1, "food", "Обед")
+        db.create_reminder(1, "motivation", "Верь!")
+        db.create_reminder(1, "wishlist", "Быт")
+
+        assert len(db.list_reminders_by_category(1, "habits")) == 1
+        assert len(db.list_reminders_by_category(1, "food")) == 1
+        assert len(db.list_reminders_by_category(1, "motivation")) == 1
+        assert len(db.list_reminders_by_category(1, "wishlist")) == 1
+
+        users = db.get_users_with_active_reminders()
+        assert 1 in users
+    finally:
+        db.close()
+        crud.FinanceDatabase._instance = None

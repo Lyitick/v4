@@ -23,3 +23,15 @@ REM_SEEN = "Услышал 👂"
 REM_HABIT_ADD = "➕ Добавить привычку"
 REM_HABIT_DELETE = "➖ Удалить привычку"
 REM_HABIT_STATS = "📊 Статистика"
+
+# Food & Supplements settings buttons
+REM_FOOD_ADD_MEAL = "🍽 Добавить приём пищи"
+REM_FOOD_ADD_SUPP = "💊 Добавить БАД"
+REM_FOOD_DELETE = "➖ Удалить"
+REM_FOOD_STATS = "📊 Статистика питания"
+
+# Motivation settings buttons
+REM_MOTIV_ADD = "➕ Добавить контент"
+REM_MOTIV_DELETE = "➖ Удалить контент"
+REM_MOTIV_SCHEDULE = "⏰ Расписание"
+REM_MOTIV_TOGGLE = "🔁 Вкл/Выкл"

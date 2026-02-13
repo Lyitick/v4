@@ -14,6 +14,7 @@ class HabitSettingsState(StatesGroup):
 class MotivationSettingsState(StatesGroup):
     """States for motivation reminder settings (Phase 3)."""
 
+    waiting_for_content = State()
     waiting_for_schedule_type = State()
     waiting_for_interval = State()
     waiting_for_times = State()

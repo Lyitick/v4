@@ -65,6 +65,176 @@ def delete_habit(db: Any, user_id: int, reminder_id: int) -> bool | ServiceError
 
 
 # ------------------------------------------------------------------ #
+#  Food & Supplements CRUD                                            #
+# ------------------------------------------------------------------ #
+
+
+def create_food_reminder(
+    db: Any,
+    user_id: int,
+    title: str,
+    sub_type: str = "meal",
+    times: list[str] | None = None,
+) -> dict | ServiceError:
+    """Create a food/supplement reminder with optional schedule times."""
+    title = title.strip()
+    if not title:
+        return ServiceError(code="empty_title", message="Название не может быть пустым")
+    if len(title) > 100:
+        return ServiceError(code="title_too_long", message="Максимум 100 символов")
+
+    reminder_id = db.create_reminder(user_id, "food", title, text=sub_type)
+    if not reminder_id:
+        return ServiceError(code="db_error", message="Не удалось создать напоминание")
+
+    if times:
+        times_json = json.dumps(times)
+        db.set_reminder_schedule(reminder_id, "specific_times", times_json=times_json)
+
+    LOGGER.info(
+        "USER=%s ACTION=FOOD_REMINDER_CREATED META=reminder_id=%s sub_type=%s title=%s",
+        user_id, reminder_id, sub_type, title,
+    )
+    return {"id": reminder_id, "title": title, "sub_type": sub_type}
+
+
+def list_food_reminders(db: Any, user_id: int) -> list[dict]:
+    """List food/supplement reminders for user."""
+    return db.list_reminders_by_category(user_id, "food")
+
+
+def delete_food_reminder(db: Any, user_id: int, reminder_id: int) -> bool | ServiceError:
+    """Delete a food/supplement reminder."""
+    reminder = db.get_reminder(reminder_id)
+    if not reminder:
+        return ServiceError(code="not_found", message="Напоминание не найдено")
+    if reminder["user_id"] != user_id or reminder["category"] != "food":
+        return ServiceError(code="not_found", message="Напоминание не найдено")
+
+    ok = db.delete_reminder(reminder_id, user_id)
+    if not ok:
+        return ServiceError(code="db_error", message="Не удалось удалить")
+
+    LOGGER.info("USER=%s ACTION=FOOD_REMINDER_DELETED META=reminder_id=%s", user_id, reminder_id)
+    return True
+
+
+# ------------------------------------------------------------------ #
+#  Motivation / Content CRUD                                          #
+# ------------------------------------------------------------------ #
+
+_MOTIVATION_SCHEDULE_TITLE = "__schedule__"
+
+
+def ensure_motivation_schedule(db: Any, user_id: int) -> dict:
+    """Get or create the motivation schedule meta-record."""
+    items = db.list_reminders_by_category(user_id, "motivation")
+    meta = next((i for i in items if i.get("title") == _MOTIVATION_SCHEDULE_TITLE), None)
+    if meta:
+        return meta
+    rid = db.create_reminder(user_id, "motivation", _MOTIVATION_SCHEDULE_TITLE, text="__meta__")
+    if not rid:
+        return {}
+    return db.get_reminder(rid) or {}
+
+
+def create_motivation_content(
+    db: Any,
+    user_id: int,
+    title: str,
+    text: str | None = None,
+    media_type: str | None = None,
+    media_ref: str | None = None,
+) -> dict | ServiceError:
+    """Create a motivation content item."""
+    title = title.strip() if title else ""
+    if not title and not media_ref:
+        return ServiceError(code="empty_content", message="Нужен текст или медиа")
+    if not title:
+        title = {"photo": "Фото", "video": "Видео", "animation": "GIF"}.get(media_type or "", "Контент")
+    if len(title) > 100:
+        title = title[:100]
+
+    reminder_id = db.create_reminder(user_id, "motivation", title, text=text,
+                                     media_type=media_type, media_ref=media_ref)
+    if not reminder_id:
+        return ServiceError(code="db_error", message="Не удалось сохранить контент")
+
+    LOGGER.info(
+        "USER=%s ACTION=MOTIVATION_CONTENT_CREATED META=reminder_id=%s media_type=%s",
+        user_id, reminder_id, media_type,
+    )
+    return {"id": reminder_id, "title": title, "media_type": media_type}
+
+
+def list_motivation_content(db: Any, user_id: int) -> list[dict]:
+    """List motivation content items (excluding schedule meta-record)."""
+    items = db.list_reminders_by_category(user_id, "motivation")
+    return [i for i in items if i.get("title") != _MOTIVATION_SCHEDULE_TITLE]
+
+
+def delete_motivation_content(
+    db: Any, user_id: int, reminder_id: int
+) -> bool | ServiceError:
+    """Delete a motivation content item."""
+    reminder = db.get_reminder(reminder_id)
+    if not reminder:
+        return ServiceError(code="not_found", message="Контент не найден")
+    if reminder["user_id"] != user_id or reminder["category"] != "motivation":
+        return ServiceError(code="not_found", message="Контент не найден")
+    if reminder["title"] == _MOTIVATION_SCHEDULE_TITLE:
+        return ServiceError(code="protected", message="Нельзя удалить расписание")
+
+    ok = db.delete_reminder(reminder_id, user_id)
+    if not ok:
+        return ServiceError(code="db_error", message="Не удалось удалить")
+
+    LOGGER.info("USER=%s ACTION=MOTIVATION_CONTENT_DELETED META=reminder_id=%s", user_id, reminder_id)
+    return True
+
+
+def set_motivation_schedule(
+    db: Any,
+    user_id: int,
+    schedule_type: str,
+    interval_minutes: int | None = None,
+    times_json: str | None = None,
+    active_from: str | None = None,
+    active_to: str | None = None,
+) -> dict | ServiceError:
+    """Set the motivation schedule (applied to the meta-record)."""
+    meta = ensure_motivation_schedule(db, user_id)
+    if not meta or not meta.get("id"):
+        return ServiceError(code="db_error", message="Не удалось создать расписание")
+
+    if schedule_type == "interval" and (not interval_minutes or interval_minutes < 15):
+        return ServiceError(code="invalid_interval", message="Интервал минимум 15 минут")
+
+    db.set_reminder_schedule(
+        meta["id"],
+        schedule_type,
+        interval_minutes=interval_minutes,
+        times_json=times_json,
+        active_from=active_from,
+        active_to=active_to,
+    )
+    LOGGER.info(
+        "USER=%s ACTION=MOTIVATION_SCHEDULE_SET META=type=%s interval=%s",
+        user_id, schedule_type, interval_minutes,
+    )
+    schedule = db.get_reminder_schedule(meta["id"])
+    return schedule or {}
+
+
+def get_motivation_schedule(db: Any, user_id: int) -> dict | None:
+    """Get the motivation schedule."""
+    meta = ensure_motivation_schedule(db, user_id)
+    if not meta or not meta.get("id"):
+        return None
+    return db.get_reminder_schedule(meta["id"])
+
+
+# ------------------------------------------------------------------ #
 #  Callback hash & idempotency                                       #
 # ------------------------------------------------------------------ #
 
@@ -201,6 +371,63 @@ def should_fire_at(
         return elapsed % interval == 0
 
     return False
+
+
+# ------------------------------------------------------------------ #
+#  Wishlist / BYT migration                                           #
+# ------------------------------------------------------------------ #
+
+
+def migrate_byt_to_reminders(db: Any, user_id: int) -> int:
+    """Migrate BYT wishlist data into the new reminder tables.
+
+    Creates one 'wishlist' category reminder per enabled BYT category,
+    with schedule matching the BYT category times.
+    Returns the number of reminders created.
+    """
+    existing = db.list_reminders_by_category(user_id, "wishlist")
+    if existing:
+        return 0  # Already migrated
+
+    db.ensure_byt_reminder_migration(user_id)
+    categories = db.list_byt_reminder_categories(user_id)
+    created = 0
+
+    for cat in categories:
+        cat_id = cat.get("id")
+        cat_title = cat.get("title", "")
+        enabled = bool(cat.get("enabled", 0))
+
+        if not cat_title:
+            continue
+
+        reminder_id = db.create_reminder(
+            user_id, "wishlist", cat_title,
+            text=f"byt_category_id:{cat_id}",
+        )
+        if not reminder_id:
+            continue
+
+        if not enabled:
+            db.toggle_reminder_enabled(reminder_id, user_id)
+
+        times = db.list_byt_reminder_times(user_id, cat_id)
+        time_values = [t.get("time_hhmm") for t in times if t.get("time_hhmm")]
+
+        if time_values:
+            db.set_reminder_schedule(
+                reminder_id,
+                "specific_times",
+                times_json=json.dumps(time_values),
+            )
+
+        created += 1
+        LOGGER.info(
+            "USER=%s ACTION=BYT_MIGRATED META=category=%s reminder_id=%s times=%s",
+            user_id, cat_title, reminder_id, time_values,
+        )
+
+    return created
 
 
 def is_within_activity_window(

@@ -810,3 +810,272 @@ body {
 .report-actions {
   margin-top: 8px;
 }
+
+/* ── Expenses page ────────────────────────────────── */
+.expense-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+}
+
+.expense-categories-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+}
+
+.expense-cat-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+}
+
+.expense-cat-row__title {
+  color: var(--tg-text);
+  font-weight: 500;
+}
+
+.expense-cat-row__amount {
+  color: var(--tg-hint);
+  font-weight: 600;
+}
+
+.expense-note {
+  font-weight: 400;
+  color: var(--tg-hint);
+}
+
+/* ── Charts ───────────────────────────────────────── */
+.chart-container {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  position: relative;
+}
+
+.chart-container--bar {
+  height: 180px;
+}
+
+.chart-container--donut {
+  height: 220px;
+  margin-bottom: 8px;
+}
+
+/* ── Delta badges (month comparison) ─────────────── */
+.delta-badge {
+  font-size: 11px;
+  font-weight: 600;
+  margin-left: 4px;
+  white-space: nowrap;
+}
+
+/* ── Budget limits ───────────────────────────────── */
+.budget-limits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.budget-limit-card {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 10px var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.budget-limit-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.budget-limit-card__title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.budget-limit-card__values {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.budget-limit-card__bar {
+  height: 6px;
+  background: var(--tg-bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.budget-limit-card__fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.budget-limit-card__percent {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.budget-limits-hint {
+  text-align: center;
+  font-size: 13px;
+  color: var(--tg-hint);
+  padding: 8px;
+}
+
+.expense-cat-row--clickable {
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.expense-cat-row__limit {
+  font-size: 11px;
+  color: var(--tg-hint);
+  font-weight: 400;
+}
+
+/* ── Debts ────────────────────────────────────────────── */
+
+.debt-summary {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+  margin-bottom: var(--gap);
+}
+
+.debt-summary__card {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 10px 8px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.debt-summary__card--positive .debt-summary__amount {
+  color: #43a047;
+}
+
+.debt-summary__card--negative .debt-summary__amount {
+  color: #e53935;
+}
+
+.debt-summary__label {
+  font-size: 11px;
+  color: var(--tg-hint);
+}
+
+.debt-summary__amount {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.debt-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: var(--gap);
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+
+.debt-tab {
+  flex: 1;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 13px;
+  color: var(--tg-hint);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.debt-tab.active {
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.debt-direction-toggle {
+  display: flex;
+  gap: 4px;
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+
+.debt-direction-btn {
+  flex: 1;
+  padding: 8px 4px;
+  border: none;
+  background: transparent;
+  border-radius: calc(var(--radius) - 2px);
+  font-size: 13px;
+  color: var(--tg-hint);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.debt-direction-btn.active {
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+  font-weight: 600;
+}
+
+/* ── Google Sheets / Settings sections ────────────────── */
+
+.settings-section-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 16px 0 8px;
+  color: var(--tg-text);
+}
+
+.gsheets-connected {
+  color: #43a047;
+  font-weight: 600;
+}
+
+.gsheets-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.gsheets-hint {
+  font-size: 13px;
+  color: var(--tg-hint);
+  padding: 8px 0;
+  line-height: 1.5;
+}
+
+.gsheets-email {
+  display: inline-block;
+  font-size: 12px;
+  background: var(--tg-secondary-bg);
+  padding: 4px 8px;
+  border-radius: 6px;
+  word-break: break-all;
+  margin-top: 4px;
+}
+
+.gsheets-connect {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}

@@ -5860,3 +5860,173 @@ NameError: name 'settings' is not defined
 [2026-02-13 21:04:52,943] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
 [2026-02-13 21:04:53,206] [INFO] Bot shutdown complete
 [2026-02-13 21:04:53,207] [INFO] Polling stopped for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 21:06:26,462] [WARNING] ui_pins has no column user_id, skipping idx_ui_pins_user_id
+[2026-02-13 21:06:26,466] [INFO] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2026-02-13 21:06:31,540] [INFO] Menu button set to Mini App: https://sim-subcommittee-addition-intellectual.trycloudflare.com
+[2026-02-13 21:06:31,540] [INFO] Starting bot polling (token_source=.env, fingerprint=8590…rQC8, env_path=C:\Users\admin\PycharmProjects\v4\finance_bot\.env)
+[2026-02-13 21:06:31,541] [INFO] Start polling
+[2026-02-13 21:06:31,542] [INFO] Run polling for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 21:06:31,544] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:06)
+[2026-02-13 21:07:00,011] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:07)
+[2026-02-13 21:08:00,023] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:08)
+[2026-02-13 21:09:00,013] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:09)
+[2026-02-13 21:10:00,010] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:10)
+[2026-02-13 21:11:00,006] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:11)
+[2026-02-13 21:12:00,015] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:12)
+[2026-02-13 21:13:00,016] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:13)
+[2026-02-13 21:14:00,019] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:14)
+[2026-02-13 21:15:00,010] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:15)
+[2026-02-13 21:16:00,013] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:16)
+[2026-02-13 21:17:00,007] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:17)
+[2026-02-13 21:18:00,016] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:18)
+[2026-02-13 21:19:00,021] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:19)
+[2026-02-13 21:19:19,401] [ERROR] Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error
+[2026-02-13 21:19:19,402] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 21:19:39,153] [INFO] Connection established (tryings = 1, bot id = 8590576793)
+[2026-02-13 21:20:00,012] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:20)
+[2026-02-13 21:21:00,010] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:21)
+[2026-02-13 21:22:00,016] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:22)
+[2026-02-13 21:23:00,018] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:23)
+[2026-02-13 21:24:00,005] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:24)
+[2026-02-13 21:25:00,012] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:25)
+[2026-02-13 21:26:00,010] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:26)
+[2026-02-13 21:26:39,359] [INFO] WELCOME reused (chat_id=838347504, message_id=957)
+[2026-02-13 21:26:39,359] [INFO] UI_CLEANUP context=MAIN_MENU deleted=0 kept=0 welcome_id=957
+[2026-02-13 21:26:39,361] [INFO] Initialized household questions for user 838347504 month 2026-02
+[2026-02-13 21:26:40,467] [INFO] USER=838347504 ACTION=START STATE=None META=-
+[2026-02-13 21:26:40,468] [INFO] Update id=204486794 is handled. Duration 6001 ms by bot id=8590576793
+[2026-02-13 21:26:40,973] [INFO] WELCOME reused (chat_id=838347504, message_id=957)
+[2026-02-13 21:26:41,325] [INFO] UI_CLEANUP context=MAIN_MENU deleted=1 kept=0 welcome_id=957
+[2026-02-13 21:26:41,326] [INFO] Initialized household questions for user 838347504 month 2026-02
+[2026-02-13 21:26:41,898] [INFO] USER=838347504 ACTION=START STATE=None META=-
+[2026-02-13 21:26:41,898] [INFO] Update id=204486795 is handled. Duration 2075 ms by bot id=8590576793
+[2026-02-13 21:27:00,007] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:27)
+[2026-02-13 21:27:11,521] [INFO] Polling stopped
+[2026-02-13 21:27:11,523] [ERROR] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2026-02-13 21:27:11,523] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 21:27:11,786] [INFO] Bot shutdown complete
+[2026-02-13 21:27:11,787] [INFO] Polling stopped for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 21:27:28,483] [WARNING] ui_pins has no column user_id, skipping idx_ui_pins_user_id
+[2026-02-13 21:27:28,488] [INFO] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2026-02-13 21:27:31,476] [INFO] Menu button set to Mini App: https://sim-subcommittee-addition-intellectual.trycloudflare.com
+[2026-02-13 21:27:31,476] [INFO] Starting bot polling (token_source=.env, fingerprint=8590…rQC8, env_path=C:\Users\admin\PycharmProjects\v4\finance_bot\.env)
+[2026-02-13 21:27:31,477] [INFO] Start polling
+[2026-02-13 21:27:31,478] [INFO] Run polling for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 21:27:31,480] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:27)
+[2026-02-13 21:27:55,625] [INFO] WELCOME reused (chat_id=838347504, message_id=957)
+[2026-02-13 21:27:55,626] [INFO] UI_CLEANUP context=MAIN_MENU deleted=0 kept=0 welcome_id=957
+[2026-02-13 21:27:55,627] [INFO] Initialized household questions for user 838347504 month 2026-02
+[2026-02-13 21:27:56,345] [INFO] USER=838347504 ACTION=START STATE=None META=-
+[2026-02-13 21:27:56,345] [INFO] Update id=204486796 is handled. Duration 5246 ms by bot id=8590576793
+[2026-02-13 21:28:00,009] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:28)
+[2026-02-13 21:29:00,020] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=21:29)
+[2026-02-13 22:17:46,246] [ERROR] Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error
+[2026-02-13 22:17:46,247] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 22:17:46,247] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:17)
+[2026-02-13 22:17:58,324] [INFO] Connection established (tryings = 1, bot id = 8590576793)
+[2026-02-13 22:18:00,014] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:18)
+[2026-02-13 22:19:00,015] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:19)
+[2026-02-13 22:20:00,013] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:20)
+[2026-02-13 22:21:00,004] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:21)
+[2026-02-13 22:22:00,011] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:22)
+[2026-02-13 22:23:00,011] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:23)
+[2026-02-13 22:24:00,013] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:24)
+[2026-02-13 22:25:00,011] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:25)
+[2026-02-13 22:26:00,011] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:26)
+[2026-02-13 22:27:00,018] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:27)
+[2026-02-13 22:28:00,014] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:28)
+[2026-02-13 22:29:00,012] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:29)
+[2026-02-13 22:30:00,005] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:30)
+[2026-02-13 22:31:00,016] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:31)
+[2026-02-13 22:31:58,161] [INFO] Polling stopped
+[2026-02-13 22:31:58,162] [ERROR] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2026-02-13 22:31:58,163] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 22:31:58,421] [INFO] Bot shutdown complete
+[2026-02-13 22:31:58,421] [INFO] Polling stopped for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 22:32:02,484] [WARNING] ui_pins has no column user_id, skipping idx_ui_pins_user_id
+[2026-02-13 22:32:02,486] [INFO] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2026-02-13 22:32:05,044] [INFO] Menu button set to Mini App: https://sim-subcommittee-addition-intellectual.trycloudflare.com
+[2026-02-13 22:32:05,044] [INFO] Starting bot polling (token_source=.env, fingerprint=8590…rQC8, env_path=C:\Users\admin\PycharmProjects\v4\finance_bot\.env)
+[2026-02-13 22:32:05,045] [INFO] Start polling
+[2026-02-13 22:32:05,046] [INFO] Run polling for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 22:32:05,047] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:32)
+[2026-02-13 22:32:18,223] [ERROR] Failed to fetch updates - TelegramConflictError: Telegram server says - Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+[2026-02-13 22:32:18,223] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 22:32:25,906] [INFO] WELCOME reused (chat_id=838347504, message_id=957)
+[2026-02-13 22:32:25,906] [INFO] UI_CLEANUP context=MAIN_MENU deleted=0 kept=0 welcome_id=957
+[2026-02-13 22:32:25,907] [INFO] Initialized household questions for user 838347504 month 2026-02
+[2026-02-13 22:32:27,413] [INFO] USER=838347504 ACTION=START STATE=None META=-
+[2026-02-13 22:32:27,414] [INFO] Update id=204486797 is handled. Duration 11204 ms by bot id=8590576793
+[2026-02-13 22:32:29,294] [INFO] Connection established (tryings = 1, bot id = 8590576793)
+[2026-02-13 22:33:00,011] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:33)
+[2026-02-13 22:34:00,014] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:34)
+[2026-02-13 22:35:00,012] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:35)
+[2026-02-13 22:35:12,352] [INFO] Polling stopped
+[2026-02-13 22:35:12,353] [ERROR] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2026-02-13 22:35:12,353] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 22:35:12,612] [INFO] Bot shutdown complete
+[2026-02-13 22:35:12,612] [INFO] Polling stopped for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 22:35:15,875] [WARNING] ui_pins has no column user_id, skipping idx_ui_pins_user_id
+[2026-02-13 22:35:15,878] [INFO] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2026-02-13 22:35:17,774] [INFO] Menu button set to Mini App: https://sim-subcommittee-addition-intellectual.trycloudflare.com
+[2026-02-13 22:35:17,774] [INFO] Starting bot polling (token_source=.env, fingerprint=8590…rQC8, env_path=C:\Users\admin\PycharmProjects\v4\finance_bot\.env)
+[2026-02-13 22:35:17,775] [INFO] Start polling
+[2026-02-13 22:35:17,776] [INFO] Run polling for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 22:35:17,777] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:35)
+[2026-02-13 22:35:29,171] [INFO] WELCOME reused (chat_id=838347504, message_id=957)
+[2026-02-13 22:35:29,171] [INFO] UI_CLEANUP context=MAIN_MENU deleted=0 kept=0 welcome_id=957
+[2026-02-13 22:35:29,172] [INFO] Initialized household questions for user 838347504 month 2026-02
+[2026-02-13 22:35:32,193] [INFO] USER=838347504 ACTION=START STATE=None META=-
+[2026-02-13 22:35:32,194] [INFO] Update id=204486798 is handled. Duration 6482 ms by bot id=8590576793
+[2026-02-13 22:36:00,006] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:36)
+[2026-02-13 22:37:00,007] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:37)
+[2026-02-13 22:38:00,009] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:38)
+[2026-02-13 22:39:00,010] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:39)
+[2026-02-13 22:39:55,356] [ERROR] Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error
+[2026-02-13 22:39:55,357] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 22:40:00,010] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:40)
+[2026-02-13 22:40:07,341] [INFO] Connection established (tryings = 1, bot id = 8590576793)
+[2026-02-13 22:41:00,011] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:41)
+[2026-02-13 22:41:01,822] [INFO] Polling stopped
+[2026-02-13 22:41:01,824] [ERROR] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+[2026-02-13 22:41:01,824] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 22:41:02,083] [INFO] Bot shutdown complete
+[2026-02-13 22:41:02,083] [INFO] Polling stopped for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 22:41:05,286] [WARNING] ui_pins has no column user_id, skipping idx_ui_pins_user_id
+[2026-02-13 22:41:05,288] [INFO] Database initialized at C:\Users\admin\PycharmProjects\v4\finance_bot\finance.db
+[2026-02-13 22:41:06,564] [INFO] Menu button set to Mini App: https://sim-subcommittee-addition-intellectual.trycloudflare.com
+[2026-02-13 22:41:06,564] [INFO] Starting bot polling (token_source=.env, fingerprint=8590…rQC8, env_path=C:\Users\admin\PycharmProjects\v4\finance_bot\.env)
+[2026-02-13 22:41:06,564] [INFO] Start polling
+[2026-02-13 22:41:06,565] [INFO] Run polling for bot @ianDyni_bot id=8590576793 - 'ianDyni'
+[2026-02-13 22:41:06,566] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:41)
+[2026-02-13 22:41:26,225] [INFO] UI_CLEANUP context=SETTINGS_MENU deleted=0 kept=0 welcome_id=None
+[2026-02-13 22:41:26,322] [INFO] Update id=204486799 is handled. Duration 2171 ms by bot id=8590576793
+[2026-02-13 22:42:00,004] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:42)
+[2026-02-13 22:43:00,017] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:43)
+[2026-02-13 22:44:00,007] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:44)
+[2026-02-13 22:45:00,014] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:45)
+[2026-02-13 22:46:00,012] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:46)
+[2026-02-13 22:47:00,008] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:47)
+[2026-02-13 22:48:00,014] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:48)
+[2026-02-13 22:49:00,013] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:49)
+[2026-02-13 22:50:00,010] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:50)
+[2026-02-13 22:51:00,016] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:51)
+[2026-02-13 22:52:00,015] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:52)
+[2026-02-13 22:53:00,014] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:53)
+[2026-02-13 22:54:00,011] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:54)
+[2026-02-13 22:54:07,357] [ERROR] Failed to fetch updates - TelegramNetworkError: HTTP Client says - Request timeout error
+[2026-02-13 22:54:07,358] [WARNING] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8590576793)
+[2026-02-13 22:54:19,265] [INFO] Connection established (tryings = 1, bot id = 8590576793)
+[2026-02-13 22:55:00,017] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:55)
+[2026-02-13 22:56:00,018] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:56)
+[2026-02-13 22:57:00,009] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:57)
+[2026-02-13 22:58:00,014] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:58)
+[2026-02-13 22:59:00,007] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=22:59)
+[2026-02-13 23:00:00,017] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=23:00)
+[2026-02-13 23:01:00,014] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=23:01)
+[2026-02-13 23:02:00,017] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=23:02)
+[2026-02-13 23:03:00,004] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=23:03)
+[2026-02-13 23:04:00,017] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=23:04)
+[2026-02-13 23:05:00,003] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=23:05)
+[2026-02-13 23:06:00,016] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=23:06)
+[2026-02-13 23:07:00,005] [INFO] BYT timer check triggered (user_id=838347504, simulated=False, time=23:07)

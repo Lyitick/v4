@@ -6,9 +6,11 @@ interface Tab {
 
 const tabs: Tab[] = [
   { id: "income", label: "Доход", icon: "💰" },
+  { id: "expenses", label: "Расходы", icon: "💸" },
   { id: "wishlist", label: "Вишлист", icon: "📋" },
   { id: "household", label: "Платежи", icon: "🏠" },
   { id: "savings", label: "Копилка", icon: "🎯" },
+  { id: "debts", label: "Долги", icon: "🤝" },
   { id: "recurring", label: "Авто", icon: "🔄" },
   { id: "reports", label: "Отчёт", icon: "📊" },
   { id: "settings", label: "Ещё", icon: "⚙️" },

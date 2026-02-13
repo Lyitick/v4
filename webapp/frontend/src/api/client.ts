@@ -28,6 +28,32 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   return res.json();
 }
 
+// ── Expense Types ────────────────────────────────────
+
+export interface Expense {
+  id: number;
+  amount: number;
+  category: string;
+  note: string;
+  created_at: string;
+}
+
+export interface ExpenseCategory {
+  id: number;
+  code: string;
+  title: string;
+  budget_limit: number;
+}
+
+export interface BudgetStatus {
+  category_id: number;
+  category: string;
+  budget_limit: number;
+  spent: number;
+  remaining: number;
+  percent_used: number;
+}
+
 // ── Wishlist Types ────────────────────────────────────
 
 export interface Category {
@@ -97,6 +123,25 @@ export interface PaymentStatus {
   is_paid: boolean;
 }
 
+// ── Debt Types ────────────────────────────────────────
+
+export interface Debt {
+  id: number;
+  person: string;
+  amount: number;
+  direction: "owe" | "owed";
+  description: string;
+  is_settled: boolean;
+  settled_at?: string;
+  created_at: string;
+}
+
+export interface DebtSummary {
+  owed_to_me: number;
+  i_owe: number;
+  net_balance: number;
+}
+
 // ── Savings Types ─────────────────────────────────────
 
 export interface Saving {
@@ -104,6 +149,14 @@ export interface Saving {
   current: number;
   goal: number;
   purpose: string;
+}
+
+// ── Google Sheets Types ──────────────────────────────
+
+export interface SheetsStatus {
+  connected: boolean;
+  spreadsheet_id?: string;
+  service_account_email?: string;
 }
 
 // ── Settings Types ────────────────────────────────────
@@ -117,6 +170,45 @@ export interface UserSettings {
   household_debit_category?: string;
   wishlist_debit_category_id?: string;
 }
+
+// ── Expenses API ─────────────────────────────────────
+
+export const expensesApi = {
+  getCategories: () => request<ExpenseCategory[]>("/expenses/categories"),
+
+  list: (year?: number, month?: number) => {
+    const params = new URLSearchParams();
+    if (year) params.set("year", String(year));
+    if (month) params.set("month", String(month));
+    const qs = params.toString();
+    return request<Expense[]>(`/expenses/${qs ? `?${qs}` : ""}`);
+  },
+
+  create: (data: { amount: number; category: string; note?: string }) =>
+    request<Expense>("/expenses/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  remove: (id: number) =>
+    request<{ ok: boolean }>(`/expenses/${id}`, {
+      method: "DELETE",
+    }),
+
+  setBudgetLimit: (categoryId: number, limit: number) =>
+    request<{ ok: boolean }>("/expenses/budget-limit", {
+      method: "POST",
+      body: JSON.stringify({ category_id: categoryId, limit }),
+    }),
+
+  getBudgetStatus: (year?: number, month?: number) => {
+    const params = new URLSearchParams();
+    if (year) params.set("year", String(year));
+    if (month) params.set("month", String(month));
+    const qs = params.toString();
+    return request<BudgetStatus[]>(`/expenses/budget-status${qs ? `?${qs}` : ""}`);
+  },
+};
 
 // ── Wishlist API ───────────────────────────────────────
 
@@ -218,6 +310,31 @@ export const savingsApi = {
     }),
 };
 
+// ── Debts API ────────────────────────────────────────
+
+export const debtsApi = {
+  list: (settled = false) =>
+    request<Debt[]>(`/debts/?settled=${settled}`),
+
+  create: (data: { person: string; amount: number; direction: "owe" | "owed"; description?: string }) =>
+    request<Debt>("/debts/", {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+
+  settle: (debtId: number) =>
+    request<{ ok: boolean }>(`/debts/${debtId}/settle`, {
+      method: "POST",
+    }),
+
+  remove: (debtId: number) =>
+    request<{ ok: boolean }>(`/debts/${debtId}`, {
+      method: "DELETE",
+    }),
+
+  summary: () => request<DebtSummary>("/debts/summary"),
+};
+
 // ── Recurring Types ──────────────────────────────────
 
 export interface RecurringPayment {
@@ -305,6 +422,28 @@ export const reportsApi = {
     request<{ ok: boolean; day: number }>("/reports/report-day", {
       method: "POST",
       body: JSON.stringify({ day }),
+    }),
+};
+
+// ── Google Sheets API ─────────────────────────────────
+
+export const gsheetsApi = {
+  status: () => request<SheetsStatus>("/gsheets/status"),
+
+  connect: (spreadsheetUrl: string) =>
+    request<{ ok: boolean; spreadsheet_id: string }>("/gsheets/connect", {
+      method: "POST",
+      body: JSON.stringify({ spreadsheet_url: spreadsheetUrl }),
+    }),
+
+  disconnect: () =>
+    request<{ ok: boolean }>("/gsheets/disconnect", {
+      method: "POST",
+    }),
+
+  sync: () =>
+    request<{ ok: boolean; sheets_updated?: number; error?: string }>("/gsheets/sync", {
+      method: "POST",
     }),
 };
 

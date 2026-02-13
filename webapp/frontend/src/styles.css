@@ -875,3 +875,71 @@ body {
   margin-left: 4px;
   white-space: nowrap;
 }
+
+/* ── Budget limits ───────────────────────────────── */
+.budget-limits {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.budget-limit-card {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: 10px var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.budget-limit-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.budget-limit-card__title {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.budget-limit-card__values {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.budget-limit-card__bar {
+  height: 6px;
+  background: var(--tg-bg);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.budget-limit-card__fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+}
+
+.budget-limit-card__percent {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.budget-limits-hint {
+  text-align: center;
+  font-size: 13px;
+  color: var(--tg-hint);
+  padding: 8px;
+}
+
+.expense-cat-row--clickable {
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.expense-cat-row__limit {
+  font-size: 11px;
+  color: var(--tg-hint);
+  font-weight: 400;
+}

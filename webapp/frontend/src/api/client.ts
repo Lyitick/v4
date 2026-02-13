@@ -42,6 +42,16 @@ export interface ExpenseCategory {
   id: number;
   code: string;
   title: string;
+  budget_limit: number;
+}
+
+export interface BudgetStatus {
+  category_id: number;
+  category: string;
+  budget_limit: number;
+  spent: number;
+  remaining: number;
+  percent_used: number;
 }
 
 // ── Wishlist Types ────────────────────────────────────
@@ -157,6 +167,20 @@ export const expensesApi = {
     request<{ ok: boolean }>(`/expenses/${id}`, {
       method: "DELETE",
     }),
+
+  setBudgetLimit: (categoryId: number, limit: number) =>
+    request<{ ok: boolean }>("/expenses/budget-limit", {
+      method: "POST",
+      body: JSON.stringify({ category_id: categoryId, limit }),
+    }),
+
+  getBudgetStatus: (year?: number, month?: number) => {
+    const params = new URLSearchParams();
+    if (year) params.set("year", String(year));
+    if (month) params.set("month", String(month));
+    const qs = params.toString();
+    return request<BudgetStatus[]>(`/expenses/budget-status${qs ? `?${qs}` : ""}`);
+  },
 };
 
 // ── Wishlist API ───────────────────────────────────────

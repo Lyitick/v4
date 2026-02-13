@@ -451,6 +451,9 @@ class FinanceDatabase:
         self._add_column_if_missing(
             cursor, TABLES.user_settings, "report_day", "INTEGER DEFAULT 1"
         )
+        self._add_column_if_missing(
+            cursor, TABLES.expense_categories, "budget_limit", "REAL DEFAULT 0"
+        )
         self._ensure_indexes(cursor)
         self.connection.commit()
         self.sanitize_income_category_titles()
@@ -1053,7 +1056,8 @@ class FinanceDatabase:
             cursor = self.connection.cursor()
             cursor.execute(
                 f"""
-                SELECT id, code, title, percent, position
+                SELECT id, code, title, percent, position,
+                       COALESCE(budget_limit, 0) as budget_limit
                 FROM {TABLES.expense_categories}
                 WHERE user_id = ? AND is_active = 1
                 ORDER BY position, id
@@ -1068,6 +1072,57 @@ class FinanceDatabase:
                 user_id,
                 error,
             )
+            return []
+
+    def set_budget_limit(self, user_id: int, category_id: int, limit_amount: float) -> bool:
+        """Set a budget limit for an expense category."""
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute(
+                f"""
+                UPDATE {TABLES.expense_categories}
+                SET budget_limit = ?
+                WHERE id = ? AND user_id = ?
+                """,
+                (limit_amount, category_id, user_id),
+            )
+            self.connection.commit()
+            return cursor.rowcount > 0
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to set budget limit for user %s: %s", user_id, error)
+            return False
+
+    def get_budget_status(self, user_id: int, year: int, month: int) -> List[Dict[str, Any]]:
+        """Return budget limit vs actual spending per category for a month."""
+        month_prefix = f"{year:04d}-{month:02d}"
+        try:
+            cursor = self.connection.cursor()
+            cats = self.list_active_expense_categories(user_id)
+            result = []
+            for cat in cats:
+                if cat["budget_limit"] <= 0:
+                    continue
+                cursor.execute(
+                    f"""
+                    SELECT COALESCE(SUM(amount), 0) as spent
+                    FROM {TABLES.income_log}
+                    WHERE user_id = ? AND type = 'expense' AND category = ? AND created_at LIKE ?
+                    """,
+                    (user_id, cat["title"], f"{month_prefix}%"),
+                )
+                row = cursor.fetchone()
+                spent = float(row["spent"]) if row else 0.0
+                result.append({
+                    "category_id": cat["id"],
+                    "category": cat["title"],
+                    "budget_limit": cat["budget_limit"],
+                    "spent": spent,
+                    "remaining": cat["budget_limit"] - spent,
+                    "percent_used": round((spent / cat["budget_limit"]) * 100) if cat["budget_limit"] > 0 else 0,
+                })
+            return result
+        except sqlite3.Error as error:
+            LOGGER.error("Failed to get budget status for user %s: %s", user_id, error)
             return []
 
     def list_active_wishlist_categories(self, user_id: int) -> List[Dict[str, Any]]:

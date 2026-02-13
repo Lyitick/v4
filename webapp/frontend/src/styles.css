@@ -1,0 +1,313 @@
+/* ── Telegram theme integration ─────────────────────── */
+:root {
+  --tg-bg: var(--tg-theme-bg-color, #ffffff);
+  --tg-text: var(--tg-theme-text-color, #000000);
+  --tg-hint: var(--tg-theme-hint-color, #999999);
+  --tg-link: var(--tg-theme-link-color, #2678b6);
+  --tg-btn: var(--tg-theme-button-color, #3390ec);
+  --tg-btn-text: var(--tg-theme-button-text-color, #ffffff);
+  --tg-secondary-bg: var(--tg-theme-secondary-bg-color, #f0f0f0);
+
+  --radius: 12px;
+  --gap: 12px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ── Layout ──────────────────────────────────────────── */
+.app {
+  max-width: 100vw;
+  min-height: 100vh;
+  padding: var(--gap);
+  padding-bottom: calc(var(--gap) + env(safe-area-inset-bottom, 0px));
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+}
+
+/* ── Category tabs ───────────────────────────────────── */
+.category-tabs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.category-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.category-tab {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 20px;
+  background: var(--tg-secondary-bg);
+  color: var(--tg-text);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.category-tab.active {
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+}
+
+/* ── Section ─────────────────────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.section-header h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.wishes-section--purchased {
+  opacity: 0.6;
+}
+
+/* ── Wish card ───────────────────────────────────────── */
+.wish-card {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: opacity 0.2s;
+}
+
+.wish-card.purchased {
+  opacity: 0.5;
+}
+
+.wish-card.deferred {
+  border-left: 3px solid var(--tg-hint);
+}
+
+.wish-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.wish-card__name {
+  font-size: 16px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.wish-card__price {
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+  color: var(--tg-btn);
+}
+
+.wish-card__link {
+  font-size: 13px;
+  color: var(--tg-link);
+  text-decoration: none;
+}
+
+.wish-card__saved {
+  font-size: 13px;
+  color: var(--tg-hint);
+}
+
+.wish-card__progress {
+  height: 4px;
+  background: var(--tg-bg);
+  border-radius: 2px;
+  margin-top: 4px;
+  overflow: hidden;
+}
+
+.wish-card__progress-bar {
+  height: 100%;
+  background: var(--tg-btn);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+
+.wish-card__deferred,
+.wish-card__purchased-at {
+  font-size: 12px;
+  color: var(--tg-hint);
+}
+
+.wish-card__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ── Buttons ─────────────────────────────────────────── */
+.btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.btn:active {
+  opacity: 0.7;
+}
+
+.btn--primary {
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+}
+
+.btn--secondary {
+  background: var(--tg-secondary-bg);
+  color: var(--tg-text);
+}
+
+.btn--danger {
+  background: transparent;
+  color: #e53935;
+  border: 1px solid #e53935;
+}
+
+.btn--add {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--tg-btn);
+  color: var(--tg-btn-text);
+  font-size: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.btn--add:active {
+  opacity: 0.7;
+}
+
+/* ── Modal / Add form ────────────────────────────────── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  z-index: 100;
+  animation: fadeIn 0.2s;
+}
+
+.add-wish-form {
+  background: var(--tg-bg);
+  border-radius: var(--radius) var(--radius) 0 0;
+  padding: 20px;
+  width: 100%;
+  max-width: 480px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  animation: slideUp 0.3s;
+}
+
+.add-wish-form h3 {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.add-wish-form__category {
+  font-size: 13px;
+  color: var(--tg-hint);
+}
+
+.add-wish-form__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.add-wish-form__actions .btn {
+  flex: 1;
+}
+
+/* ── Input ───────────────────────────────────────────── */
+.input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid var(--tg-hint);
+  border-radius: 8px;
+  font-size: 16px;
+  background: var(--tg-bg);
+  color: var(--tg-text);
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.input:focus {
+  border-color: var(--tg-btn);
+}
+
+.input::placeholder {
+  color: var(--tg-hint);
+}
+
+/* ── States ──────────────────────────────────────────── */
+.loader {
+  text-align: center;
+  padding: 40px;
+  color: var(--tg-hint);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 24px;
+  color: var(--tg-hint);
+  font-size: 14px;
+}
+
+.error-banner {
+  background: #fdecea;
+  color: #b71c1c;
+  padding: 10px var(--gap);
+  border-radius: 8px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+/* ── Animations ──────────────────────────────────────── */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}

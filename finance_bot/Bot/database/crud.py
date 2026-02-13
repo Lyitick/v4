@@ -12,6 +12,7 @@ from threading import Lock
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
+from Bot.config import settings
 from Bot.config.settings import get_settings
 from Bot.utils.datetime_utils import add_one_month
 from Bot.utils.time import get_user_timezone, now_for_user
@@ -1890,6 +1891,10 @@ class FinanceDatabase:
         cursor.execute(
             f'CREATE INDEX IF NOT EXISTS idx_reminder_events_snooze'
             f' ON "{TABLES.reminder_events}" (user_id, snooze_until)'
+        )
+        cursor.execute(
+            f'CREATE INDEX IF NOT EXISTS idx_reminder_events_hash'
+            f' ON "{TABLES.reminder_events}" (callback_hash)'
         )
 
     def get_user_savings(self, user_id: int) -> Dict[str, Dict[str, Any]]:

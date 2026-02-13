@@ -29,6 +29,7 @@ export function ReportsPage() {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [report, setReport] = useState<MonthlyReport | null>(null);
+  const [prevReport, setPrevReport] = useState<MonthlyReport | null>(null);
   const [reportDay, setReportDay] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -36,18 +37,48 @@ export function ReportsPage() {
 
   const tg = window.Telegram?.WebApp;
 
+  const getPrevYearMonth = () => {
+    return month === 1 ? { y: year - 1, m: 12 } : { y: year, m: month - 1 };
+  };
+
   const load = () => {
     setLoading(true);
+    const prev = getPrevYearMonth();
     Promise.all([
       reportsApi.monthly(year, month),
+      reportsApi.monthly(prev.y, prev.m),
       reportsApi.getReportDay(),
     ])
-      .then(([rep, dayRes]) => {
+      .then(([rep, prevRep, dayRes]) => {
         setReport(rep);
+        setPrevReport(prevRep);
         setReportDay(dayRes.day);
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+  };
+
+  const getDelta = (current: number, previous: number) => {
+    if (previous === 0) return current > 0 ? 100 : 0;
+    return Math.round(((current - previous) / previous) * 100);
+  };
+
+  const DeltaBadge = ({ current, previous, invertColor }: { current: number; previous: number; invertColor?: boolean }) => {
+    const delta = getDelta(current, previous);
+    if (delta === 0 && previous === 0 && current === 0) return null;
+    const isUp = delta > 0;
+    const color = invertColor
+      ? (isUp ? "#e53935" : "#43a047")  // For expenses: up=bad(red), down=good(green)
+      : (isUp ? "#43a047" : "#e53935"); // For income: up=good(green), down=bad(red)
+    return (
+      <span className="delta-badge" style={{ color }}>
+        {isUp ? "\u2191" : "\u2193"}{Math.abs(delta)}%
+      </span>
+    );
+  };
+
+  const findPrevCategoryAmount = (category: string, items: { category: string; amount: number }[]) => {
+    return items.find((i) => i.category === category)?.amount ?? 0;
   };
 
   useEffect(() => {
@@ -194,12 +225,18 @@ export function ReportsPage() {
               <span className="report-summary__value">
                 {report.total_income.toLocaleString("ru-RU")} &#8381;
               </span>
+              {prevReport && (
+                <DeltaBadge current={report.total_income} previous={prevReport.total_income} />
+              )}
             </div>
             <div className="report-summary__item report-summary--expense">
               <span className="report-summary__label">Расход</span>
               <span className="report-summary__value">
                 {report.total_expense.toLocaleString("ru-RU")} &#8381;
               </span>
+              {prevReport && (
+                <DeltaBadge current={report.total_expense} previous={prevReport.total_expense} invertColor />
+              )}
             </div>
             <div className="report-summary__item report-summary--balance">
               <span className="report-summary__label">Баланс</span>
@@ -207,6 +244,9 @@ export function ReportsPage() {
                 {report.balance >= 0 ? "+" : ""}
                 {report.balance.toLocaleString("ru-RU")} &#8381;
               </span>
+              {prevReport && (
+                <DeltaBadge current={report.balance} previous={prevReport.balance} />
+              )}
             </div>
           </div>
 
@@ -227,20 +267,26 @@ export function ReportsPage() {
                   options={doughnutOptions}
                 />
               </div>
-              {report.income_by_category.map((c) => (
-                <div key={c.category} className="report-bar">
-                  <div className="report-bar__label">
-                    <span>{c.category}</span>
-                    <span>{c.amount.toLocaleString("ru-RU")} &#8381;</span>
+              {report.income_by_category.map((c) => {
+                const prevAmt = prevReport ? findPrevCategoryAmount(c.category, prevReport.income_by_category) : 0;
+                return (
+                  <div key={c.category} className="report-bar">
+                    <div className="report-bar__label">
+                      <span>{c.category}</span>
+                      <span>
+                        {c.amount.toLocaleString("ru-RU")} &#8381;
+                        {prevReport && <DeltaBadge current={c.amount} previous={prevAmt} />}
+                      </span>
+                    </div>
+                    <div className="report-bar__track">
+                      <div
+                        className="report-bar__fill report-bar__fill--income"
+                        style={{ width: `${(c.amount / maxAmount) * 100}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="report-bar__track">
-                    <div
-                      className="report-bar__fill report-bar__fill--income"
-                      style={{ width: `${(c.amount / maxAmount) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 
@@ -254,20 +300,26 @@ export function ReportsPage() {
                   options={doughnutOptions}
                 />
               </div>
-              {report.expense_by_category.map((c) => (
-                <div key={c.category} className="report-bar">
-                  <div className="report-bar__label">
-                    <span>{c.category}</span>
-                    <span>{c.amount.toLocaleString("ru-RU")} &#8381;</span>
+              {report.expense_by_category.map((c) => {
+                const prevAmt = prevReport ? findPrevCategoryAmount(c.category, prevReport.expense_by_category) : 0;
+                return (
+                  <div key={c.category} className="report-bar">
+                    <div className="report-bar__label">
+                      <span>{c.category}</span>
+                      <span>
+                        {c.amount.toLocaleString("ru-RU")} &#8381;
+                        {prevReport && <DeltaBadge current={c.amount} previous={prevAmt} invertColor />}
+                      </span>
+                    </div>
+                    <div className="report-bar__track">
+                      <div
+                        className="report-bar__fill report-bar__fill--expense"
+                        style={{ width: `${(c.amount / maxAmount) * 100}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="report-bar__track">
-                    <div
-                      className="report-bar__fill report-bar__fill--expense"
-                      style={{ width: `${(c.amount / maxAmount) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
 

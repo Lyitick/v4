@@ -850,3 +850,20 @@ body {
   font-weight: 400;
   color: var(--tg-hint);
 }
+
+/* ── Charts ───────────────────────────────────────── */
+.chart-container {
+  background: var(--tg-secondary-bg);
+  border-radius: var(--radius);
+  padding: var(--gap);
+  position: relative;
+}
+
+.chart-container--bar {
+  height: 180px;
+}
+
+.chart-container--donut {
+  height: 220px;
+  margin-bottom: 8px;
+}

@@ -1,10 +1,27 @@
 import { useEffect, useState } from "react";
 import { reportsApi, exportApi } from "../api/client";
 import type { MonthlyReport } from "../api/client";
+import {
+  Chart as ChartJS,
+  ArcElement,
+  Tooltip,
+  Legend,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+} from "chart.js";
+import { Doughnut, Bar } from "react-chartjs-2";
+
+ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement);
 
 const MONTH_NAMES = [
   "", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
   "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь",
+];
+
+const CHART_COLORS = [
+  "#3390ec", "#43a047", "#e53935", "#ff9800", "#9c27b0",
+  "#00bcd4", "#795548", "#607d8b", "#e91e63", "#cddc39",
 ];
 
 export function ReportsPage() {
@@ -76,6 +93,69 @@ export function ReportsPage() {
     }
   };
 
+  const tgText = getComputedStyle(document.documentElement)
+    .getPropertyValue("--tg-theme-text-color").trim() || "#000000";
+  const tgHint = getComputedStyle(document.documentElement)
+    .getPropertyValue("--tg-theme-hint-color").trim() || "#999999";
+
+  const doughnutOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    cutout: "60%",
+    plugins: {
+      legend: {
+        position: "bottom" as const,
+        labels: {
+          color: tgText,
+          padding: 12,
+          font: { size: 12 },
+        },
+      },
+    },
+  };
+
+  const buildDoughnutData = (items: { category: string; amount: number }[]) => ({
+    labels: items.map((i) => i.category),
+    datasets: [
+      {
+        data: items.map((i) => i.amount),
+        backgroundColor: items.map((_, idx) => CHART_COLORS[idx % CHART_COLORS.length]),
+        borderWidth: 0,
+      },
+    ],
+  });
+
+  const barData = report
+    ? {
+        labels: ["Доход", "Расход"],
+        datasets: [
+          {
+            data: [report.total_income, report.total_expense],
+            backgroundColor: ["#43a047", "#e53935"],
+            borderRadius: 6,
+          },
+        ],
+      }
+    : null;
+
+  const barOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+    },
+    scales: {
+      x: {
+        ticks: { color: tgText },
+        grid: { display: false },
+      },
+      y: {
+        ticks: { color: tgHint },
+        grid: { color: tgHint + "20" },
+      },
+    },
+  };
+
   const maxAmount = report
     ? Math.max(
         ...report.income_by_category.map((c) => c.amount),
@@ -112,32 +192,46 @@ export function ReportsPage() {
             <div className="report-summary__item report-summary--income">
               <span className="report-summary__label">Доход</span>
               <span className="report-summary__value">
-                {report.total_income.toLocaleString("ru-RU")} ₽
+                {report.total_income.toLocaleString("ru-RU")} &#8381;
               </span>
             </div>
             <div className="report-summary__item report-summary--expense">
               <span className="report-summary__label">Расход</span>
               <span className="report-summary__value">
-                {report.total_expense.toLocaleString("ru-RU")} ₽
+                {report.total_expense.toLocaleString("ru-RU")} &#8381;
               </span>
             </div>
             <div className="report-summary__item report-summary--balance">
               <span className="report-summary__label">Баланс</span>
               <span className="report-summary__value">
                 {report.balance >= 0 ? "+" : ""}
-                {report.balance.toLocaleString("ru-RU")} ₽
+                {report.balance.toLocaleString("ru-RU")} &#8381;
               </span>
             </div>
           </div>
 
+          {/* Income vs Expense bar chart */}
+          {(report.total_income > 0 || report.total_expense > 0) && barData && (
+            <div className="chart-container chart-container--bar">
+              <Bar data={barData} options={barOptions} />
+            </div>
+          )}
+
+          {/* Income donut chart */}
           {report.income_by_category.length > 0 && (
             <div className="report-section">
               <h3>Доходы</h3>
+              <div className="chart-container chart-container--donut">
+                <Doughnut
+                  data={buildDoughnutData(report.income_by_category)}
+                  options={doughnutOptions}
+                />
+              </div>
               {report.income_by_category.map((c) => (
                 <div key={c.category} className="report-bar">
                   <div className="report-bar__label">
                     <span>{c.category}</span>
-                    <span>{c.amount.toLocaleString("ru-RU")} ₽</span>
+                    <span>{c.amount.toLocaleString("ru-RU")} &#8381;</span>
                   </div>
                   <div className="report-bar__track">
                     <div
@@ -150,14 +244,21 @@ export function ReportsPage() {
             </div>
           )}
 
+          {/* Expense donut chart */}
           {report.expense_by_category.length > 0 && (
             <div className="report-section">
               <h3>Расходы</h3>
+              <div className="chart-container chart-container--donut">
+                <Doughnut
+                  data={buildDoughnutData(report.expense_by_category)}
+                  options={doughnutOptions}
+                />
+              </div>
               {report.expense_by_category.map((c) => (
                 <div key={c.category} className="report-bar">
                   <div className="report-bar__label">
                     <span>{c.category}</span>
-                    <span>{c.amount.toLocaleString("ru-RU")} ₽</span>
+                    <span>{c.amount.toLocaleString("ru-RU")} &#8381;</span>
                   </div>
                   <div className="report-bar__track">
                     <div
@@ -177,7 +278,7 @@ export function ReportsPage() {
                 <span>Оплачено</span>
                 <span>
                   {report.household_paid.toLocaleString("ru-RU")} /{" "}
-                  {report.household_total.toLocaleString("ru-RU")} ₽
+                  {report.household_total.toLocaleString("ru-RU")} &#8381;
                 </span>
               </div>
               <div className="household-progress">

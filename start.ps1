@@ -90,18 +90,24 @@ Log-OK "BOT_TOKEN: $tokenPreview"
 #  2. Установка зависимостей
 # ============================================================
 Log-Info "Проверка Python-зависимостей (bot)..."
-& $PYTHON -m pip install -q -r "$BOT_DIR\requirements.txt" 2>$null
+$ErrorActionPreference = "Continue"
+& $PYTHON -m pip install -q -r "$BOT_DIR\requirements.txt" 2>&1 | Out-Null
+$ErrorActionPreference = "Stop"
 Log-OK "Bot зависимости OK"
 
 Log-Info "Проверка Python-зависимостей (backend)..."
-& $PYTHON -m pip install -q -r "$BACKEND_DIR\requirements.txt" 2>$null
+$ErrorActionPreference = "Continue"
+& $PYTHON -m pip install -q -r "$BACKEND_DIR\requirements.txt" 2>&1 | Out-Null
+$ErrorActionPreference = "Stop"
 Log-OK "Backend зависимости OK"
 
 Log-Info "Проверка Node.js-зависимостей (frontend)..."
 if (-not (Test-Path "$FRONTEND_DIR\node_modules")) {
     Log-Info "Установка npm пакетов..."
     Push-Location $FRONTEND_DIR
-    npm install --silent 2>$null
+    $ErrorActionPreference = "Continue"
+    npm install --silent 2>&1 | Out-Null
+    $ErrorActionPreference = "Stop"
     Pop-Location
     Log-OK "Frontend зависимости установлены"
 } else {

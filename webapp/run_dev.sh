@@ -13,7 +13,7 @@ echo "=== Starting Mini App development servers ==="
 echo "[1/2] Starting FastAPI backend on :8000 ..."
 cd "$PROJECT_ROOT"
 PYTHONPATH="$PROJECT_ROOT:$PROJECT_ROOT/finance_bot" \
-  uvicorn webapp.backend.main:app --reload --host 0.0.0.0 --port 8000 &
+  uvicorn webapp.backend.main:app --reload --host 0.0.0.0 --port 8080 &
 BACKEND_PID=$!
 
 # Start frontend
@@ -23,7 +23,7 @@ npm run dev &
 FRONTEND_PID=$!
 
 echo ""
-echo "  Backend:  http://localhost:8000/api/health"
+echo "  Backend:  http://localhost:8080/api/health"
 echo "  Frontend: http://localhost:3000"
 echo ""
 echo "Press Ctrl+C to stop both servers."

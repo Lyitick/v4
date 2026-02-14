@@ -13,7 +13,7 @@ if str(project_root) not in sys.path:
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.exceptions import TelegramUnauthorizedError
-from aiogram.types import MenuButtonWebApp, WebAppInfo
+from aiogram.types import BotCommand, MenuButtonWebApp, WebAppInfo
 
 from Bot.config.settings import get_settings
 from Bot.database.get_db import get_db
@@ -149,6 +149,12 @@ async def main() -> None:
         return
 
     tz_str = settings.timezone.key if hasattr(settings.timezone, "key") else str(settings.timezone)
+
+    # Register bot commands so users see hints when typing "/"
+    await bot.set_my_commands([
+        BotCommand(command="start", description="Главное меню"),
+        BotCommand(command="cancel", description="Отменить текущее действие"),
+    ])
 
     # Set the Mini App menu button (bottom-left of chat input)
     if settings.webapp_url:
